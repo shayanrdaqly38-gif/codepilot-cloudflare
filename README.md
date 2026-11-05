@@ -151,15 +151,17 @@ npx wrangler pages secret put MODEL_API_KEY
 | `MODEL_API_KEY` | ✅ | کلید ارائه‌دهنده‌ی مدل؛ فقط در سرور می‌ماند |
 | `ACCESS_TEAM_DOMAIN` | ✅ | مثل `myteam.cloudflareaccess.com` |
 | `ACCESS_AUD` | ✅ | Audience Tag اپلیکیشن Access |
-| `MODEL_NAME` | — | پیش‌فرض `gpt-4o-mini` |
+| `MODEL_NAME` | — | پیش‌فرض `gpt-4o-mini`؛ برای tooken.club مثلاً `claude-sonnet-5-5` |
 | `MODEL_BASE_URL` | — | پیش‌فرض `https://tooken.club/v1` |
 | `CONTEXT_BUDGET_TOKENS` | — | پیش‌فرض `24000` |
 | `ACCESS_ALLOWED_EMAILS` | — | فهرست ایمیل‌های مجاز با کاما (اختیاری) |
 | `CHAT_LIMIT_PER_MINUTE` | — | پیش‌فرض `12` |
 | `CHAT_LIMIT_PER_DAY` | — | پیش‌فرض `400` |
 
-سه مورد اول را می‌توانید در داشبورد هم بگذارید:
-**Settings → Variables and Secrets → Add → Secret**.
+**همه‌ی این‌ها از داشبورد قابل تنظیم‌اند** — `wrangler.toml` عمداً هیچ `[vars]`ی ندارد،
+چون هر نامی که در آن فایل باشد در داشبورد قفل می‌شود و فقط Secret قابل ویرایش می‌ماند.
+مسیر: **Settings → Variables and Secrets → Add**. برای کلید و راز، نوع **Secret** و
+برای بقیه **Text**.
 
 ### ۴) Cloudflare Access
 
