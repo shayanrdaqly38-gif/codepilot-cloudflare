@@ -355,7 +355,7 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
       <div id="attachmentList" style="display:flex;gap:6px;flex-wrap:wrap" aria-live="polite"></div>
       <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
       <div class="sendrow">
-        <button type="button" onclick="document.getElementById('attachmentInput').click()" title="تا ۵ فایل، مجموعاً ۱ مگابایت؛ خواندن فایل باینری به مدل بستگی دارد" aria-label="افزودن عکس یا فایل">📎 پیوست</button>
+        <button type="button" onclick="document.getElementById('attachmentInput').click()" title="تا ۵ فایل، مجموعاً ۲۰ مگابایت؛ خواندن فایل باینری به مدل بستگی دارد" aria-label="افزودن عکس یا فایل">📎 پیوست</button>
         <span class="hint" id="composerHint">Enter ارسال · Shift+Enter خط جدید</span>
         <button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
       </div>
@@ -1591,7 +1591,7 @@ async function queueAttachments(files) {
   if (state.busy || readingAttachments) return toast('لطفاً صبر کنید');
   const selected = Array.from(files);
   if (selected.length + pendingAttachments.length > 5) return toast('حداکثر ۵ فایل مجاز است');
-  if (selected.reduce((n, f) => n + f.size, 0) + pendingAttachments.reduce((n, f) => n + f.size, 0) > 1000000) return toast('مجموع حجم فایل‌ها حداکثر ۱ مگابایت است');
+  if (selected.reduce((n, f) => n + f.size, 0) + pendingAttachments.reduce((n, f) => n + f.size, 0) > 20000000) return toast('مجموع حجم فایل‌ها حداکثر ۲۰ مگابایت است');
   readingAttachments = true;
   try {
     const loaded = await Promise.all(selected.map(file => new Promise((resolve, reject) => {

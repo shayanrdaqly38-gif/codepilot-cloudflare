@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAttachments, attachmentParts } from '../functions/_lib/attachments.js';
+import { MAX_ATTACHMENT_BYTES, validateAttachments, attachmentParts } from '../functions/_lib/attachments.js';
 import { sanitizeStoredMessage } from '../functions/_lib/store.js';
 import { toWire } from '../functions/_lib/memory.js';
 
@@ -15,6 +15,12 @@ test('attachments validate, persist and become model content parts', () => {
 test('reject malformed, excessive counts and oversized attachments', () => {
   assert.throws(() => validateAttachments([{ name: 'a', data: '!' }]));
   assert.throws(() => validateAttachments(Array(6).fill({ name: 'a', data: '' })));
-  assert.throws(() => validateAttachments([{ name: 'a', data: 'AAAA'.repeat(333334) }]));
+  assert.throws(() => validateAttachments([{ name: 'a', data: Buffer.alloc(MAX_ATTACHMENT_BYTES + 1).toString('base64') }]));
   assert.deepEqual(validateAttachments(undefined), []);
+});
+test('accept exactly 20 MB, including aggregate limits across files', () => {
+  assert.equal(MAX_ATTACHMENT_BYTES, 20_000_000);
+  const data = Buffer.alloc(10_000_000).toString('base64');
+  assert.equal(validateAttachments([{ name: 'a', data }, { name: 'b', data }]).length, 2);
+  assert.throws(() => validateAttachments([{ name: 'a', data }, { name: 'b', data }, { name: 'c', data: 'AA==' }]));
 });
