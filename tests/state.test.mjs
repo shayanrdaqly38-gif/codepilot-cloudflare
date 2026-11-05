@@ -217,3 +217,35 @@ test('a missing D1 binding returns a precise 503, not a generic 500', async () =
   assert.equal(body.code, 'db_missing');
   assert.match(body.error, /DB/);
 });
+
+test('a turn that appends many messages does not use a compound SELECT', async () => {
+  // Regression: appendMessages used `INSERT ... SELECT ? UNION ALL SELECT ? ...`,
+  // which D1 rejects with "too many terms in compound SELECT" once a turn stores
+  // more than a handful of messages. A normal agent turn with tool calls appends
+  // 7+, so every such turn ended in chat_failed *after* the tools had already
+  // modified the workspace -- the work was done but the reply was an error.
+  //
+  // The harness enforces D1's compound-SELECT ceiling, so the old query shape
+  // throws here instead of only in production.
+  const store = await import(`${root}/_lib/store.js`);
+  const localEnv = makeEnv(keys);
+  const owner = 'many@example.com';
+  const convId = await store.createConversation(localEnv, owner, {});
+  const conv = await store.getConversation(localEnv, owner, convId);
+
+  const messages = Array.from({ length: 30 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user',
+    content: `message ${i}`,
+    created_at: Date.now() + i
+  }));
+
+  const result = await store.appendMessages(localEnv, conv, messages);
+  assert.equal(result.inserted, 30);
+  assert.equal(result.nextSeq, 30);
+
+  const rows = await localEnv.DB.prepare('SELECT seq FROM messages WHERE conversation_id=? ORDER BY seq')
+    .bind(conv.id)
+    .all();
+  assert.equal(rows.results.length, 30);
+  assert.deepEqual(rows.results.map((r) => r.seq), Array.from({ length: 30 }, (_, i) => i + 1));
+});

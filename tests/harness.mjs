@@ -7,10 +7,26 @@ export function makeD1() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
 
+  // D1 is stricter than a local SQLite file in ways a plain DatabaseSync does
+  // not reproduce. Enforcing the limits here means a query that only works
+  // locally fails in tests instead of in production.
+  const D1_MAX_COMPOUND_TERMS = 20;
+  const D1_MAX_BOUND_PARAMS = 100;
+
   class Stmt {
     constructor(sql, binds = []) { this.sql = sql; this.binds = binds; }
     bind(...binds) { return new Stmt(this.sql, binds); }
+    _check() {
+      const unions = (this.sql.match(/\bUNION\b/gi) || []).length;
+      if (unions + 1 > D1_MAX_COMPOUND_TERMS) {
+        throw new Error('D1_ERROR: too many terms in compound SELECT: SQLITE_ERROR');
+      }
+      if (this.binds.length > D1_MAX_BOUND_PARAMS) {
+        throw new Error('D1_ERROR: too many SQL variables: SQLITE_ERROR');
+      }
+    }
     _run() {
+      this._check();
       const prepared = db.prepare(this.sql);
       const isSelect = /^\s*(select|pragma|with)/i.test(this.sql);
       if (isSelect) {
