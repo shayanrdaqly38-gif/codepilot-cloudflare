@@ -15,8 +15,15 @@ export const ALLOWED_TOOLS = new Set([
 ]);
 const DEFAULT_TIMEOUT_MS = 90_000;
 
-function endpoint(env) {
-  const base = String(env.MODEL_BASE_URL || 'https://tooken.club/v1').replace(/\/+$/, '');
+export function modelEndpoint(env) {
+  // Accept the URL exactly as a human copies it from a provider dashboard:
+  // trailing slashes and a pasted `/chat/completions` suffix are both common and
+  // both used to produce a 404 that looked like a broken key.
+  const base = String(env.MODEL_BASE_URL || 'https://tooken.club/v1')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/chat\/completions$/i, '')
+    .replace(/\/+$/, '');
   return `${base}/chat/completions`;
 }
 
@@ -88,7 +95,7 @@ export async function callModel(env, payload) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let response;
     try {
-      response = await fetch(endpoint(env), {
+      response = await fetch(modelEndpoint(env), {
         method: 'POST',
         // Cloudflare Workers rejects redirect:'error' outright (the fetch call
         // throws before leaving the isolate), so follow the edge-compatible
@@ -167,5 +174,19 @@ export async function callModel(env, payload) {
     fail('کلید مدل پذیرفته نشد. مقدار MODEL_API_KEY را در Cloudflare بررسی کنید.', 502, 'model_auth');
   }
   if (lastStatus === 429) fail('سرویس مدل محدودیت نرخ اعمال کرد. کمی بعد تلاش کنید.', 429, 'model_rate_limited');
+  if (lastStatus === 404) {
+    fail(
+      'مسیر سرویس مدل پیدا نشد (404). MODEL_BASE_URL باید فقط دامنه + /v1 باشد، بدون /chat/completions.',
+      502,
+      'model_not_found'
+    );
+  }
+  if (lastStatus === 400 || lastStatus === 422) {
+    fail(
+      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً نام MODEL_NAME («${String(env.MODEL_NAME || 'gpt-4o-mini')}») روی این سرویس موجود نیست یا از tool call پشتیبانی نمی‌کند.`,
+      502,
+      'model_rejected'
+    );
+  }
   fail(`سرویس مدل پاسخ نداد (کد ${lastStatus || 'شبکه'}).`, 502, 'model_failed');
 }
