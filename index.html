@@ -256,6 +256,7 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
   <div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill" id="storagePill">اتصال…</span></div>
   <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
   <div class="top-actions">
+    <button id="fullscreenButton" onclick="toggleFullscreen()" title="تمام‌صفحه" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
     <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
     <button onclick="openModelModal()" title="انتخاب مدل هوش مصنوعی">✦ مدل</button>
     <button class="utility" onclick="openSettings()" title="تنظیمات و حافظه" aria-label="تنظیمات و حافظه">⚙</button>
@@ -485,6 +486,25 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
      read it, and it is refreshed by GET /api/auth.
    ========================================================================= */
 'use strict';
+
+function updateFullscreenButton() {
+  const button = document.getElementById('fullscreenButton');
+  const active = !!document.fullscreenElement;
+  const label = active ? 'خروج از تمام‌صفحه' : 'تمام‌صفحه';
+  button.setAttribute('aria-pressed', String(active));
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+    else alert('تمام‌صفحه در این مرورگر پشتیبانی نمی‌شود.');
+  } catch (_) {
+    alert('امکان تغییر حالت تمام‌صفحه وجود ندارد.');
+  }
+}
+document.addEventListener('fullscreenchange', updateFullscreenButton);
 
 const API = {
   auth: '/api/auth',
