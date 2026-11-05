@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>بازی دوز</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at top left,#42336d,transparent 65%),#101525;color:#eef2ff;font-family:Tahoma,Arial,sans-serif}.game{width:min(100%,420px);padding:25px;background:#171e31;border:1px solid #ffffff20;border-radius:26px;box-shadow:0 24px 70px #0005}h1,p{text-align:center}h1{margin:5px 0 12px}p,footer{color:#aab6d0;font-size:13px;line-height:1.9}.mode{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:22px 0}button,select{font:inherit;touch-action:manipulation}select{max-width:65%;padding:9px;background:#222b42;color:white;border:1px solid #ffffff30;border-radius:10px}.scores{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}.score{background:#ffffff08;border-radius:12px;padding:12px 2px}.score span{font-size:11px;color:#b7c2db}.score strong{display:block;font-size:26px;margin-top:7px}.x{color:#80dfef}.o{color:#c7a1ff}#status{min-height:62px;display:grid;place-items:center;text-align:center;font-size:14px}.board{direction:ltr;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.cell{aspect-ratio:1;background:#222b42;border:1px solid #ffffff20;border-radius:16px;font:bold clamp(32px,12vw,60px) Arial;cursor:pointer}.cell:disabled{opacity:1;cursor:default}.cell:not(:disabled):hover{background:#344260}.cell.win{background:#22766b77;border-color:#71e4bf}.actions{display:flex;gap:10px;margin-top:22px}.actions button{flex:1;padding:12px 6px;background:transparent;border:1px solid #ffffff30;border-radius:12px;color:#d6def0;font-size:12px;cursor:pointer}.actions .primary{background:#91e2dc;color:#10292b;font-weight:bold}button:focus-visible,select:focus-visible{outline:3px solid #ffd787;outline-offset:3px}footer{text-align:center;margin-top:20px;font-size:11px}
+</style>
+</head>
+<body>
+<main class="game">
+<h1>بازی دوز</h1><p>سه مهره در یک خط بچین و برنده شو!</p>
+<div class="mode"><label for="mode">حالت بازی</label><select id="mode"><option value="bot">مقابل کامپیوتر</option><option value="human">دو نفره</option></select></div>
+<section class="scores" aria-label="امتیازها">
+<div class="score"><span id="xLabel">شما · X</span><strong id="scoreX" class="x">۰</strong></div>
+<div class="score"><span>مساوی</span><strong id="scoreDraw">۰</strong></div>
+<div class="score"><span id="oLabel">کامپیوتر · O</span><strong id="scoreO" class="o">۰</strong></div>
+</section>
+<div id="status" role="status" aria-live="polite"></div>
+<div class="board" id="board" role="group" aria-label="صفحه بازی دوز"></div>
+<div class="actions"><button id="newRound" class="primary">دست جدید ↻</button><button id="resetScores">صفر کردن امتیازها</button></div>
+<footer>شروع هر دست با X است · کامپیوتر شکست‌ناپذیر است!<br>بدون نیاز به اینترنت</footer>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const digits=new Intl.NumberFormat('fa-IR');
+let board=Array(9).fill(''),turn='X',ended=false,thinking=false,timer=null;
+let scores=loadScores();
+function loadScores(){try{const s=JSON.parse(localStorage.getItem('dooz-scores-v1'));if(s&&['X','O','draw'].every(k=>Number.isSafeInteger(s[k])&&s[k]>=0))return s;}catch{}return {X:0,O:0,draw:0};}
+function saveScores(){try{localStorage.setItem('dooz-scores-v1',JSON.stringify(scores));}catch{}}
+function isBot(){return $('mode').value==='bot';}
+function result(b){for(const line of lines){const[a,c,d]=line;if(b[a]&&b[a]===b[c]&&b[a]===b[d])return {winner:b[a],line};}return b.every(Boolean)?{winner:'draw',line:[]}:null;}
+const cells=board.map((_,i)=>{const el=document.createElement('button');el.type='button';el.className='cell';el.addEventListener('click',()=>{if(!ended&&!thinking&&!board[i])play(i);});$('board').appendChild(el);return el;});
+function render(){const outcome=result(board);cells.forEach((el,i)=>{el.textContent=board[i];el.className='cell'+(board[i]?' '+board[i].toLowerCase():'');el.classList.toggle('win',Boolean(outcome?.line.includes(i)));el.disabled=ended||thinking||Boolean(board[i]);el.setAttribute('aria-label',`خانه ${digits.format(i+1)}، ${board[i]||'خالی'}`);});$('scoreX').textContent=digits.format(scores.X);$('scoreO').textContent=digits.format(scores.O);$('scoreDraw').textContent=digits.format(scores.draw);$('xLabel').textContent=isBot()?'شما · X':'بازیکن اول · X';$('oLabel').textContent=isBot()?'کامپیوتر · O':'بازیکن دوم · O';$('status').textContent=outcome?(outcome.winner==='draw'?'🤝 این دست مساوی شد!':isBot()?(outcome.winner==='X'?'🎉 شما برنده شدید!':'🤖 کامپیوتر برنده شد!'):`🎉 بازیکن ${outcome.winner} برنده شد!`):thinking?'کامپیوتر در حال فکر کردن…':isBot()?'نوبت شماست · X':`نوبت بازیکن ${turn}`;}
+function play(i){board[i]=turn;const outcome=result(board);if(outcome){ended=true;scores[outcome.winner]++;saveScores();render();return;}turn=turn==='X'?'O':'X';if(isBot()&&turn==='O'){thinking=true;render();timer=setTimeout(()=>{timer=null;const move=bestMove();thinking=false;play(move);},400);}else render();}
+function minimax(b,player,depth){const outcome=result(b);if(outcome)return outcome.winner==='O'?10-depth:outcome.winner==='X'?depth-10:0;let best=player==='O'?-Infinity:Infinity;for(let i=0;i<9;i++){if(b[i])continue;b[i]=player;const score=minimax(b,player==='O'?'X':'O',depth+1);b[i]='';best=player==='O'?Math.max(best,score):Math.min(best,score);}return best;}
+function bestMove(){let best=-Infinity,choices=[];for(let i=0;i<9;i++){if(board[i])continue;board[i]='O';const score=minimax(board,'X',0);board[i]='';if(score>best){best=score;choices=[i];}else if(score===best)choices.push(i);}return choices[Math.floor(Math.random()*choices.length)];}
+function newRound(){clearTimeout(timer);timer=null;board=Array(9).fill('');turn='X';ended=false;thinking=false;render();}
+$('newRound').addEventListener('click',newRound);
+$('resetScores').addEventListener('click',()=>{scores={X:0,O:0,draw:0};saveScores();newRound();});
+$('mode').addEventListener('change',()=>{scores={X:0,O:0,draw:0};saveScores();newRound();});
+render();
+</script>
+</body>
+</html>
