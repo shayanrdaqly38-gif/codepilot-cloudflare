@@ -18,7 +18,7 @@
 | پیام‌ها | ترتیب پایدار با `seq`، ذخیره‌ی پیش از فراخوانی مدل، بازیابی گروه کامل `assistant/tool_calls/tool` |
 | حافظه‌ی بلندمدت | خلاصه‌ی چرخشی گفتگو + ردیف‌های حافظه‌ی قابل‌ویرایش توسط کاربر |
 | پنجره‌ی زمینه | بودجه‌ی توکن، برش فقط از مرز پیام کاربر، خلاصه‌سازی بخش‌های قدیمی |
-| ابزارها | `list_files`, `read_file`, `search_code`, `list_symbols`, `apply_patch`, `write_file`, `undo_edit`, `run_command` |
+| ابزارها | `list_files`, `read_file`, `search_code`, `list_symbols`, `apply_patch`, `write_file`, `undo_edit`, `file_history`, `run_command` |
 | ویرایش دقیق | `apply_patch` با search/replace، تطبیق فازی فاصله‌ها، رد ویرایش مبهم، تولید diff سبک git |
 | اعتبارسنجی | بررسی آکولاد/رشته/کامنت، تگ‌های HTML، JSON، و اسکن اعتبارنامه — قبل از بازگرداندن نتیجه |
 | تاریخچه | نسخه‌ی هر فایل پیش از تغییر در D1 (۲۵ نسخه‌ی آخر)، بازگردانی از UI یا با `undo_edit` |
