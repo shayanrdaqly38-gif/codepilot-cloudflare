@@ -9,7 +9,7 @@
 
 import { json, errorResponse } from '../_lib/util.js';
 import { ensureSchema } from '../_lib/schema.js';
-import { sandboxEnabled } from '../_lib/sandbox.js';
+import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
 import { authenticate } from '../_lib/auth.js';
 import { callModel, modelEndpoint } from '../_lib/model.js';
 
@@ -128,6 +128,8 @@ export async function onRequestGet({ request, env }) {
           (!probe || probe.ok),
         authMode,
         sandbox: sandboxEnabled(env),
+        linuxRunner: linuxRunnerEnabled(env),
+        executionMode: realExecutionMode(env),
         model: String(env.MODEL_NAME || 'claude-sonnet-5-5'),
         checks,
         // In single-tenant mode, missing Access vars are expected, not failures.

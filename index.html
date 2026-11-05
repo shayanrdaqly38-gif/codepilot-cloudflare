@@ -182,13 +182,34 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .chatbox{padding:12px;background:#121b29}
 .chat-input{background:#0d1521;border-color:#34455b;padding:11px;transition:border-color .18s ease,box-shadow .18s ease}
 .chat-input:focus,.field:focus{border-color:#80a7e8;box-shadow:0 0 0 3px #80a7e822}
-.primary{background:#80d6a4;color:#0b1b13;box-shadow:0 4px 14px #80d6a422}
+.primary{background:#80d6a4;color:#0b1b13;box-shadow:0 4px 14px #80a7e822}
 .modal-card{background:#172131;border-color:#394a60}
+.model-badge{cursor:pointer;user-select:none;transition:border-color .15s ease,background .15s ease,color .15s ease}
+.model-badge:hover{border-color:#80a7e8;color:#eef3fa;background:#1b2940}
+.model-badge::after{content:" ▾";opacity:.72}
+.think-toggle{background:#131c29;border:1px solid #2f3e53;color:#93a1b7;border-radius:999px;padding:3px 9px;font-size:11px;cursor:pointer;transition:all .15s ease}
+.think-toggle:hover{border-color:#80a7e8;color:#dbe7f8}
+.think-toggle.on{background:#1b3531;border-color:#3d8469;color:#a5f0c5}
+.think-box{margin:0 0 8px;border:1px solid #2b3b52;background:#101826;border-radius:9px;padding:6px 10px;font-size:11.5px;color:#a5b6cf}
+.think-box summary{cursor:pointer;color:#9ec5ff;font-weight:600;user-select:none;list-style:none}
+.think-box summary::-webkit-details-marker{display:none}
+.think-box pre{margin:6px 0 0;white-space:pre-wrap;direction:auto;background:transparent;border:0;padding:0;color:#c3d1e6;max-height:220px;overflow:auto;font-size:11.5px;line-height:1.7}
+.model-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;max-height:46vh;overflow:auto;margin:10px 0;padding:2px}
+.model-card{border:1px solid #2d3c51;background:#111a27;border-radius:10px;padding:9px 11px;cursor:pointer;text-align:right;transition:border-color .15s ease,background .15s ease}
+.model-card:hover{border-color:#6d95d8;background:#162233}
+.model-card.active{border-color:#80d6a4;background:#152a25;box-shadow:0 0 0 1px #80d6a455}
+.model-card .m-id{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#eef3fb;direction:ltr;text-align:left;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-card .m-meta{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:4px;font-size:10.5px;color:#8fa1ba}
+.tier-pill{padding:1px 6px;border-radius:999px;background:#1e2c40;color:#a8c5f0;font-size:10px}
+.deploy-badge{margin-top:8px;padding:7px 10px;border-radius:8px;border:1px solid #2c4159;background:#101a28;font-size:11.5px;color:#b8cae3;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.deploy-badge.ok{border-color:#356f58;background:#11261f;color:#b4f0cd}
+.deploy-badge.warn{border-color:#6d5830;background:#241e12;color:#f1d48b}
+.deploy-badge button{padding:3px 9px;font-size:11px;border-radius:6px;background:#80d6a4;color:#0b1b13;border:0;cursor:pointer;font-weight:600}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-.mobile-tabs{display:none}
+.mobile-tabs,.mobile-files{display:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 @media(max-width:1080px){.layout{grid-template-columns:200px minmax(300px,1fr)}.right{display:none}.right.show{display:flex;position:fixed;inset:52px 0 0 auto;width:min(420px,100%);z-index:6;box-shadow:-15px 0 50px #0008}.mobile-tabs{display:block}}
-@media(max-width:640px){.layout{grid-template-columns:1fr}.sidebar{display:none}.top .status span.txt{display:none}.top-actions button{padding:6px;font-size:10px}.gh-top{font-size:0!important}.gh-top:before{content:"↗";font-size:13px}.bottom{height:150px}.brand .pill{display:none}}
+@media(max-width:640px){.layout{grid-template-columns:1fr}.sidebar{display:none}.sidebar.show{display:flex;position:fixed;inset:52px 0 0 0;width:min(300px,88vw);z-index:7;box-shadow:15px 0 50px #0009}.mobile-files{display:inline-flex}.top .status span.txt{display:none}.top-actions button{padding:6px;font-size:10px}.gh-top{font-size:0!important}.gh-top:before{content:"↗";font-size:13px}.bottom{height:150px}.brand .pill{display:none}}
 </style>
 </head>
 <body>
@@ -196,7 +217,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
   <div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill" id="storagePill">اتصال…</span></div>
   <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
   <div class="top-actions">
+    <button class="mobile-files" onclick="document.querySelector('.sidebar').classList.toggle('show')">☰ فایل‌ها</button>
     <button class="mobile-tabs" onclick="document.querySelector('.right').classList.toggle('show')">چت</button>
+    <button onclick="openModelModal()" title="انتخاب مدل هوش مصنوعی">✦ مدل</button>
     <button onclick="openSettings()" title="تنظیمات و حافظه">⚙</button>
     <button onclick="toggleMemoryPanel()" title="حافظه‌ی بلندمدت">🧠</button>
     <button class="gh-top" onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
@@ -273,8 +296,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
   <aside class="right">
     <div class="right-head">
       <strong>همراه کدنویسی</strong>
-      <div style="display:flex;gap:6px;align-items:center">
-        <span class="model-badge" id="modelBadge">—</span>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span class="model-badge" id="modelBadge" role="button" tabindex="0" title="انتخاب مدل هوش مصنوعی (کلیک کنید)" onclick="openModelModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openModelModal()}">—</span>
+        <button class="think-toggle on" id="thinkBtn" onclick="toggleThinking()" title="حالت تفکر عمیق و برنامه‌ریزی گام‌به‌گام">🧠 تفکر</button>
         <button class="tiny ghost" onclick="openSettings()">حافظه</button>
       </div>
     </div>
@@ -307,6 +331,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
     <div id="ghMessage" class="tiny" style="margin-top:9px"></div>
     <div class="modal-actions">
       <button onclick="disconnectGitHub()">قطع اتصال</button>
+      <button onclick="resyncRepoNow()" title="دریافت آخرین تغییرات از GitHub">↻ همگام‌سازی</button>
       <button onclick="closeModal('ghModal')">بستن</button>
       <button class="primary" onclick="connectGitHub()">اتصال و بارگذاری</button>
     </div>
@@ -375,6 +400,28 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
   </div>
 </div>
 
+<!-- Model selector modal -->
+<div class="modal" id="modelModal">
+  <div class="modal-card" style="max-width:680px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <h2 style="margin:0">انتخاب مدل هوش مصنوعی</h2>
+      <button class="icon-btn" onclick="refreshLiveModels()" id="refreshModelsBtn" title="استعلام مستقیم لیست مدل‌ها از سرویس‌دهنده">↻ بروزرسانی لیست زنده</button>
+    </div>
+    <p style="margin-top:6px">مدل دلخواه را برای کدنویسی، معماری، یا تحلیل عمیق انتخاب کنید. انتخاب شما ذخیره می‌شود و فوراً در پیام بعدی اعمال خواهد شد.</p>
+    <div id="modelGrid" class="model-grid"></div>
+    <label class="field-label" for="customModelInput">یا شناسه‌ی دقیق هر مدل دلخواه دیگر:</label>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input class="field" id="customModelInput" style="direction:ltr;text-align:left;margin:0" placeholder="claude-opus-5-5 یا gpt-6.1-sol" onkeydown="if(event.key==='Enter'){event.preventDefault();applyCustomModel()}">
+      <button onclick="applyCustomModel()" style="white-space:nowrap">اعمال مدل</button>
+    </div>
+    <div id="modelModalNote" class="tiny" style="margin-top:8px"></div>
+    <div class="modal-actions">
+      <button onclick="resetDefaultModel()">بازگشت به پیش‌فرض سرور</button>
+      <button class="primary" onclick="closeModal('modelModal')">بستن</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -390,6 +437,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 const API = {
   auth: '/api/auth',
   config: '/api/config',
+  models: '/api/models',
+  run: '/api/run',
   state: '/api/state',
   conversations: '/api/state/conversations',
   versions: '/api/state/versions',
@@ -397,6 +446,9 @@ const API = {
   chat: '/api/chat',
   health: '/api/health'
 };
+
+const MODEL_STORE = 'cp-model';
+const THINK_STORE = 'cp-thinking';
 
 const state = {
   ready: false,
@@ -408,7 +460,14 @@ const state = {
   memory: [],
   workspace: { files: {}, active: '' },
   repo: null,
+  repoSyncPromise: null,
+  commitQueue: Promise.resolve(),
+  blobCache: new Map(),
+  defaultModel: '—',
+  selectedModel: '',
+  availableModels: [],
   modelLabel: '—',
+  thinking: true,
   contextTokens: 0,
   contextBudget: 24000,
   busy: false,
@@ -416,10 +475,14 @@ const state = {
   saveTimer: null,
   streaming: false,
   sandbox: false,
+  linuxRunner: false,
+  executionMode: 'virtual',
   authMode: 'cloudflare-access',
   diffs: [],
   validation: [],
   commands: [],
+  cmdHistory: [],
+  cmdIndex: -1,
   historyPath: null,
   searchHits: [],
   turnNotices: null
@@ -480,9 +543,172 @@ async function api(path, options = {}) {
   return data || {};
 }
 
+/* ------------------------------ model & shell ---------------------------- */
+
+const TIER_LABELS = {
+  flagship: 'پرچم‌دار',
+  balanced: 'متعادل و دقیق',
+  coding: 'کدنویسی سریع',
+  reasoning: 'تفکر عمیق',
+  fast: 'سریع و سبک',
+  custom: 'دلخواه'
+};
+
+function inferProvider(id) {
+  const s = String(id || '').toLowerCase();
+  if (s.startsWith('claude')) return 'Anthropic';
+  if (s.startsWith('gpt')) return 'OpenAI';
+  if (s.startsWith('deepseek')) return 'DeepSeek';
+  if (s.startsWith('gemini')) return 'Google';
+  if (s.startsWith('grok')) return 'xAI';
+  if (s.startsWith('kimi')) return 'Moonshot';
+  if (s.startsWith('glm')) return 'Zhipu';
+  return 'Provider';
+}
+
+function syncModelState() {
+  state.modelLabel = state.selectedModel || state.defaultModel || '—';
+  const badge = $('modelBadge');
+  if (badge) badge.textContent = state.modelLabel;
+  const btn = $('thinkBtn');
+  if (btn) {
+    btn.className = 'think-toggle' + (state.thinking ? ' on' : '');
+    btn.textContent = state.thinking ? '🧠 تفکر روشن' : '🧠 تفکر';
+  }
+}
+
+function syncShellBadge() {
+  const el = $('shellMode');
+  if (!el) return;
+  if (state.sandbox) {
+    el.textContent = 'Sandbox واقعی متصل';
+    el.title = 'run_command و ترمینال در محفظه‌ی پایدار Linux اجرا می‌شوند.';
+  } else if (state.linuxRunner) {
+    el.textContent = 'کانتینر لینوکس واقعی (Bash/Node/Python)';
+    el.title = 'فرمان‌های ترمینال و run_command در کانتینر واقعی سیستم‌عامل لینوکس با فایل‌های پروژه اجرا می‌شوند.';
+  } else {
+    el.textContent = 'شل مجازی و امن';
+    el.title = 'بدون Sandbox: فقط help/ls/cat/touch/echo/rm مجاز است و هیچ فرمان واقعی اجرا نمی‌شود.';
+  }
+}
+
+function toggleThinking() {
+  state.thinking = !state.thinking;
+  try { localStorage.setItem(THINK_STORE, state.thinking ? '1' : '0'); } catch { /* ignore */ }
+  syncModelState();
+  toast(state.thinking ? 'حالت تفکر عمیق روشن شد' : 'حالت تفکر عمیق خاموش شد');
+}
+
+function openModelModal() {
+  renderModelList();
+  const input = $('customModelInput');
+  if (input) input.value = state.selectedModel || '';
+  const note = $('modelModalNote');
+  if (note) {
+    note.textContent = state.selectedModel
+      ? `مدل انتخابی شما: ${state.selectedModel} (پیش‌فرض سرور: ${state.defaultModel})`
+      : `در حال استفاده از مدل پیش‌فرض سرور: ${state.defaultModel}`;
+  }
+  $('modelModal').classList.add('open');
+}
+
+function renderModelList() {
+  const grid = $('modelGrid');
+  if (!grid) return;
+  const activeId = state.selectedModel || state.defaultModel;
+  const list = state.availableModels.length
+    ? state.availableModels
+    : [{ id: state.defaultModel || 'claude-sonnet-5-5', label: state.defaultModel || 'claude-sonnet-5-5', provider: 'Server', tier: 'coding', desc: 'مدل پیش‌فرض سرور' }];
+  grid.innerHTML = list
+    .map((m) => {
+      const isAct = m.id === activeId;
+      const tier = TIER_LABELS[m.tier] || 'مدل';
+      const provider = m.provider || inferProvider(m.id);
+      const subtitle = m.desc || (m.label && m.label !== m.id ? m.label : '');
+      return `<div class="model-card${isAct ? ' active' : ''}" data-model-id="${esc(m.id)}">
+        <div class="m-id">${esc(m.id)}</div>
+        <div class="m-meta">
+          <span>${esc(provider)}</span>
+          <span class="tier-pill">${esc(tier)}</span>
+        </div>
+        ${subtitle ? `<div class="tiny" style="margin-top:5px;line-height:1.5;color:#9eb0c9">${esc(subtitle)}</div>` : ''}
+      </div>`;
+    })
+    .join('');
+  grid.querySelectorAll('.model-card').forEach((card) => {
+    card.onclick = () => selectModel(card.dataset.modelId);
+  });
+}
+
+function selectModel(id) {
+  const clean = String(id || '').trim();
+  if (!clean) return;
+  state.selectedModel = clean === state.defaultModel ? '' : clean;
+  try {
+    if (state.selectedModel) localStorage.setItem(MODEL_STORE, state.selectedModel);
+    else localStorage.removeItem(MODEL_STORE);
+  } catch { /* ignore */ }
+  syncModelState();
+  renderModelList();
+  const input = $('customModelInput');
+  if (input) input.value = state.selectedModel;
+  const note = $('modelModalNote');
+  if (note) note.textContent = `مدل فعال: ${state.modelLabel}`;
+  toast('مدل فعال شد: ' + state.modelLabel);
+  closeModal('modelModal');
+}
+
+function applyCustomModel() {
+  const val = ($('customModelInput')?.value || '').trim();
+  if (!val) return toast('شناسه‌ی مدل را وارد کنید');
+  if (!/^[a-zA-Z0-9._:/-]{2,120}$/.test(val)) return toast('شناسه‌ی مدل معتبر نیست');
+  if (!state.availableModels.some((m) => m.id === val)) {
+    state.availableModels.unshift({ id: val, label: val, provider: 'Custom', tier: 'custom', desc: 'مدل انتخاب‌شده دستی' });
+  }
+  selectModel(val);
+}
+
+function resetDefaultModel() {
+  state.selectedModel = '';
+  try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
+  syncModelState();
+  renderModelList();
+  if ($('customModelInput')) $('customModelInput').value = '';
+  toast('مدل پیش‌فرض سرور فعال شد: ' + state.modelLabel);
+  closeModal('modelModal');
+}
+
+async function refreshLiveModels() {
+  const btn = $('refreshModelsBtn');
+  if (btn) btn.textContent = 'در حال استعلام…';
+  try {
+    const data = await api(API.models + '?refresh=1');
+    if (Array.isArray(data.models) && data.models.length) {
+      state.availableModels = data.models;
+      renderModelList();
+    }
+    const note = $('modelModalNote');
+    if (note) {
+      note.textContent = data.source === 'remote'
+        ? `✔ ${faNum(data.models.length)} مدل به صورت زنده از سرویس‌دهنده دریافت شد.`
+        : `فهرست کاتالوگ (${faNum((data.models || []).length)} مدل) نمایش داده شد.`;
+    }
+  } catch (error) {
+    toast('خطا در دریافت لیست مدل‌ها: ' + error.message);
+  } finally {
+    if (btn) btn.textContent = '↻ بروزرسانی لیست زنده';
+  }
+}
+
 /* ---------------------------------- boot --------------------------------- */
 
 async function boot() {
+  try {
+    state.selectedModel = localStorage.getItem(MODEL_STORE) || '';
+    const savedThink = localStorage.getItem(THINK_STORE);
+    state.thinking = savedThink === null ? true : savedThink === '1';
+  } catch { /* ignore */ }
+  syncModelState();
   renderTerminalIntro();
   setSync('busy', 'در حال بررسی نشست…');
   try {
@@ -508,14 +734,15 @@ async function boot() {
     const config = await api(API.config).catch(() => null);
     if (config) {
       state.config = config;
-      state.modelLabel = config.model || '—';
+      state.defaultModel = config.model || '—';
+      if (Array.isArray(config.models)) state.availableModels = config.models;
       state.contextBudget = config.contextBudgetTokens || 24000;
       state.sandbox = Boolean(config.sandbox);
-      $('modelBadge').textContent = state.modelLabel;
-      $('shellMode').textContent = state.sandbox ? 'Sandbox واقعی متصل' : 'شل مجازی و امن';
-      $('shellMode').title = state.sandbox
-        ? 'run_command در محفظه‌ی Linux واقعی اجرا می‌شود.'
-        : 'بدون Sandbox: فقط help/ls/cat/touch/echo/rm مجاز است و هیچ فرمان واقعی اجرا نمی‌شود.';
+      state.linuxRunner = Boolean(config.linuxRunner);
+      state.executionMode = config.executionMode || (state.sandbox ? 'sandbox' : state.linuxRunner ? 'linux-container' : 'virtual');
+      syncModelState();
+      syncShellBadge();
+      renderTerminalIntro();
     }
   } catch { /* non-fatal */ }
 
@@ -534,7 +761,6 @@ async function boot() {
     return;
   }
 
-  restoreGitHub();
   state.ready = true;
 
   const last = localStorage.getItem('cp-last-conversation');
@@ -545,7 +771,10 @@ async function boot() {
   } else {
     await newConversation(false);
   }
-  if (!state.workspace.active && Object.keys(state.workspace.files).length === 0) {
+
+  restoreGitHub();
+
+  if (!state.repo && !state.workspace.active && Object.keys(state.workspace.files).length === 0) {
     addTerminal('workspace خالی است. فایل بسازید یا مخزن GitHub را وصل کنید.', 'dim');
   }
   setSync('on', 'همگام با ابر · ' + (state.auth.user.email || ''));
@@ -898,7 +1127,7 @@ async function saveEditor(notify = false) {
 function newFile() {
   const name = prompt('نام فایل جدید (مثلاً app.js):');
   if (!name) return;
-  if (!/^[\w./-]{1,200}$/.test(name) || name.includes('..') || name.startsWith('/')) return toast('نام فایل نامعتبر است');
+  if (!/^[\w./[\]-]{1,200}$/.test(name) || name.includes('..') || name.startsWith('/')) return toast('نام فایل نامعتبر است');
   if (state.workspace.files[name] !== undefined) return toast('این فایل وجود دارد');
   state.workspace.files[name] = '';
   state.workspace.active = name;
@@ -919,6 +1148,9 @@ function deleteActive() {
   renderTree();
   renderEditor();
   saveEditor(false);
+  if (state.repo) {
+    commitChangesAtomically([], [name], `CodePilot: delete ${name}`).catch(() => {});
+  }
 }
 
 function downloadProject() {
@@ -940,37 +1172,103 @@ function downloadProject() {
 
 function addTerminal(text, cls = '') {
   const term = $('terminal');
+  if (!term) return;
   const line = document.createElement('div');
   if (cls) line.className = cls;
   line.textContent = text;
-  term.appendChild(line);
+  const cmdline = term.querySelector('.cmdline');
+  if (cmdline) term.insertBefore(line, cmdline);
+  else term.appendChild(line);
   term.scrollTop = term.scrollHeight;
 }
 function renderTerminalIntro() {
   const term = $('terminal');
+  if (!term) return;
   term.innerHTML = '';
-  addTerminal('CodePilot shell · virtual sandbox', 'dim');
-  addTerminal('help را بزنید تا دستورهای مجاز را ببینید. اجرای فرمان سیستم‌عامل و دسترسی شبکه غیرفعال است.', 'dim');
   const line = document.createElement('div');
   line.className = 'cmdline';
-  line.innerHTML = '<span class="prompt">~/project $</span><input class="cmd" id="cmd" autocomplete="off" placeholder="help" onkeydown="if(event.key===\'Enter\')runLocalCommand()">';
+  line.innerHTML = '<span class="prompt">~/project $</span><input class="cmd" id="cmd" autocomplete="off" placeholder="uname -a · node -v · python3 --version · help" onkeydown="terminalKey(event)">';
   term.appendChild(line);
+  if (state.sandbox || state.linuxRunner) {
+    addTerminal('CodePilot Linux Terminal · اجرای واقعی در کانتینر ایزوله سیستم‌عامل لینوکس (Bash 5.2 · Node 20 · Python 3.14 · GCC · Go · Rust)', 'ok');
+    addTerminal('هر دستور واقعی لینوکس را تایپ کنید و Enter بزنید (مثلاً uname -a یا python3 -c "print(2**10)").', 'dim');
+  } else {
+    addTerminal('CodePilot shell · virtual sandbox', 'dim');
+    addTerminal('help را بزنید تا دستورهای مجاز را ببینید. اجرای فرمان سیستم‌عامل و دسترسی شبکه غیرفعال است.', 'dim');
+  }
 }
 function clearTerminal() { renderTerminalIntro(); }
 function showTerminalHelp() {
-  addTerminal('help, pwd, ls, cat <file>, touch <file>, echo <text> > <file>, rm <file>, clear, preview — همه محلی و بی‌خطر.', 'dim');
+  if (state.sandbox || state.linuxRunner) {
+    addTerminal('اجرای واقعی لینوکس فعال است: bash, uname, ls -la, grep, awk, sed, node, python3, gcc, g++, go, rustc, sqlite3, openssl + دستورات محلی clear و preview.', 'ok');
+  } else {
+    addTerminal('help, pwd, ls, cat <file>, touch <file>, echo <text> > <file>, rm <file>, clear, preview — همه محلی و بی‌خطر.', 'dim');
+  }
 }
-function runLocalCommand() {
+function terminalKey(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    runLocalCommand();
+    return;
+  }
+  const el = $('cmd');
+  if (!el || !state.cmdHistory.length) return;
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    state.cmdIndex = Math.min(state.cmdHistory.length - 1, state.cmdIndex + 1);
+    el.value = state.cmdHistory[state.cmdHistory.length - 1 - state.cmdIndex] || '';
+  } else if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    state.cmdIndex = Math.max(-1, state.cmdIndex - 1);
+    el.value = state.cmdIndex < 0 ? '' : state.cmdHistory[state.cmdHistory.length - 1 - state.cmdIndex] || '';
+  }
+}
+async function runLocalCommand() {
   const el = $('cmd');
   if (!el) return;
   const command = el.value.trim();
   if (!command) return;
   el.value = '';
+  state.cmdHistory.push(command);
+  if (state.cmdHistory.length > 60) state.cmdHistory.shift();
+  state.cmdIndex = -1;
   addTerminal('~/project $ ' + command);
-  const files = state.workspace.files;
   const [op, ...rest] = command.split(/\s+/);
   const arg = rest.join(' ');
+  if (op === 'clear') return clearTerminal();
+  if (op === 'preview') return runPreview();
   if (op === 'help') return showTerminalHelp();
+
+  if (state.sandbox || state.linuxRunner) {
+    el.disabled = true;
+    try {
+      const data = await api(API.run, {
+        method: 'POST',
+        body: JSON.stringify({
+          command,
+          conversationId: state.conversationId || '',
+          workspace: snapshotWorkspace()
+        })
+      });
+      const out = String(data.stdout || '').trimEnd();
+      const err = String(data.stderr || '').trimEnd();
+      if (out) out.split('\n').forEach((l) => addTerminal(l));
+      if (err) err.split('\n').forEach((l) => addTerminal(l, data.ok ? 'dim' : 'err'));
+      if (!out && !err) {
+        addTerminal(data.text || `(exit ${data.exitCode ?? 0})`, data.ok ? 'ok' : 'err');
+      } else if (!data.ok) {
+        addTerminal(`exit ${data.exitCode ?? 1} (${data.mode || 'linux-container'})`, 'err');
+      }
+    } catch (error) {
+      addTerminal('خطا در اجرای دستور: ' + error.message, 'err');
+    } finally {
+      el.disabled = false;
+      el.focus();
+    }
+    return;
+  }
+
+  const files = state.workspace.files;
   if (op === 'pwd') return addTerminal('/workspace/project');
   if (op === 'ls') return addTerminal(Object.keys(files).sort().join('   ') || '(خالی)');
   if (op === 'cat') return addTerminal(files[arg] !== undefined ? files[arg] : 'cat: فایل پیدا نشد: ' + arg);
@@ -999,8 +1297,6 @@ function runLocalCommand() {
       return addTerminal('نوشته شد', 'ok');
     }
   }
-  if (op === 'clear') return clearTerminal();
-  if (op === 'preview') return runPreview();
   addTerminal('دستور پشتیبانی نمی‌شود. help را بزنید.', 'err');
 }
 
@@ -1036,19 +1332,35 @@ function renderChat() {
   chat.scrollTop = chat.scrollHeight;
 }
 
+const TOOL_LABELS = {
+  think: '🧠 تفکر و برنامه‌ریزی',
+  list_files: '📂 فهرست فایل‌ها',
+  read_file: '📄 خواندن فایل',
+  search_code: '🔎 جست‌وجوی کد',
+  list_symbols: '🧭 نمادهای کد',
+  apply_patch: '🩹 اعمال پچ دقیق',
+  write_file: '✏️ نوشتن فایل',
+  delete_file: '🗑️ حذف فایل',
+  undo_edit: '↩️ بازگردانی نسخه',
+  file_history: '🕓 تاریخچه‌ی فایل',
+  run_command: '🐧 اجرای فرمان لینوکس',
+  web_search: '🌐 جست‌وجوی زنده وب',
+  fetch_url: '🔗 فراخوانی لینک / API'
+};
+
 function welcomeHtml() {
   return `<div class="welcome">
-    <h2>سلام! گفتگو در ابر ذخیره می‌شود.</h2>
-    <p>هر پیام، تغییر فایل و خلاصه‌ی حافظه در D1 نگه داشته می‌شود؛ با هر دستگاه دیگری وارد شوید، همین گفتگو را ادامه می‌دهید.</p>
+    <h2>سلام! دستیار کدنویسی پیشرفته آماده است.</h2>
+    <p>مجهز به انتخاب مدل زنده، تفکر عمیق، اجرای واقعی دستورات لینوکس در کانتینر ایزوله، جست‌وجوی زنده اینترنت و API، و کامیت اتمیک مستقیم روی مخزن GitHub.</p>
     <ol>
-      <li>«فایل‌ها را بررسی کن» → دستیار اول می‌خواند، بعد ویرایش می‌کند.</li>
-      <li>تغییرات با write_file ذخیره و در صورت اتصال GitHub، Commit می‌شوند.</li>
-      <li>حافظه‌ی بلندمدت را از ⚙ مدیریت کنید.</li>
+      <li>از بالای پنل چت یا دکمه‌ی <b>✦ مدل</b>، قوی‌ترین مدل دلخواه (مثل <code>claude-opus-5-5</code> یا <code>gpt-6.1-sol</code>) را انتخاب کنید.</li>
+      <li>دستیار می‌تواند دستورات واقعی لینوکس، Python و Node را اجرا کند، وب و APIها را زنده بخواند، و حتی کدهای خودش را در GitHub ارتقا دهد.</li>
+      <li>تمام گفتگوها، نسخه‌های فایل و حافظه‌ی بلندمدت در Cloudflare D1 ذخیره می‌شوند.</li>
     </ol>
     <div class="suggestions">
-      <button onclick="quickPrompt('فایل‌های پروژه را بررسی کن و یک جمع‌بندی کوتاه بده.')">فایل‌ها را بررسی کن</button>
-      <button onclick="quickPrompt('یک صفحه فرود مدرن و واکنش‌گرا برای محصول من بساز.')">صفحه فرود بساز</button>
-      <button onclick="quickPrompt('باگ‌های احتمالی فایل فعلی را پیدا کن و توضیح بده.')">بازبینی کد فعلی</button>
+      <button onclick="quickPrompt('فایل‌های پروژه را بررسی کن و معماری فعلی را دقیق توضیح بده.')">بررسی معماری پروژه</button>
+      <button onclick="quickPrompt('در لینوکس نسخه‌ی کرنل، Node و Python را با اجرای واقعی دستور بررسی کن.')">تست اجرای واقعی لینوکس</button>
+      <button onclick="quickPrompt('آخرین اخبار و فناوری‌های روز دنیای هوش مصنوعی را از اینترنت جست‌وجو کن و خلاصه بگو.')">جست‌وجوی زنده وب</button>
     </div>
   </div>`;
 }
@@ -1056,6 +1368,14 @@ function welcomeHtml() {
 function quickPrompt(text) {
   $('prompt').value = text;
   $('prompt').focus();
+}
+
+function renderThinkHtml(thought, plan, open = false) {
+  const body = [String(thought || '').trim(), plan ? `\n── برنامه‌ی اجرا ──\n${String(plan).trim()}` : '']
+    .filter(Boolean)
+    .join('\n');
+  if (!body) return '';
+  return `<details class="think-box"${open ? ' open' : ''}><summary>🧠 فرآیند تفکر و برنامه‌ریزی دستیار</summary><pre>${esc(body)}</pre></details>`;
 }
 
 function appendMessageElement(message) {
@@ -1066,22 +1386,37 @@ function appendMessageElement(message) {
   const role = message.role === 'user' ? 'user' : 'assistant';
   div.className = 'msg ' + role;
   if (message.role === 'tool') {
+    const raw = String(message.content || '');
+    if (raw.startsWith('Thought recorded.')) return null;
     div.className = 'msg assistant';
-    const label = { list_files: 'فهرست فایل‌ها', read_file: 'خواندن فایل', write_file: 'نوشتن فایل', run_command: 'اجرای فرمان' };
     div.innerHTML =
       `<div class="tool-line done">✔ نتیجه‌ی ابزار · <span style="direction:ltr;display:inline-block">${esc(message.tool_call_id || '')}</span></div>` +
-      `<pre style="max-height:240px">${esc(String(message.content || '').slice(0, 4000))}</pre>`;
+      `<pre style="max-height:240px">${esc(raw.slice(0, 4000))}</pre>`;
     chat.appendChild(div);
     return div;
   }
   if (role === 'user') {
     div.textContent = message.content || '';
   } else {
-    div.innerHTML = renderMarkdownish(message.content || '');
+    let thinkBlocks = '';
+    const otherCalls = [];
     if (Array.isArray(message.tool_calls)) {
       for (const call of message.tool_calls) {
-        div.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.function.name, call.function.arguments, false));
+        if (call.function?.name === 'think') {
+          try {
+            const parsed = JSON.parse(call.function.arguments || '{}');
+            thinkBlocks += renderThinkHtml(parsed.thought, parsed.plan, false);
+          } catch {
+            otherCalls.push(call);
+          }
+        } else {
+          otherCalls.push(call);
+        }
       }
+    }
+    div.innerHTML = thinkBlocks + renderMarkdownish(message.content || '');
+    for (const call of otherCalls) {
+      div.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.function.name, call.function.arguments, true));
     }
     const acts = document.createElement('div');
     acts.className = 'msg-actions';
@@ -1096,7 +1431,7 @@ function appendMessageElement(message) {
 }
 
 function toolLineHtml(id, name, detail, done) {
-  const label = { list_files: '📂 فهرست فایل‌ها', read_file: '📄 خواندن فایل', write_file: '✏️ نوشتن فایل', run_command: '⌘ اجرای فرمان' }[name] || name;
+  const label = TOOL_LABELS[name] || name;
   const short = String(detail || '').replace(/\s+/g, ' ').slice(0, 160);
   return `<div class="tool-line ${done ? 'done' : ''}" data-tool-id="${esc(id)}">${label}<span style="color:#6f7d92">·</span><span style="overflow:hidden;text-overflow:ellipsis">${esc(short)}</span></div>`;
 }
@@ -1131,6 +1466,11 @@ async function sendMessage() {
   $('sendBtn').textContent = 'در حال کار…';
   $('composerHint').textContent = 'در حال اجرا…';
   input.value = '';
+
+  if (state.repoSyncPromise) {
+    setSync('busy', 'همگام‌سازی فایل‌های مخزن GitHub…');
+    try { await state.repoSyncPromise; } catch { /* non-fatal */ }
+  }
   setSync('busy', 'درخواست به مدل…');
 
   const userMessage = { role: 'user', content: text, created_at: Date.now() };
@@ -1139,7 +1479,7 @@ async function sendMessage() {
 
   const bubble = document.createElement('div');
   bubble.className = 'msg assistant';
-  bubble.innerHTML = '<div class="msg-text"><span class="typing"><i></i><i></i><i></i></span></div>';
+  bubble.innerHTML = '<div class="think-stream"></div><div class="msg-text"><span class="typing"><i></i><i></i><i></i></span></div>';
   $('chat').appendChild(bubble);
   $('chat').scrollTop = $('chat').scrollHeight;
 
@@ -1151,6 +1491,8 @@ async function sendMessage() {
       body: JSON.stringify({
         conversationId: state.conversationId,
         message: text,
+        model: state.selectedModel || undefined,
+        thinking: state.thinking,
         repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
       })
     });
@@ -1169,6 +1511,10 @@ async function sendMessage() {
     if (result.ok) {
       await reloadCurrentConversation();
       renderTurnNotices();
+      if (state.repo && (result.touchedFiles.length || result.deletedFiles.length)) {
+        const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
+        commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
+      }
     }
   } catch (error) {
     bubble.className = 'msg assistant error';
@@ -1190,18 +1536,28 @@ async function consumeStream(response, bubble) {
   const decoder = new TextDecoder();
   let buffer = '';
   let assistantText = '';
+  let touchedFiles = [];
+  let deletedFiles = [];
+  const thinkArea = bubble.querySelector('.think-stream');
   const textArea = bubble.querySelector('.msg-text');
   textArea.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
 
   const handle = (event, data) => {
     if (event === 'status') {
       setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
+    } else if (event === 'thinking') {
+      if (thinkArea && (data.thought || data.plan)) {
+        thinkArea.insertAdjacentHTML('beforeend', renderThinkHtml(data.thought, data.plan, true));
+        $('chat').scrollTop = $('chat').scrollHeight;
+      }
     } else if (event === 'tool') {
       for (const call of data.calls || []) {
+        if (call.name === 'think') continue;
         bubble.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.name, call.arguments, false));
       }
       $('chat').scrollTop = $('chat').scrollHeight;
     } else if (event === 'tool_result') {
+      if (data.name === 'think') return;
       const line = bubble.querySelector(`[data-tool-id="${cssEscape(data.id)}"]`);
       if (line) {
         line.classList.add(data.ok === false ? 'fail' : 'done');
@@ -1216,20 +1572,20 @@ async function consumeStream(response, bubble) {
       textArea.innerHTML = renderMarkdownish(assistantText);
       $('chat').scrollTop = $('chat').scrollHeight;
     } else if (event === 'done') {
+      touchedFiles = Array.isArray(data.touchedFiles) ? data.touchedFiles : [];
+      deletedFiles = Array.isArray(data.deletedFiles) ? data.deletedFiles : [];
       if (data.workspace) {
         state.workspace = normalizeWorkspace(data.workspace);
+        for (const path of touchedFiles) {
+          if (state.repo) state.dirtyFiles.add(path);
+        }
         renderTree();
         renderEditor();
-        // Commit only the files the agent actually touched, never the whole repo.
-        for (const path of data.touchedFiles || []) {
-          state.dirtyFiles.add(path);
-          commitFile(path).catch(() => {});
-        }
       }
       state.diffs = Array.isArray(data.diffs) ? data.diffs : [];
       state.validation = Array.isArray(data.validation) ? data.validation : [];
       state.commands = Array.isArray(data.commands) ? data.commands : [];
-      if (data.diffs?.length) showDiff(data.diffs, data.touchedFiles);
+      if (data.diffs?.length) showDiff(data.diffs, touchedFiles);
       if (data.validation?.length) appendValidation(bubble, data.validation);
       state.turnNotices = {
         validation: state.validation,
@@ -1238,9 +1594,14 @@ async function consumeStream(response, bubble) {
       };
       for (const command of state.commands) {
         addTerminal(`$ ${command.command}`, 'dim');
-        addTerminal(`  mode: ${command.mode}${command.mode === 'virtual' ? ' (شبیه‌سازی، نه اجرای واقعی)' : ''}`, command.ok ? 'ok' : 'err');
+        addTerminal(
+          `  mode: ${command.mode}${command.mode === 'virtual' ? ' (شبیه‌سازی، نه اجرای واقعی)' : ' (اجرای واقعی لینوکس)'}`,
+          command.ok ? 'ok' : 'err'
+        );
       }
       if (data.sandbox !== undefined) state.sandbox = Boolean(data.sandbox);
+      if (data.linuxRunner !== undefined) state.linuxRunner = Boolean(data.linuxRunner);
+      syncShellBadge();
       if (data.context && Number.isFinite(data.context.estimatedTokens)) {
         state.contextTokens = data.context.estimatedTokens;
       }
@@ -1296,7 +1657,7 @@ async function consumeStream(response, bubble) {
       bubble.innerHTML = '<span class="tiny">بدون پاسخ</span>';
     }
   }
-  return { ok: persisted, text: assistantText };
+  return { ok: persisted, text: assistantText, touchedFiles, deletedFiles };
 }
 
 function cssEscape(value) {
@@ -1648,6 +2009,7 @@ document.querySelectorAll('.modal').forEach((modal) => {
 /* --------------------------------- GitHub -------------------------------- */
 
 const GH_STORE = 'cp-gh';
+const SYNC_EXT_RE = /(?:\.(?:html|css|js|mjs|cjs|ts|tsx|jsx|json|md|txt|yml|yaml|toml|sql|sh|py|go|rs|c|cpp|h|svg|gitignore)|^(?:Dockerfile|Makefile|LICENSE))$/i;
 
 function restoreGitHub() {
   let saved = null;
@@ -1657,7 +2019,26 @@ function restoreGitHub() {
   if (!saved || !saved.owner || !saved.repo || !saved.token) return;
   state.repo = { owner: saved.owner, repo: saved.repo, branch: saved.branch || 'main' };
   renderTree();
-  syncRepoWorkspace().catch(() => {});
+  state.repoSyncPromise = syncRepoWorkspace({ persist: true })
+    .catch((err) => addTerminal('خطا در همگام‌سازی خودکار GitHub: ' + err.message, 'err'))
+    .finally(() => { state.repoSyncPromise = null; });
+}
+
+async function resyncRepoNow() {
+  if (!state.repo) return toast('ابتدا مخزن GitHub را وصل کنید');
+  const msg = $('ghMessage');
+  if (msg) msg.textContent = 'در حال دریافت آخرین فایل‌ها از GitHub…';
+  try {
+    state.repoSyncPromise = syncRepoWorkspace({ persist: true });
+    await state.repoSyncPromise;
+    if (msg) msg.textContent = '✔ مخزن با آخرین نسخه‌ی GitHub همگام و در D1 ذخیره شد.';
+    toast('فایل‌ها از GitHub بروزرسانی شدند');
+  } catch (error) {
+    if (msg) msg.textContent = 'خطا: ' + error.message;
+    toast('خطا در همگام‌سازی: ' + error.message);
+  } finally {
+    state.repoSyncPromise = null;
+  }
 }
 
 function openGitHub() {
@@ -1691,7 +2072,11 @@ async function ghFetch(path, options = {}) {
   });
   let data = {};
   try { data = await response.json(); } catch { /* ignore */ }
-  if (!response.ok) throw new Error(data.message || `GitHub ${response.status}`);
+  if (!response.ok) {
+    const err = new Error(data.message || `GitHub ${response.status}`);
+    err.status = response.status;
+    throw err;
+  }
   return data;
 }
 
@@ -1720,34 +2105,85 @@ async function connectGitHub() {
     if (remember) { localStorage.setItem(GH_STORE, JSON.stringify(saved)); sessionStorage.removeItem(GH_STORE); }
     else { sessionStorage.setItem(GH_STORE, JSON.stringify(saved)); localStorage.removeItem(GH_STORE); }
     message.textContent = 'در حال خواندن مخزن…';
-    await syncRepoWorkspace();
+    state.repoSyncPromise = syncRepoWorkspace({ persist: true });
+    await state.repoSyncPromise;
     message.textContent = 'اتصال موفق؛ فایل‌ها از مخزن بارگذاری و در D1 ذخیره شدند.';
     renderTree();
-    await saveEditor(false);
     toast('مخزن GitHub وصل شد');
   } catch (error) {
     message.textContent = 'خطا: ' + error.message;
+  } finally {
+    state.repoSyncPromise = null;
   }
 }
 
-async function syncRepoWorkspace() {
+async function syncRepoWorkspace({ persist = true } = {}) {
   if (!state.repo) return;
-  const tree = await ghFetch(`git/trees/${encodeURIComponent(state.repo.branch)}?recursive=1`);
+  const branch = state.repo.branch;
+  const tree = await ghFetch(`git/trees/${encodeURIComponent(branch)}?recursive=1`);
   if (tree.truncated) throw new Error('مخزن بیش از حد بزرگ است');
-  const entries = (tree.tree || []).filter(
-    (item) => item.type === 'blob' && item.size < 200_000 && /\.(html|css|js|mjs|json|md|txt|yml|yaml|toml|svg)$/i.test(item.path)
-  ).slice(0, 80);
+  const entries = (tree.tree || [])
+    .filter(
+      (item) =>
+        item.type === 'blob' &&
+        item.size < 350_000 &&
+        !item.path.startsWith('.git') &&
+        !item.path.startsWith('node_modules/') &&
+        SYNC_EXT_RE.test(item.path.split('/').pop() || item.path)
+    )
+    .slice(0, 100);
+
   const loaded = {};
-  for (const entry of entries) {
-    try {
-      const file = await ghFetch(`contents/${entry.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(state.repo.branch)}`);
-      if (file.content) loaded[entry.path] = b64ToUtf8(file.content);
-    } catch { /* skip unreadable files */ }
+  let cursor = 0;
+  const concurrency = Math.min(6, Math.max(1, entries.length));
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (cursor < entries.length) {
+      const entry = entries[cursor++];
+      if (state.blobCache.has(entry.sha)) {
+        loaded[entry.path] = state.blobCache.get(entry.sha);
+        continue;
+      }
+      try {
+        const blob = await ghFetch(`git/blobs/${encodeURIComponent(entry.sha)}`);
+        if (blob && typeof blob.content === 'string') {
+          const decoded = b64ToUtf8(blob.content);
+          state.blobCache.set(entry.sha, decoded);
+          loaded[entry.path] = decoded;
+          continue;
+        }
+      } catch {
+        // Fallback to contents API if git/blobs fails.
+      }
+      try {
+        const file = await ghFetch(`contents/${entry.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(branch)}`);
+        if (file && typeof file.content === 'string') {
+          const decoded = b64ToUtf8(file.content);
+          if (entry.sha) state.blobCache.set(entry.sha, decoded);
+          loaded[entry.path] = decoded;
+        }
+      } catch { /* skip unreadable files */ }
+    }
+  });
+  await Promise.all(workers);
+
+  // Preserve any unsaved local editor buffer before swapping workspace.
+  for (const dirty of state.dirtyFiles) {
+    if (state.workspace.files[dirty] !== undefined) loaded[dirty] = state.workspace.files[dirty];
   }
-  state.workspace = normalizeWorkspace({ files: loaded, active: loaded['index.html'] !== undefined ? 'index.html' : Object.keys(loaded)[0] });
-  state.dirtyFiles.clear();
+
+  const prevActive = state.workspace.active;
+  const active =
+    prevActive && loaded[prevActive] !== undefined
+      ? prevActive
+      : loaded['index.html'] !== undefined
+        ? 'index.html'
+        : Object.keys(loaded)[0] || '';
+  state.workspace = normalizeWorkspace({ files: loaded, active });
   renderTree();
   renderEditor();
+  if (persist && state.conversationId) {
+    await saveEditor(false);
+  }
 }
 
 function disconnectGitHub() {
@@ -1759,30 +2195,220 @@ function disconnectGitHub() {
   toast('GitHub قطع شد');
 }
 
-async function commitFile(path) {
+function attachDeployBadge(initialText) {
+  const bubbles = $('chat')?.querySelectorAll('.msg.assistant');
+  const last = bubbles && bubbles.length ? bubbles[bubbles.length - 1] : null;
+  if (!last) return null;
+  const el = document.createElement('div');
+  el.className = 'deploy-badge';
+  el.textContent = initialText;
+  last.appendChild(el);
+  $('chat').scrollTop = $('chat').scrollHeight;
+  return el;
+}
+
+async function watchCloudflareDeploy(commitSha, badgeEl, selfEdited = false) {
+  if (!state.repo || !commitSha) return;
+  const shortSha = commitSha.slice(0, 7);
+  for (let i = 0; i < 18; i += 1) {
+    await new Promise((r) => setTimeout(r, 5000));
+    if (!state.repo) return;
+    let runs;
+    try {
+      const data = await ghFetch(`commits/${encodeURIComponent(commitSha)}/check-runs`);
+      runs = Array.isArray(data.check_runs) ? data.check_runs : [];
+    } catch {
+      // Token may not have Checks:Read permission — show clean commit confirmation.
+      if (badgeEl) {
+        badgeEl.className = 'deploy-badge ok';
+        badgeEl.innerHTML = `<span>✔ ثبت اتمیک در GitHub (<code style="direction:ltr">${esc(shortSha)}</code>) — انتشار خودکار Cloudflare Pages آغاز شد.</span>` +
+          (selfEdited ? ' <button onclick="location.reload()">↻ بارگذاری نسخه‌ی جدید</button>' : '');
+      }
+      return;
+    }
+    const pagesRun = runs.find((r) => /cloudflare\s*pages/i.test(r.name || '')) || runs[0];
+    if (!pagesRun) continue;
+    if (pagesRun.status !== 'completed') {
+      if (badgeEl) {
+        badgeEl.textContent = `⏳ کامیت ${shortSha} ثبت شد · در حال ساخت و استقرار خودکار در Cloudflare Pages…`;
+      }
+      continue;
+    }
+    if (pagesRun.conclusion === 'success') {
+      addTerminal(`Cloudflare Pages deployed ${shortSha} ✔`, 'ok');
+      if (badgeEl) {
+        badgeEl.className = 'deploy-badge ok';
+        badgeEl.innerHTML =
+          `<span>✅ کامیت <code style="direction:ltr">${esc(shortSha)}</code> با موفقیت در Cloudflare Pages مستقر شد!</span>` +
+          (selfEdited ? ' <button onclick="location.reload()">↻ بارگذاری مجدد با نسخه‌ی جدید</button>' : '');
+      }
+    } else {
+      addTerminal(`Cloudflare Pages deploy failed (${pagesRun.conclusion})`, 'err');
+      if (badgeEl) {
+        badgeEl.className = 'deploy-badge warn';
+        badgeEl.textContent = `⚠ کامیت ${shortSha} ثبت شد اما استقرار Cloudflare Pages با وضعیت ${pagesRun.conclusion} پایان یافت.`;
+      }
+    }
+    return;
+  }
+  if (badgeEl) {
+    badgeEl.className = 'deploy-badge ok';
+    badgeEl.innerHTML =
+      `<span>✔ کامیت <code style="direction:ltr">${esc(shortSha)}</code> در GitHub ثبت شد.</span>` +
+      (selfEdited ? ' <button onclick="location.reload()">↻ بارگذاری مجدد</button>' : '');
+  }
+}
+
+function commitChangesAtomically(touchedPaths = [], deletedPaths = [], customMessage = '', badgeEl = null) {
+  const job = async () => {
+    if (!state.repo) return null;
+    const touched = [...new Set(touchedPaths)].filter((p) => state.workspace.files[p] !== undefined);
+    const deleted = [...new Set(deletedPaths)].filter((p) => state.workspace.files[p] === undefined);
+    if (!touched.length && !deleted.length) return null;
+
+    const branch = state.repo.branch || 'main';
+    const allNames = [...touched, ...deleted.map((d) => `delete:${d}`)];
+    const message =
+      customMessage ||
+      (allNames.length === 1
+        ? `CodePilot: update ${allNames[0]}`
+        : `CodePilot: update ${allNames.slice(0, 4).join(', ')}${allNames.length > 4 ? ` (+${allNames.length - 4})` : ''}`);
+    const selfEdited = [...touched, ...deleted].some((p) => p === 'index.html' || p.startsWith('functions/') || p === 'wrangler.toml');
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const ref = await ghFetch(`git/ref/heads/${encodeURIComponent(branch)}`);
+        const headSha = ref.object.sha;
+        const headCommit = await ghFetch(`git/commits/${encodeURIComponent(headSha)}`);
+        const baseTreeSha = headCommit.tree.sha;
+
+        const treeEntries = touched.map((path) => ({
+          path,
+          mode: '100644',
+          type: 'blob',
+          content: String(state.workspace.files[path])
+        }));
+        for (const delPath of deleted) {
+          treeEntries.push({ path: delPath, mode: '100644', type: 'blob', sha: null });
+        }
+
+        let newTree;
+        try {
+          newTree = await ghFetch('git/trees', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_tree: baseTreeSha, tree: treeEntries })
+          });
+        } catch (treeErr) {
+          // If a deleted file wasn't in base_tree on GitHub, retry with only touched files.
+          if (deleted.length && touched.length) {
+            newTree = await ghFetch('git/trees', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                base_tree: baseTreeSha,
+                tree: touched.map((path) => ({
+                  path,
+                  mode: '100644',
+                  type: 'blob',
+                  content: String(state.workspace.files[path])
+                }))
+              })
+            });
+          } else {
+            throw treeErr;
+          }
+        }
+
+        if (newTree.sha === baseTreeSha) {
+          touched.forEach((p) => state.dirtyFiles.delete(p));
+          renderTree();
+          if (badgeEl) {
+            badgeEl.className = 'deploy-badge ok';
+            badgeEl.textContent = '✔ محتوای مخزن GitHub از قبل با این تغییرات یکسان است.';
+          }
+          return headSha;
+        }
+
+        const commit = await ghFetch('git/commits', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, tree: newTree.sha, parents: [headSha] })
+        });
+
+        await ghFetch(`git/refs/heads/${encodeURIComponent(branch)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sha: commit.sha, force: false })
+        });
+
+        touched.forEach((p) => state.dirtyFiles.delete(p));
+        renderTree();
+        const shortSha = commit.sha.slice(0, 7);
+        addTerminal(
+          `Atomic commit ${shortSha} (${touched.length + deleted.length} file(s)) → ${state.repo.owner}/${state.repo.repo}@${branch}`,
+          'ok'
+        );
+        if (badgeEl) {
+          badgeEl.textContent = `✔ کامیت اتمیک ${shortSha} در GitHub ثبت شد · بررسی وضعیت استقرار Cloudflare Pages…`;
+        }
+        watchCloudflareDeploy(commit.sha, badgeEl, selfEdited).catch(() => {});
+        return commit.sha;
+      } catch (error) {
+        if (attempt === 0 && (error.status === 409 || error.status === 422)) {
+          continue;
+        }
+        // Sequential fallback via Contents API if Git Data API failed for any reason.
+        try {
+          for (const path of touched) {
+            await commitSingleFileSequential(path, message);
+          }
+          if (badgeEl) {
+            badgeEl.className = 'deploy-badge ok';
+            badgeEl.textContent = `✔ تغییرات (${touched.length} فایل) به صورت ترتیبی در GitHub ثبت شد.`;
+          }
+          return 'sequential';
+        } catch (fallbackErr) {
+          addTerminal(`Commit failed: ${fallbackErr.message || error.message}`, 'err');
+          if (badgeEl) {
+            badgeEl.className = 'deploy-badge warn';
+            badgeEl.textContent = `⚠ خطا در ثبت تغییرات روی GitHub: ${fallbackErr.message || error.message}`;
+          }
+          throw fallbackErr;
+        }
+      }
+    }
+    return null;
+  };
+
+  state.commitQueue = state.commitQueue.catch(() => {}).then(job);
+  return state.commitQueue;
+}
+
+async function commitSingleFileSequential(path, commitMsg) {
   if (!state.repo || state.workspace.files[path] === undefined) return;
   const content = state.workspace.files[path];
+  let sha;
   try {
-    let sha;
-    try {
-      const existing = await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(state.repo.branch)}`);
-      sha = existing.sha;
-    } catch (error) {
-      if (!/not found/i.test(error.message)) throw error;
-    }
-    const body = { message: `CodePilot: update ${path}`, content: utf8ToB64(content), branch: state.repo.branch };
-    if (sha) body.sha = sha;
-    await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    state.dirtyFiles.delete(path);
-    renderTree();
-    addTerminal(`Committed ${path} → ${state.repo.owner}/${state.repo.repo}@${state.repo.branch}`, 'ok');
+    const existing = await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(state.repo.branch)}`);
+    sha = existing.sha;
   } catch (error) {
-    addTerminal(`Commit failed for ${path}: ${error.message}`, 'err');
+    if (!/not found|404/i.test(error.message)) throw error;
   }
+  const body = { message: commitMsg || `CodePilot: update ${path}`, content: utf8ToB64(content), branch: state.repo.branch };
+  if (sha) body.sha = sha;
+  await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  state.dirtyFiles.delete(path);
+  renderTree();
+  addTerminal(`Committed ${path} → ${state.repo.owner}/${state.repo.repo}@${state.repo.branch}`, 'ok');
+}
+
+async function commitFile(path) {
+  return commitChangesAtomically([path], [], `CodePilot: update ${path}`);
 }
 
 /* --------------------------------- start --------------------------------- */
