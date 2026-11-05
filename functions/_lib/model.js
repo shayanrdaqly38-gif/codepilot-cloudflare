@@ -1,5 +1,6 @@
-// The single place that talks to the model provider.
-// The API key stays in Cloudflare secrets and is never returned or logged.
+// The single place that talks to the model provider (https://tooken.club/v1).
+// Reads live model capabilities & reasoning effort levels directly from `/v1/models`,
+// and sends genuine `reasoning_effort` values (`none`..`max`) without synthetic token budgets.
 
 import { fail, sleep, stripSecrets, envSecrets } from './util.js';
 
@@ -19,236 +20,548 @@ export const ALLOWED_TOOLS = new Set([
   'fetch_url'
 ]);
 
-export const EFFORT_LEVELS = ['off', 'low', 'medium', 'high', 'max'];
+export const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-export const EFFORT_BUDGET_TOKENS = {
-  off: 0,
-  low: 2_048,
-  medium: 8_192,
-  high: 16_384,
-  max: 31_999
-};
+const FULL_TOOKEN_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const STANDARD_EFFORTS = ['low', 'medium', 'high'];
 
 export const MODEL_CATALOG = [
-  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — قوی‌ترین استدلال و معماری کد', tier: 'flagship' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — سریع، دقیق و متعادل (پیش‌فرض)', tier: 'balanced' },
-  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol — پرچم‌دار استدلال و کدنویسی', tier: 'flagship' },
-  { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro — تخصصی الگوریتم و تفکر عمیق', tier: 'reasoning' },
-  { id: 'gemini-4-argon', label: 'Gemini 4 Argon — زمینه طولانی و چندمنظوره', tier: 'flagship' },
-  { id: 'grok-4.7', label: 'Grok 4.7 — تحلیل عمیق و حل مسئله', tier: 'flagship' },
-  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra — مهندسی نرم‌افزار پیشرفته', tier: 'balanced' },
-  { id: 'kimi-k3.1-pro', label: 'Kimi K3.1 Pro — تحلیل پروژه‌های بزرگ', tier: 'reasoning' },
-  { id: 'glm-5.3', label: 'GLM 5.3 — کدنویسی و ابزارخوانی دقیق', tier: 'balanced' },
-  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5 — نسخه پایدار کلود اپوس', tier: 'balanced' },
-  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1 — خلاق و روان', tier: 'balanced' },
-  { id: 'gpt-6-luna', label: 'GPT-6 Luna — پاسخ‌گویی سریع و هوشمند', tier: 'fast' },
-  { id: 'gpt-6-astra', label: 'GPT-6 Astra — سبک و پرسرعت', tier: 'fast' },
-  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 — فوق‌سریع و کم‌هزینه', tier: 'fast' },
-  { id: 'deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1 Flash — سریع برای ویرایش‌های کوتاه', tier: 'fast' },
-  { id: 'gemini-3-8-flash', label: 'Gemini 3.8 Flash — بسیار سریع', tier: 'fast' },
-  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash — سریع و اقتصادی', tier: 'fast' }
+  {
+    id: 'claude-fable-5-1',
+    title: 'Fable 5.1',
+    badge: 'Pro, Max, or Ultra',
+    subtitle: 'For your toughest challenges',
+    label: 'Claude Fable 5.1 — برای سخت‌ترین چالش‌ها و معماری سنگین',
+    tier: 'flagship',
+    featured: true,
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'high'
+  },
+  {
+    id: 'claude-opus-5-5',
+    title: 'Opus 5.5',
+    badge: 'Pro',
+    subtitle: 'For complex work and everyday tasks',
+    label: 'Claude Opus 5.5 — برای کارهای پیچیده و مهندسی کد',
+    tier: 'flagship',
+    featured: true,
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'high'
+  },
+  {
+    id: 'claude-sonnet-5-5',
+    title: 'Sonnet 5.5',
+    subtitle: 'Most efficient for simpler tasks',
+    label: 'Claude Sonnet 5.5 — سریع، بهینه و متعادل (پیش‌فرض)',
+    tier: 'balanced',
+    featured: true,
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'medium'
+  },
+  {
+    id: 'claude-haiku-5-5',
+    title: 'Haiku 5.5',
+    subtitle: 'Fastest for quick answers',
+    label: 'Claude Haiku 5.5 — سریع‌ترین برای پاسخ‌های فوری',
+    tier: 'fast',
+    featured: true,
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'low'
+  },
+  {
+    id: 'gpt-6.1-sol',
+    title: 'GPT-6.1 Sol',
+    subtitle: 'Flagship reasoning & software engineering',
+    label: 'GPT-6.1 Sol — پرچم‌دار استدلال و کدنویسی',
+    tier: 'flagship',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'high'
+  },
+  {
+    id: 'deepseek-v4-pro',
+    title: 'DeepSeek V4 Pro',
+    subtitle: 'Deep algorithmic reasoning',
+    label: 'DeepSeek V4 Pro — تخصصی الگوریتم و تفکر عمیق',
+    tier: 'reasoning',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: false,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'high'
+  },
+  {
+    id: 'deepseek-v4.1-flash-1017',
+    title: 'DeepSeek V4.1 Flash 1017',
+    subtitle: 'Fast coding with full reasoning control',
+    label: 'DeepSeek V4.1 Flash — سریع با پشتیبانی کامل استدلال',
+    tier: 'fast',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: false,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'medium'
+  },
+  {
+    id: 'gpt-6-luna',
+    title: 'GPT-6 Luna',
+    subtitle: 'Fast multimodal with full reasoning levels',
+    label: 'GPT-6 Luna — چندوجهی سریع با سطوح کامل استدلال',
+    tier: 'fast',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'medium'
+  },
+  {
+    id: 'gpt-6-astra',
+    title: 'GPT-6 Astra',
+    subtitle: 'Lightweight & responsive',
+    label: 'GPT-6 Astra — سبک و پرسرعت',
+    tier: 'fast',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'low'
+  },
+  {
+    id: 'gpt-6.1-terra',
+    title: 'GPT-6.1 Terra',
+    subtitle: 'Balanced software architecture',
+    label: 'GPT-6.1 Terra — مهندسی نرم‌افزار پیشرفته',
+    tier: 'balanced',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'medium'
+  },
+  {
+    id: 'gemini-4-argon',
+    title: 'Gemini 4 Argon',
+    subtitle: '1M context window',
+    label: 'Gemini 4 Argon — زمینه ۱ میلیون توکن',
+    tier: 'flagship',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 32_768,
+    vision: false,
+    tools: true,
+    reasoningLevels: STANDARD_EFFORTS,
+    reasoningUnconfirmed: true,
+    defaultEffort: 'medium'
+  },
+  {
+    id: 'gemini-3-8-flash',
+    title: 'Gemini 3.8 Flash',
+    subtitle: 'High-speed responses',
+    label: 'Gemini 3.8 Flash — بسیار سریع',
+    tier: 'fast',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 65_536,
+    vision: true,
+    tools: true,
+    reasoningLevels: STANDARD_EFFORTS,
+    defaultEffort: 'low'
+  },
+  {
+    id: 'grok-4.7',
+    title: 'Grok 4.7',
+    subtitle: 'Deep analysis & problem solving',
+    label: 'Grok 4.7 — تحلیل عمیق و حل مسئله',
+    tier: 'flagship',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'high'
+  },
+  {
+    id: 'kimi-k3.1-pro',
+    title: 'Kimi K3.1 Pro',
+    subtitle: 'Large repository comprehension',
+    label: 'Kimi K3.1 Pro — تحلیل پروژه‌های بزرگ',
+    tier: 'reasoning',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'high'
+  },
+  {
+    id: 'glm-5.3',
+    title: 'GLM 5.3',
+    subtitle: 'Accurate coding & tool use',
+    label: 'GLM 5.3 — کدنویسی و ابزارخوانی دقیق',
+    tier: 'balanced',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: false,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'medium'
+  },
+  {
+    id: 'glm-5.3-flash',
+    title: 'GLM 5.3 Flash',
+    subtitle: 'Fast & economical',
+    label: 'GLM 5.3 Flash — سریع و اقتصادی',
+    tier: 'fast',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    vision: false,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'low'
+  },
+  {
+    id: 'claude-opus-4-5',
+    title: 'Claude Opus 4.5',
+    subtitle: 'Previous Opus generation',
+    label: 'Claude Opus 4.5 — نسخه پایدار کلود اپوس',
+    tier: 'balanced',
+    maxInputTokens: 200_000,
+    maxOutputTokens: 64_000,
+    vision: true,
+    tools: true,
+    reasoningLevels: FULL_TOOKEN_EFFORTS,
+    defaultEffort: 'medium'
+  }
 ];
 
+const CATALOG_BY_ID = new Map(MODEL_CATALOG.map((m) => [m.id, m]));
 const MODEL_ID_RE = /^[a-zA-Z0-9._:/-]{1,120}$/;
 const DEFAULT_TIMEOUT_MS = 95_000;
+const LIVE_MODELS_TTL_MS = 5 * 60 * 1000;
 
-function detectModelFamily(id) {
-  const s = String(id || '').toLowerCase();
-  if (s.includes('claude')) return 'anthropic';
-  if (/^(gpt|o1|o3|o4|chatgpt)/.test(s) || s.includes('/gpt') || s.includes('/o3') || s.includes('/o4')) return 'openai';
-  if (s.includes('deepseek')) return 'deepseek';
-  if (s.includes('gemini')) return 'gemini';
-  if (s.includes('grok')) return 'xai';
-  if (s.includes('kimi') || s.includes('moonshot')) return 'kimi';
-  if (s.includes('glm')) return 'glm';
-  return 'other';
+let liveModelsCache = { key: '', until: 0, byId: new Map(), list: [] };
+
+function normalizeEffortToken(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  if (s === 'off') return 'none';
+  if (s === 'extra' || s === 'extra_high' || s === 'extra-high') return 'xhigh';
+  return EFFORT_LEVELS.includes(s) ? s : null;
+}
+
+function extractEffortLevelsFromValue(val) {
+  if (val === false || val === 0 || val === 'false' || val === 'unsupported' || val === 'disabled') {
+    return { explicit: true, levels: [], unconfirmed: false };
+  }
+  if (typeof val === 'string') {
+    const tokens = val
+      .split(/[\s,;|·/]+/)
+      .map(normalizeEffortToken)
+      .filter(Boolean);
+    if (tokens.length) {
+      return {
+        explicit: true,
+        levels: EFFORT_LEVELS.filter((lvl) => tokens.includes(lvl)),
+        unconfirmed: false
+      };
+    }
+  }
+  if (Array.isArray(val)) {
+    const tokens = val.map((v) => (typeof v === 'string' ? normalizeEffortToken(v) : normalizeEffortToken(v?.id || v?.name || v?.level))).filter(Boolean);
+    return {
+      explicit: true,
+      levels: EFFORT_LEVELS.filter((lvl) => tokens.includes(lvl)),
+      unconfirmed: false
+    };
+  }
+  if (val && typeof val === 'object') {
+    if (val.supported === false || val.enabled === false) {
+      return { explicit: true, levels: [], unconfirmed: false };
+    }
+    const unconfirmed = val.confirmed === false || val.verified === false || Boolean(val.unconfirmed);
+    const sub =
+      val.levels ??
+      val.efforts ??
+      val.values ??
+      val.modes ??
+      val.supported_efforts ??
+      val.reasoning_efforts ??
+      val.options;
+    if (sub !== undefined) {
+      const parsed = extractEffortLevelsFromValue(sub);
+      return { explicit: true, levels: parsed.levels, unconfirmed: unconfirmed || parsed.unconfirmed };
+    }
+    if (val.supported === true || val.enabled === true) {
+      return { explicit: true, levels: STANDARD_EFFORTS, unconfirmed };
+    }
+  }
+  if (val === true) {
+    return { explicit: true, levels: STANDARD_EFFORTS, unconfirmed: false };
+  }
+  return { explicit: false, levels: [], unconfirmed: false };
 }
 
 /**
- * Return the model's genuine native Reasoning Effort capability profile
- * (Claude Code–style levels: off / low / medium / high / max).
+ * Parse a raw model object returned by `GET https://tooken.club/v1/models`
+ * so the app always uses each model's real provider-reported capabilities.
+ */
+export function parseProviderModelItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = typeof item.id === 'string' ? item.id.trim() : '';
+  if (!id || !MODEL_ID_RE.test(id) || /image|whisper|tts|embedding|moderation|rerank/i.test(id)) return null;
+
+  const base = CATALOG_BY_ID.get(id);
+  const caps = item.capabilities && typeof item.capabilities === 'object' ? item.capabilities : {};
+  const limits = item.limits && typeof item.limits === 'object' ? item.limits : {};
+  const arch = item.architecture && typeof item.architecture === 'object' ? item.architecture : {};
+
+  const candidates = [
+    item.reasoning_efforts,
+    item.supported_reasoning_efforts,
+    item.reasoning_levels,
+    item.efforts,
+    item.reasoning,
+    item.thinking,
+    caps.reasoning_efforts,
+    caps.reasoning_levels,
+    caps.reasoning,
+    caps.effort,
+    arch.reasoning_efforts,
+    item.meta?.reasoning,
+    item.info?.reasoning
+  ];
+
+  let parsedReasoning = null;
+  for (const cand of candidates) {
+    if (cand === undefined || cand === null) continue;
+    const res = extractEffortLevelsFromValue(cand);
+    if (res.explicit) {
+      parsedReasoning = res;
+      break;
+    }
+  }
+
+  const unconfirmedFlag =
+    item.reasoning_confirmed === false ||
+    item.reasoning_verified === false ||
+    Boolean(item.reasoning_unconfirmed) ||
+    caps.reasoning_confirmed === false ||
+    Boolean(caps.reasoning_unconfirmed) ||
+    Boolean(parsedReasoning?.unconfirmed) ||
+    (item.reasoning_confirmed === undefined && Boolean(base?.reasoningUnconfirmed));
+
+  const maxInputTokens =
+    Number(
+      item.max_input_tokens ??
+        item.input_token_limit ??
+        item.context_length ??
+        item.context_window ??
+        limits.input ??
+        limits.context ??
+        limits.max_input_tokens
+    ) ||
+    base?.maxInputTokens ||
+    null;
+
+  const maxOutputTokens =
+    Number(
+      item.max_output_tokens ??
+        item.max_completion_tokens ??
+        item.output_token_limit ??
+        limits.output ??
+        limits.max_output_tokens
+    ) ||
+    base?.maxOutputTokens ||
+    null;
+
+  const visionRaw =
+    item.vision ??
+    item.supports_vision ??
+    caps.vision ??
+    (Array.isArray(item.input_modalities) ? item.input_modalities.includes('image') : undefined) ??
+    (Array.isArray(arch.input_modalities) ? arch.input_modalities.includes('image') : undefined);
+  const vision = typeof visionRaw === 'boolean' ? visionRaw : (base?.vision ?? null);
+
+  const toolsRaw =
+    item.tools ??
+    item.supports_tools ??
+    item.function_calling ??
+    caps.tools ??
+    caps.function_calling ??
+    (Array.isArray(item.supported_parameters) ? item.supported_parameters.includes('tools') : undefined);
+  const tools = typeof toolsRaw === 'boolean' ? toolsRaw : (base?.tools ?? true);
+
+  const levels = parsedReasoning
+    ? parsedReasoning.levels
+    : base?.reasoningLevels
+      ? [...base.reasoningLevels]
+      : inferFallbackLevels(id);
+
+  const defaultEffort = pickDefaultEffort(id, levels, base?.defaultEffort);
+  const title =
+    (typeof item.name === 'string' && item.name.trim()) ||
+    (typeof item.title === 'string' && item.title.trim()) ||
+    (typeof item.display_name === 'string' && item.display_name.trim()) ||
+    base?.title ||
+    id;
+
+  return {
+    ...(base || {}),
+    id,
+    title,
+    label: base?.label || title,
+    tier: base?.tier || 'live',
+    featured: Boolean(base?.featured),
+    maxInputTokens,
+    maxOutputTokens,
+    vision,
+    tools,
+    reasoning: {
+      supported: levels.length > 0,
+      levels,
+      defaultEffort,
+      unconfirmed: parsedReasoning ? unconfirmedFlag : Boolean(base?.reasoningUnconfirmed),
+      source: parsedReasoning ? 'provider' : base ? 'catalog' : 'inferred'
+    }
+  };
+}
+
+function inferFallbackLevels(modelId) {
+  const s = String(modelId || '').toLowerCase();
+  if (/^(gpt-3\.5|gpt-4o|claude-2|claude-3-(?:haiku|sonnet|opus))/.test(s)) return [];
+  if (s.startsWith('gemini-')) return [...STANDARD_EFFORTS];
+  return [...FULL_TOOKEN_EFFORTS];
+}
+
+function pickDefaultEffort(modelId, levels, preferred) {
+  if (!levels || !levels.length) return null;
+  if (preferred && levels.includes(preferred)) return preferred;
+  if (levels.includes('medium')) return 'medium';
+  if (levels.includes('high')) return 'high';
+  return levels[0];
+}
+
+/**
+ * Return the model's Reasoning Effort specification, preferring live `/v1/models`
+ * metadata cached from `tooken.club` when available.
  */
 export function getModelReasoningSpec(modelId) {
-  const id = String(modelId || '').trim().toLowerCase();
-  const family = detectModelFamily(id);
+  const id = String(modelId || '').trim();
+  if (!id) {
+    return { supported: false, levels: [], defaultEffort: null, unconfirmed: false };
+  }
+  const live = liveModelsCache.byId.get(id);
+  if (live?.reasoning) return live.reasoning;
 
-  // Fast / lightweight non-reasoning models: do NOT pretend they have Reasoning Effort.
-  if (
-    !id ||
-    /(?:^|[-_/:])(flash|mini|lite|nano|haiku|luna|astra|instant|turbo)(?:$|[-_/:0-9])/.test(id) ||
-    /^(gpt-3\.5|gpt-4o|claude-3-(?:haiku|sonnet|opus)|claude-2)/.test(id)
-  ) {
+  const cat = CATALOG_BY_ID.get(id);
+  if (cat) {
+    const levels = [...(cat.reasoningLevels || [])];
     return {
-      supported: false,
-      family,
-      levels: [],
-      defaultEffort: 'off',
-      budgets: EFFORT_BUDGET_TOKENS
+      supported: levels.length > 0,
+      levels,
+      defaultEffort: pickDefaultEffort(id, levels, cat.defaultEffort),
+      unconfirmed: Boolean(cat.reasoningUnconfirmed),
+      source: 'catalog'
     };
   }
 
-  // Flagship & dedicated reasoning models unlock `max` (32k thinking budget / xhigh), just like Opus in Claude Code.
-  const unlocksMax =
-    /(?:opus|gpt-6\.1-sol|o1|o3|o4|deepseek-.*(?:pro|r1|reasoner)|kimi-.*(?:pro|thinking)|gemini-4-argon|gemini-.*pro|grok-4|qwq)/.test(
-      id
-    );
-
-  const defaultEffort = /(?:deepseek-.*(?:pro|r1|reasoner)|kimi-.*(?:pro|thinking)|^o[134]|opus-5)/.test(id)
-    ? 'high'
-    : 'medium';
-
+  const levels = inferFallbackLevels(id);
   return {
-    supported: true,
-    family,
-    levels: unlocksMax ? ['off', 'low', 'medium', 'high', 'max'] : ['off', 'low', 'medium', 'high'],
-    defaultEffort,
-    budgets: EFFORT_BUDGET_TOKENS
+    supported: levels.length > 0,
+    levels,
+    defaultEffort: pickDefaultEffort(id, levels),
+    unconfirmed: false,
+    source: 'inferred'
   };
 }
 
 /**
- * Sanitize a requested reasoning effort against what `modelId` actually supports.
- * Returns `'off' | 'low' | 'medium' | 'high' | 'max'`, or `null` when no effort control was requested.
+ * Normalize a requested effort against the model's supported `tooken.club` levels.
+ * Returns one of `'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'`,
+ * or `null` when no effort should be sent on the wire.
  */
 export function normalizeReasoningEffort(value, modelId, legacyThinking = undefined) {
   const spec = getModelReasoningSpec(modelId);
+  if (!spec.supported || !spec.levels.length) return null;
+
   if (value === undefined || value === null || value === '') {
     if (legacyThinking === undefined) return null;
-    if (!legacyThinking || !spec.supported) return 'off';
-    return spec.defaultEffort;
+    if (!legacyThinking) return spec.levels.includes('none') ? 'none' : null;
+    return spec.defaultEffort || 'medium';
   }
-  const clean = String(value).trim().toLowerCase();
-  if (!EFFORT_LEVELS.includes(clean)) return spec.supported ? spec.defaultEffort : 'off';
-  if (!spec.supported) return 'off';
-  if (clean === 'max' && !spec.levels.includes('max')) return 'high';
-  return clean;
+
+  const normalized = normalizeEffortToken(value);
+  if (!normalized) return spec.defaultEffort;
+  if (spec.levels.includes(normalized)) return normalized;
+
+  // Clamp gracefully to the closest supported level for this model (e.g. gemini-4-argon: low/medium/high).
+  const targetIdx = EFFORT_LEVELS.indexOf(normalized);
+  let best = spec.levels[0];
+  let bestDist = Infinity;
+  for (const candidate of spec.levels) {
+    const dist = Math.abs(EFFORT_LEVELS.indexOf(candidate) - targetIdx);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 /**
- * Build ordered native wire-parameter variants for `/v1/chat/completions`.
- * Variant 0 sends the richest model-native parameters (`reasoning_effort` + `thinking.budget_tokens`
- * with Anthropic/OpenAI temperature rules respected); if a strict proxy schema rejects Variant 0
- * with 400/422, `callModel` seamlessly steps down to Variant 1 (standard `reasoning_effort`) and Variant 2.
+ * Build wire parameter candidates for `https://tooken.club/v1/chat/completions`.
+ * Sends pure `reasoning_effort` directly — no fake `budget_tokens` or `max_tokens` overrides,
+ * because `tooken.club` manages each model's separate reasoning token pool natively.
  */
 export function buildReasoningWireVariants(modelId, effort, payload = {}) {
   const baseTemp = payload.temperature ?? 0.3;
-  const explicitMaxTokens = Number(payload.max_tokens) || 0;
-  const spec = getModelReasoningSpec(modelId);
+  const explicitMaxTokens = Number(payload.max_tokens ?? payload.maxTokens) || 0;
+  const maxTokPart = explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {};
 
-  if (!effort || !spec.supported) {
-    return [
-      {
-        effort: null,
-        params: {
-          temperature: baseTemp,
-          ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-        }
-      }
-    ];
+  if (!effort) {
+    return [{ effort: null, params: { temperature: baseTemp, ...maxTokPart } }];
   }
 
-  if (effort === 'off') {
-    const plain = {
-      effort: 'off',
+  const variants = [
+    {
+      effort,
       params: {
-        temperature: baseTemp,
-        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+        reasoning_effort: effort,
+        ...(effort === 'none' ? { temperature: baseTemp } : {}),
+        ...maxTokPart
       }
-    };
-    if (['anthropic', 'deepseek', 'glm', 'kimi'].includes(spec.family)) {
-      return [
-        {
-          effort: 'off',
-          params: {
-            temperature: baseTemp,
-            thinking: { type: 'disabled' },
-            ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-          }
-        },
-        plain
-      ];
     }
-    return [plain];
+  ];
+
+  // If an upstream channel hasn't enabled extended enum values (`xhigh`/`max`/`minimal`/`none`),
+  // step down to standard 3-level `high`/`low`, then plain request without failing the turn.
+  if (effort === 'max' || effort === 'xhigh') {
+    variants.push({ effort: 'high', params: { reasoning_effort: 'high', ...maxTokPart } });
+  } else if (effort === 'minimal') {
+    variants.push({ effort: 'low', params: { reasoning_effort: 'low', ...maxTokPart } });
   }
-
-  const budget = EFFORT_BUDGET_TOKENS[effort] || EFFORT_BUDGET_TOKENS.medium;
-  const standardEffort = effort === 'max' ? 'high' : effort;
-  const variants = [];
-
-  if (spec.family === 'anthropic') {
-    // Anthropic native rule: when extended thinking is enabled, custom temperature != 1 is invalid,
-    // and max_tokens must exceed budget_tokens.
-    const minMaxTokens = Math.max(explicitMaxTokens, budget + 8_192);
-    variants.push({
-      effort,
-      params: {
-        reasoning_effort: standardEffort,
-        thinking: { type: 'enabled', budget_tokens: budget },
-        max_tokens: minMaxTokens
-      }
-    });
-    variants.push({
-      effort,
-      params: {
-        reasoning_effort: standardEffort,
-        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-      }
-    });
-  } else if (spec.family === 'openai') {
-    // OpenAI o-series / GPT-6.1 reasoning models reject non-1 temperature; `max` maps to native `xhigh` then `high`.
-    const openAiEffort = effort === 'max' ? 'xhigh' : effort;
-    variants.push({
-      effort,
-      params: {
-        reasoning_effort: openAiEffort,
-        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-      }
-    });
-    if (openAiEffort !== standardEffort) {
-      variants.push({
-        effort: 'high',
-        params: {
-          reasoning_effort: standardEffort,
-          ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-        }
-      });
-    }
-  } else if (['deepseek', 'glm', 'kimi'].includes(spec.family)) {
-    variants.push({
-      effort,
-      params: {
-        reasoning_effort: standardEffort,
-        thinking: { type: 'enabled', budget_tokens: budget },
-        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-      }
-    });
-    variants.push({
-      effort,
-      params: {
-        reasoning_effort: standardEffort,
-        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-      }
-    });
-  } else {
-    // Gemini, xAI Grok, and OpenAI-compatible reasoning endpoints
-    variants.push({
-      effort,
-      params: {
-        reasoning_effort: standardEffort,
-        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-      }
-    });
-  }
-
-  // Final safety fallback if a specific upstream channel does not accept reasoning params at all.
-  variants.push({
-    effort: null,
-    params: {
-      temperature: baseTemp,
-      ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
-    }
-  });
-
+  variants.push({ effort: null, params: { temperature: baseTemp, ...maxTokPart } });
   return variants;
 }
 
@@ -267,14 +580,26 @@ export function modelEndpoint(env) {
   return `${base}/chat/completions`;
 }
 
-export async function listModels(env) {
+export function catalogModelsWithSpecs() {
+  return MODEL_CATALOG.map((item) => parseProviderModelItem({ id: item.id }));
+}
+
+/**
+ * Fetch full model objects from `/v1/models` and merge with catalog metadata.
+ */
+export async function fetchProviderModels(env, { force = false } = {}) {
   if (!env.MODEL_API_KEY) fail('سرویس مدل پیکربندی نشده است.', 503, 'model_key_missing');
+  const cacheKey = `${modelEndpoint(env)}:${String(env.MODEL_API_KEY).slice(0, 8)}`;
+  if (!force && liveModelsCache.key === cacheKey && liveModelsCache.until > Date.now() && liveModelsCache.list.length) {
+    return liveModelsCache.list;
+  }
+
   let response;
   try {
     response = await fetch(modelEndpoint(env).replace(/\/chat\/completions$/, '/models'), {
       headers: { Authorization: `Bearer ${env.MODEL_API_KEY}`, Accept: 'application/json' },
       redirect: 'manual',
-      signal: AbortSignal.timeout(10_000)
+      signal: AbortSignal.timeout(8_000)
     });
   } catch {
     fail('دریافت فهرست مدل‌ها ممکن نشد.', 502, 'models_unreachable');
@@ -286,16 +611,37 @@ export async function listModels(env) {
   } catch {
     fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
   }
-  if (!Array.isArray(data?.data)) fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
-  return [
-    ...new Set(
-      data.data
-        .map((item) => item?.id)
-        .filter((id) => typeof id === 'string' && MODEL_ID_RE.test(id) && !/image|whisper|tts|embedding/i.test(id))
-    )
-  ]
-    .sort()
-    .slice(0, 500);
+  const rawList = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : null;
+  if (!rawList) fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
+
+  const byId = new Map();
+  for (const rawItem of rawList.slice(0, 600)) {
+    const parsed = parseProviderModelItem(typeof rawItem === 'string' ? { id: rawItem } : rawItem);
+    if (parsed && !byId.has(parsed.id)) byId.set(parsed.id, parsed);
+  }
+
+  // Keep featured order first for models present on the provider, then alphabetical.
+  const ordered = [];
+  for (const cat of MODEL_CATALOG) {
+    if (byId.has(cat.id)) ordered.push(byId.get(cat.id));
+  }
+  const rest = [...byId.values()]
+    .filter((m) => !MODEL_CATALOG.some((c) => c.id === m.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const list = [...ordered, ...rest];
+
+  liveModelsCache = {
+    key: cacheKey,
+    until: Date.now() + LIVE_MODELS_TTL_MS,
+    byId,
+    list
+  };
+  return list;
+}
+
+export async function listModels(env) {
+  const models = await fetchProviderModels(env, { force: true });
+  return models.map((m) => m.id);
 }
 
 /** Validate and normalize the tool definitions the browser may send. */
@@ -406,8 +752,8 @@ function extractReasoningAndText(message) {
 }
 
 /**
- * POST a Chat Completions request with genuine native model `reasoning_effort` / `thinking.budget_tokens`,
- * automatic proxy schema negotiation, binary part downgrade, and CF_PAGES 5xx model failover.
+ * POST a Chat Completions request to `https://tooken.club/v1/chat/completions`
+ * using the model's genuine `reasoning_effort` (`none`..`max`).
  */
 export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
@@ -416,8 +762,11 @@ export async function callModel(env, payload) {
   const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
   const requestedModel = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
   const requestedEffort = normalizeReasoningEffort(payload.reasoningEffort, requestedModel, payload.thinking);
-  const deepTimeout = requestedEffort === 'high' || requestedEffort === 'max' ? 145_000 : DEFAULT_TIMEOUT_MS;
-  const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || deepTimeout, 150_000);
+  const deepTimeout =
+    requestedEffort === 'high' || requestedEffort === 'xhigh' || requestedEffort === 'max'
+      ? 150_000
+      : DEFAULT_TIMEOUT_MS;
+  const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || deepTimeout, 160_000);
   const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off';
   const candidates = [requestedModel];
   if (allowFailover) {
@@ -540,8 +889,6 @@ export async function callModel(env, payload) {
         }
       }
 
-      // If the upstream gateway rejected a richer native reasoning schema (400/422),
-      // immediately step down to the next standard reasoning parameter variant without delay.
       if ((response.status === 400 || response.status === 422) && variantIdx + 1 < wireVariants.length) {
         variantIdx += 1;
         attempt -= 1;
@@ -556,7 +903,6 @@ export async function callModel(env, payload) {
       break;
     }
 
-    // Only fail over to another model on upstream 5xx / network errors, never on 401/403/404.
     if (lastStatus !== 0 && lastStatus < 500) break;
   }
 

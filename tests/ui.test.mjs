@@ -69,6 +69,9 @@ function mockFetch(url, init = {}) {
   if (path === '/api/config') {
     return jsonResponse({ ok: true, model: 'gpt-4o-mini', contextBudgetTokens: 24000, storage: 'd1', sandbox: false });
   }
+  if (path.startsWith('/api/models')) {
+    return jsonResponse({ ok: true, source: 'catalog', models: [] });
+  }
   if (path === '/api/state' && (!init.method || init.method === 'GET')) {
     return jsonResponse({
       ok: true,
@@ -303,29 +306,48 @@ await window.newConversation(true);
 assert.equal(window.state?.conversationId ?? null, null, 'new conversation should not reuse old id (state is module-scoped)');
 assert.ok($('convList').textContent.includes('گفتگوی جدید'));
 
-// --- model selector modal + Claude Code Reasoning effort controls
+// Seed full tooken.club model specs on state.availableModels to verify UI sheet views
 window.openModelModal();
 assert.ok($('modelModal').classList.contains('open'));
+assert.ok($('sheetViewMain').classList.contains('active'), 'Select model view opens first');
+assert.ok($('featuredModelList').textContent.includes('Fable 5.1'), 'Featured list includes Fable 5.1');
+assert.ok($('featuredModelList').textContent.includes('Opus 5.5'), 'Featured list includes Opus 5.5');
+assert.ok($('featuredModelList').textContent.includes('Sonnet 5.5'), 'Featured list includes Sonnet 5.5');
+assert.ok($('featuredModelList').textContent.includes('Haiku 5.5'), 'Featured list includes Haiku 5.5');
+
 $('customModelInput').value = 'claude-opus-5-5';
 window.applyCustomModel();
 assert.equal($('modelBadge').textContent, 'claude-opus-5-5');
-assert.ok($('composerEffortBar').querySelector('[data-effort="max"]'), 'Opus should unlock Max reasoning effort');
-window.setReasoningEffort('max');
-assert.ok($('thinkBtn').textContent.includes('Max'), 'thinkBtn should reflect Max effort');
-assert.ok($('modalEffortPanel').textContent.includes('budget_tokens: 31999'), 'native wire preview should show 31999 budget');
+
+// Open Effort sub-sheet and check tooken.club + Claude labels (Extra = xhigh, Max = 5x warning, Medium = Recommended)
+window.openModelSheetView('effort');
+assert.ok($('sheetViewEffort').classList.contains('active'));
+assert.ok($('effortOptionsList').querySelector('[data-effort="xhigh"]'), 'Opus supports Extra (xhigh)');
+assert.ok($('effortOptionsList').querySelector('[data-effort="max"]'), 'Opus supports Max');
+assert.ok($('effortOptionsList').textContent.includes('Recommended'));
+assert.ok($('effortOptionsList').textContent.includes('5× or more usage'));
+
+window.setReasoningEffort('xhigh');
+assert.ok($('thinkBtn').textContent.includes('Extra'), 'thinkBtn shows Extra for xhigh');
+assert.ok($('effortRowValue').textContent.includes('Extra'), 'Select model Effort row shows < Extra');
 window.toggleThinking();
 assert.ok($('thinkBtn').textContent.includes('تفکر'));
 
-// Switching to Sonnet clamps Max -> High and hides Max
-window.selectModel('claude-sonnet-5-5', false);
-assert.equal($('composerEffortBar').querySelector('[data-effort="max"]'), null, 'Sonnet should only show Off..High');
-window.setReasoningEffort('high');
-assert.ok($('thinkBtn').textContent.includes('High'));
+// Switching to gemini-4-argon shows ONLY low · medium · high (matching tooken.club card)
+window.selectModel('gemini-4-argon', false);
+window.openModelSheetView('effort');
+assert.ok($('effortOptionsList').querySelector('[data-effort="low"]'));
+assert.ok($('effortOptionsList').querySelector('[data-effort="medium"]'));
+assert.ok($('effortOptionsList').querySelector('[data-effort="high"]'));
+assert.equal($('effortOptionsList').querySelector('[data-effort="max"]'), null, 'gemini-4-argon only supports low..high');
+assert.equal($('effortOptionsList').querySelector('[data-effort="none"]'), null, 'gemini-4-argon has no none level');
 
-// Switching to a fast flash model disables Reasoning effort honestly
-window.selectModel('gemini-3-8-flash', true);
-assert.ok($('composerEffortBar').textContent.includes('غیرفعال'), 'Flash model should show Reasoning effort unsupported');
-assert.ok($('thinkBtn').classList.contains('disabled'));
+// Inspecting model spec card shows Input/Output limits, Vision, Reasoning levels, Tools
+window.inspectModelSpec('gemini-4-argon');
+assert.ok($('sheetViewSpec').classList.contains('active'));
+assert.ok($('specModelBody').textContent.includes('32768'));
+assert.ok($('specModelBody').textContent.includes('low · medium · high'));
+window.closeModal('modelModal');
 
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));

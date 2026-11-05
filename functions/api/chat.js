@@ -628,9 +628,9 @@ export async function onRequestPost({ request, env }) {
       const effectiveModelId = selectedModel || String(env.MODEL_NAME || 'claude-sonnet-5-5');
       const reasoningSpec = getModelReasoningSpec(effectiveModelId);
       const reasoningEffort = normalizeReasoningEffort(data?.reasoningEffort, effectiveModelId, data?.thinking);
-      const thinking = Boolean(reasoningEffort && reasoningEffort !== 'off');
+      const thinking = Boolean(reasoningEffort && reasoningEffort !== 'none');
       const maxSteps =
-        reasoningEffort === 'max'
+        reasoningEffort === 'max' || reasoningEffort === 'xhigh'
           ? 28
           : reasoningEffort === 'high'
             ? MAX_THINKING_LOOP_STEPS
@@ -779,7 +779,7 @@ export async function onRequestPost({ request, env }) {
                 role: 'assistant',
                 content: assistant.content || '',
                 ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
-                ...(appliedEffort && appliedEffort !== 'off' ? { reasoning_effort: appliedEffort } : {}),
+                ...(appliedEffort && appliedEffort !== 'none' ? { reasoning_effort: appliedEffort } : {}),
                 ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
                 tool_calls: assistant.tool_calls,
                 created_at: Date.now()
@@ -839,7 +839,7 @@ export async function onRequestPost({ request, env }) {
               role: 'assistant',
               content: finalText,
               ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
-              ...(appliedEffort && appliedEffort !== 'off' ? { reasoning_effort: appliedEffort } : {}),
+              ...(appliedEffort && appliedEffort !== 'none' ? { reasoning_effort: appliedEffort } : {}),
               ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
               created_at: Date.now()
             });
