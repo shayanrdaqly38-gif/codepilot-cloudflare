@@ -35,10 +35,23 @@ const sse = [
       content: 'ok',
       conversation: { id: 'c-1', title: 'گفتگوی اول', messageCount: 4, updatedAt: Date.now(), summaryUntil: 0 },
       workspaceDirty: true,
+      touchedFiles: ['app.js'],
       workspace: {
         files: { 'index.html': '<h1>hi</h1>', 'style.css': 'body{}', 'app.js': 'console.log(1)' },
         active: 'app.js'
-      }
+      },
+      diffs: [
+        {
+          path: 'app.js',
+          added: 1,
+          removed: 0,
+          diff: '--- a/app.js\n+++ b/app.js\n@@ -0,0 +1,1 @@\n+console.log(1)'
+        }
+      ],
+      validation: [{ path: 'app.js', ok: true, errors: [], warnings: ['فایل خالی است'] }],
+      commands: [{ command: 'ls', mode: 'virtual', ok: true }],
+      sandbox: false,
+      context: { summaryUntil: 0, recentMessages: 3, estimatedTokens: 4200 }
     }
   ]
 ]
@@ -54,7 +67,7 @@ function mockFetch(url, init = {}) {
     });
   }
   if (path === '/api/config') {
-    return jsonResponse({ ok: true, model: 'gpt-4o-mini', contextBudgetTokens: 24000, storage: 'd1' });
+    return jsonResponse({ ok: true, model: 'gpt-4o-mini', contextBudgetTokens: 24000, storage: 'd1', sandbox: false });
   }
   if (path === '/api/state' && (!init.method || init.method === 'GET')) {
     return jsonResponse({
@@ -88,6 +101,23 @@ function mockFetch(url, init = {}) {
   }
   if (path === '/api/state/conversations') {
     return jsonResponse({ ok: true, conversations: db.conversations });
+  }
+  if (path.startsWith('/api/state/versions')) {
+    if (init.method === 'POST') {
+      return jsonResponse({ ok: true, path: 'app.js', workspace: db.workspace, added: 0, removed: 1, diff: '--- a/x\n+++ b/x' });
+    }
+    return jsonResponse({
+      ok: true,
+      path: 'app.js',
+      versions: [{ id: 'v1', reason: 'before-patch', createdBy: 'agent', createdAt: Date.now(), size: 42 }]
+    });
+  }
+  if (path === '/api/state/search') {
+    return jsonResponse({
+      ok: true,
+      total: 1,
+      results: [{ path: 'index.html', line: 1, column: 5, snippet: '<h1>hi</h1>' }]
+    });
   }
   if (path === '/api/chat') {
     // Mirror what the real server persists for this turn.
@@ -164,6 +194,35 @@ const saveCall = calls.filter((c) => String(c.url).endsWith('/api/state') && c.i
 assert.ok(saveCall, 'no autosave call');
 assert.ok(JSON.parse(saveCall.init.body).workspace.files['app.js'].includes('changed') || true);
 assert.equal(JSON.parse(saveCall.init.body).action, 'workspace');
+
+// --- diff panel reflects the server diff
+assert.equal($('diffPanel').classList.contains('open'), true);
+assert.ok($('diffBody').textContent.includes('console.log(1)'), 'diff body missing');
+assert.ok($('diffBody').querySelector('.add'), 'added lines not highlighted');
+assert.ok($('diffTitle').textContent.includes('app.js'));
+
+// --- validation surface
+assert.ok($('chat').textContent.includes('اعتبارسنجی'), 'validation block missing');
+
+// --- shell mode label stays honest about virtual execution
+assert.equal($('shellMode').textContent, 'شل مجازی و امن');
+
+// --- search modal round-trip
+window.openSearch();
+$('searchInput').value = 'hi';
+await window.runSearch();
+// UI renders line numbers with Persian digits: "index.html:۱:۵"
+assert.ok(/index\.html/.test($('searchResults').textContent), $('searchResults').textContent);
+assert.ok(/[۱1]/.test($('searchResults').textContent), 'line number missing');
+// state is module-scoped inside the inline script, so assert through the DOM only.
+window.jumpToHit(0);
+assert.equal($('editorWrap').style.display, 'flex');
+
+// --- history modal
+await window.openHistory();
+assert.ok($('histList').textContent.includes('before-patch'), $('histList').textContent);
+assert.ok($('histModal').classList.contains('open'));
+window.closeModal('histModal');
 
 // --- memory rendered in settings
 window.openSettings();

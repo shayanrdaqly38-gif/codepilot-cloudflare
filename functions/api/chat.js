@@ -1,24 +1,26 @@
 // POST /api/chat — one agent turn, durably stored in D1.
 //
 // Flow:
-//   1. Auth (Cloudflare Access → signed session cookie) and same-origin check.
-//   2. Persist the incoming user message BEFORE calling the model, so a failed
-//      or interrupted turn is never lost and history stays ordered.
+//   1. Auth (Cloudflare Access → signed session cookie) + same-origin check + limits.
+//   2. Persist the incoming user message BEFORE the model, so a failed or
+//      interrupted turn is never lost and `seq` stays ordered.
 //   3. Rebuild context from D1: rolling summary + recent window + long-term memory.
-//   4. Call the model; persist the assistant reply / tool calls.
-//   5. Execute tools server-side against the D1 workspace (virtual shell only),
-//      persist each tool result, and continue the loop.
+//   4. Run the model loop. Tools execute server-side on the D1 workspace:
+//        list_files, read_file, search_code, list_symbols,
+//        write_file, apply_patch, undo_edit, run_command
+//      Every edit is validated, diffed, snapshotted and reported back.
+//   5. Persist the whole assistant/tool group before streaming `done`.
 //
-// Response: Server-Sent Events (text/event-stream) — status / delta / message /
-// done / error frames. Each model message is persisted before it is streamed, so
-// a dropped connection still leaves a consistent conversation.
+// Response: Server-Sent Events — status / tool / tool_result / message /
+// edit / validation / done / error. Every model message is persisted before it
+// is streamed, so a dropped connection still leaves a consistent conversation.
 
 import { route } from '../_lib/api.js';
 import { callModel, sanitizeTools } from '../_lib/model.js';
 import {
-  compactToolResult,
   buildSystemPrompt,
   buildWorkingContext,
+  compactToolResult,
   repairToolGroups,
   toWire
 } from '../_lib/memory.js';
@@ -35,17 +37,24 @@ import {
 } from '../_lib/store.js';
 import { envSecrets, fail, redactSecrets, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
+import { applyEdits, diffStats, diffLines, unifiedDiff } from '../_lib/patch.js';
+import { formatSearchHits, formatSymbols, listSymbols, searchWorkspace } from '../_lib/search.js';
+import { validateChanges, validateFile } from '../_lib/validate.js';
+import { runCommand, sandboxEnabled } from '../_lib/sandbox.js';
+import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
 
 const MAX_CONTENT = 100_000;
 const MAX_LOOP_STEPS = 16;
 const MAX_TURN_INPUT_CHARS = 200_000;
+const MAX_FILE_CHARS = 400_000;
+const MAX_TOOL_LOOPS_PER_FILE = 12;
 
 export const TOOLS = [
   {
     type: 'function',
     function: {
       name: 'list_files',
-      description: 'List every file path in the current workspace, with sizes in characters.',
+      description: 'List every file path in the workspace with its size in characters.',
       parameters: { type: 'object', properties: {}, additionalProperties: false }
     }
   },
@@ -53,11 +62,76 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read the full text of one workspace file. Call this before editing a file.',
+      description:
+        'Read a workspace file. Use `startLine`/`endLine` for large files. Always read before editing.',
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string', description: 'Exact file path from list_files' } },
+        properties: {
+          path: { type: 'string', description: 'Exact path from list_files' },
+          startLine: { type: 'number', description: '1-based first line (optional)' },
+          endLine: { type: 'number', description: '1-based last line, inclusive (optional)' }
+        },
         required: ['path'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_code',
+      description:
+        'Search all files. `query` is a literal string unless `regex` is true. Returns path:line hits with context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          regex: { type: 'boolean' },
+          caseSensitive: { type: 'boolean' },
+          pathFilter: { type: 'string', description: 'Only search files whose path contains this' }
+        },
+        required: ['query'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_symbols',
+      description: 'List functions, classes, CSS selectors or HTML ids/classes per file. Optional `query` filter.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description:
+        'Edit an existing file with search/replace blocks. `search` must match exactly one place (read the file first). Whitespace drift is tolerated, but ambiguous matches fail. Prefer this over write_file for existing files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          edits: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                search: { type: 'string', description: 'Exact existing text, including indentation' },
+                replace: { type: 'string', description: 'Replacement text (empty deletes the block)' },
+                replaceAll: { type: 'boolean' }
+              },
+              required: ['search', 'replace'],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ['path', 'edits'],
         additionalProperties: false
       }
     }
@@ -67,14 +141,27 @@ export const TOOLS = [
     function: {
       name: 'write_file',
       description:
-        'Create or overwrite one workspace file with the given content. When GitHub is connected in the browser, the client commits the change after this turn.',
+        'Create a new file, or fully replace one when a whole-file rewrite is genuinely simpler than a patch.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' }, content: { type: 'string' } },
+        required: ['path', 'content'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'undo_edit',
+      description: 'Restore a file to its previous version. Call without `versionId` to undo the last edit.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
-          content: { type: 'string', description: 'Full new file content' }
+          versionId: { type: 'string', description: 'Optional id from the edit history' }
         },
-        required: ['path', 'content'],
+        required: ['path'],
         additionalProperties: false
       }
     }
@@ -84,7 +171,7 @@ export const TOOLS = [
     function: {
       name: 'run_command',
       description:
-        'Run one command in the sandboxed virtual shell. Allowed: help, ls, pwd, cat <file>, touch <file>, echo <text> > <file>, rm <file>, clear, preview. There is no network or OS access.',
+        'Run a shell command. If a real sandbox is configured it executes there; otherwise a safe virtual shell handles help/pwd/ls/cat/touch/echo/rm. The result always states which mode ran.',
       parameters: {
         type: 'object',
         properties: { command: { type: 'string' } },
@@ -109,7 +196,7 @@ function sseStream() {
     try {
       controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     } catch {
-      // Client disconnected; persistence already happened, so nothing is lost.
+      // Client disconnected; persistence already happened.
     }
   };
   const close = () => {
@@ -122,110 +209,196 @@ function sseStream() {
   return { stream, send, close };
 }
 
-/* ------------------------------ virtual shell ----------------------------- */
+/* ------------------------------ path helpers ------------------------------ */
 
-function runVirtualCommand(workspace, rawCommand) {
-  const command = String(rawCommand || '').trim();
-  if (!command) return 'Error: empty command';
-  if (command.length > 2000) return 'Error: command too long';
-  const files = workspace.files || {};
-  const [op, ...rest] = command.split(/\s+/);
-  const arg = rest.join(' ');
+const SAFE_PATH = /^[\w./-]{1,200}$/;
 
-  switch (op) {
-    case 'help':
-      return [
-        'Virtual shell — allowed commands:',
-        '  help                 show this help',
-        '  pwd                  print working directory',
-        '  ls                   list workspace files',
-        '  cat <file>           print a file',
-        '  touch <file>         create an empty file',
-        '  echo <text> > <file> write text to a file',
-        '  rm <file>            delete a file',
-        '  preview              hint for the preview button',
-        'There is no network, no OS access and no real subprocess here.'
-      ].join('\n');
-    case 'pwd':
-      return '/workspace/project';
-    case 'ls':
-      return Object.keys(files).sort().join('  ') || '(empty)';
-    case 'cat': {
-      if (files[arg] === undefined) return `cat: file not found: ${arg}`;
-      return files[arg];
-    }
-    case 'touch': {
-      if (!arg) return 'touch: missing file name';
-      if (!/^[\w./-]{1,200}$/.test(arg) || arg.includes('..')) return 'touch: invalid path';
-      if (files[arg] === undefined) files[arg] = '';
-      return `created ${arg}`;
-    }
-    case 'rm': {
-      if (files[arg] === undefined) return `rm: file not found: ${arg}`;
-      if (Object.keys(files).length < 2) return 'rm: refusing to delete the last file';
-      delete files[arg];
-      return `removed ${arg}`;
-    }
-    case 'echo': {
-      const match = command.match(/^echo\s+([\s\S]*?)\s*>\s*(\S+)$/);
-      if (!match) return 'usage: echo <text> > <file>';
-      const [, text, path] = match;
-      if (!/^[\w./-]{1,200}$/.test(path) || path.includes('..')) return 'echo: invalid path';
-      files[path] = text.replace(/^["']|["']$/g, '');
-      return `wrote ${path}`;
-    }
-    case 'clear':
-      return 'ok';
-    case 'preview':
-      return 'Use the Preview button in the toolbar to open the rendered project.';
-    default:
-      return `Unknown command: ${op}. Type help for the allowed list.`;
+function assertSafePath(path) {
+  const value = String(path || '');
+  if (!SAFE_PATH.test(value) || value.includes('..') || value.startsWith('/') || value.startsWith('.git/')) {
+    fail('مسیر فایل نامعتبر یا ناامن است.', 400, 'bad_path');
   }
+  return value;
 }
 
-/* -------------------------------- tools ---------------------------------- */
+function fileIndex(workspace) {
+  return Object.keys(workspace.files || {}).sort();
+}
 
-async function executeTool({ name, args, workspace, setWorkspaceDirty }) {
-  if (!args || typeof args !== 'object') return 'Error: invalid arguments';
+/* --------------------------------- tools ---------------------------------- */
 
-  if (name === 'list_files') {
-    const files = workspace.files || {};
-    const lines = Object.entries(files)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([path, content]) => `${path} (${String(content).length} chars)`);
-    return lines.length ? lines.join('\n') : '(empty workspace)';
-  }
+/**
+ * Execute one tool call. Mutates `workspace` and fills `turn` with everything the
+ * UI needs (edits, validation, diffs).
+ */
+async function executeTool({ env, owner, conversation, name, args, workspace, turn }) {
+  if (!args || typeof args !== 'object') return { text: 'Error: invalid arguments', ok: false };
 
-  if (name === 'read_file') {
-    const path = String(args.path || '');
-    if (workspace.files?.[path] === undefined) {
-      const available = Object.keys(workspace.files || {}).slice(0, 40).join(', ');
-      return `Error: file not found: ${path}. Available files: ${available || '(none)'}`;
+  switch (name) {
+    case 'list_files': {
+      const files = workspace.files || {};
+      const lines = Object.entries(files)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([path, content]) => `${path} (${String(content).length} chars)`);
+      const validation = validateChanges(files, Object.keys(files).slice(0, 40));
+      return {
+        ok: true,
+        text: (lines.length ? lines.join('\n') : '(empty workspace)') +
+          (validation.report.length ? `\n\n${validation.text}` : '')
+      };
     }
-    return workspace.files[path];
-  }
 
-  if (name === 'write_file') {
-    const path = String(args.path || '');
-    const content = String(args.content ?? '');
-    if (!/^[\w./-]{1,200}$/.test(path) || path.includes('..') || path.startsWith('/')) {
-      return 'Error: unsafe or invalid file path.';
+    case 'read_file': {
+      const path = String(args.path || '');
+      if (workspace.files?.[path] === undefined) {
+        const available = fileIndex(workspace).slice(0, 40).join(', ');
+        return { ok: false, text: `Error: file not found: ${path}. Available: ${available || '(none)'}` };
+      }
+      const content = String(workspace.files[path]);
+      const start = Number(args.startLine);
+      const end = Number(args.endLine);
+      if (Number.isFinite(start) || Number.isFinite(end)) {
+        const lines = content.split('\n');
+        const from = Math.max(0, (Number.isFinite(start) ? start : 1) - 1);
+        const to = Math.min(lines.length, Number.isFinite(end) ? end : lines.length);
+        const slice = lines.slice(from, to).map((line, index) => `${from + index + 1}\t${line}`).join('\n');
+        return { ok: true, text: `Lines ${from + 1}-${to} of ${lines.length} in ${path}:\n${slice}` };
+      }
+      return { ok: true, text: content };
     }
-    if (content.length > 300_000) return 'Error: file content too large (max 300k characters).';
-    workspace.files = workspace.files || {};
-    workspace.files[path] = content;
-    workspace.active = path;
-    setWorkspaceDirty(true, path);
-    return `Saved ${path} (${content.length} chars) in the workspace. The browser will commit it to GitHub if a repository is connected.`;
-  }
 
-  if (name === 'run_command') {
-    const output = runVirtualCommand(workspace, args.command);
-    setWorkspaceDirty(true, null);
-    return output;
-  }
+    case 'search_code': {
+      const result = searchWorkspace(workspace.files, args.query, {
+        regex: Boolean(args.regex),
+        caseSensitive: Boolean(args.caseSensitive),
+        pathFilter: String(args.pathFilter || '')
+      });
+      return { ok: true, text: formatSearchHits(result) };
+    }
 
-  return `Error: unknown tool ${name}`;
+    case 'list_symbols': {
+      const symbols = listSymbols(workspace.files, { query: String(args.query || '') });
+      return { ok: true, text: formatSymbols(symbols) };
+    }
+
+    case 'apply_patch': {
+      const path = assertSafePath(args.path);
+      if (workspace.files[path] === undefined) {
+        return { ok: false, text: `Error: file not found: ${path}. Use write_file to create it.` };
+      }
+      const before = String(workspace.files[path]);
+      let applied;
+      try {
+        applied = applyEdits(before, args.edits);
+      } catch (error) {
+        // A failed patch must never change the workspace.
+        return { ok: false, text: `Patch rejected: ${error.message}` };
+      }
+      if (applied.content === before) {
+        return { ok: false, text: 'Patch rejected: the replacement text is identical to the original.' };
+      }
+      const previousVersionId = await recordVersion(env, owner, conversation, {
+        path,
+        content: before,
+        reason: 'before-patch'
+      });
+      workspace.files[path] = applied.content;
+      workspace.active = path;
+
+      const diff = unifiedDiff(before, applied.content, { path });
+      const stats = diffStats(diffLines(before, applied.content));
+      const validation = validateFile(path, applied.content);
+      turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
+      turn.validation.push({ path, ...validation });
+      turn.touched.add(path);
+      turn.editCount += 1;
+      if (turn.editCount > MAX_TOOL_LOOPS_PER_FILE * 6) {
+        return { ok: false, text: 'Too many edits in one turn. Stop and summarize what you changed.' };
+      }
+
+      const strategy = applied.results.map((r) => r.strategy).join(',');
+      return {
+        ok: true,
+        text: [
+          `Patched ${path} (${applied.results.length} block(s), match: ${strategy}).`,
+          `+${stats.added} −${stats.removed} lines.`,
+          validation.ok ? 'Validation: OK.' : `Validation: ${validation.errors.join(' | ')}`,
+          `Previous version saved as ${previousVersionId} (undo_edit can restore it).`
+        ].join(' ')
+      };
+    }
+
+    case 'write_file': {
+      const path = assertSafePath(args.path);
+      const content = String(args.content ?? '');
+      if (content.length > MAX_FILE_CHARS) return { ok: false, text: 'Error: file too large (max 400k chars).' };
+      const existed = workspace.files[path] !== undefined;
+      const before = existed ? String(workspace.files[path]) : '';
+      if (existed && before === content) return { ok: false, text: 'No change: content is identical.' };
+      if (existed) {
+        await recordVersion(env, owner, conversation, { path, content: before, reason: 'before-write' });
+      }
+      workspace.files[path] = content;
+      workspace.active = path;
+
+      const diff = existed ? unifiedDiff(before, content, { path }) : '';
+      const stats = existed ? diffStats(diffLines(before, content)) : { added: content.split('\n').length, removed: 0 };
+      const validation = validateFile(path, content);
+      turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
+      turn.validation.push({ path, ...validation });
+      turn.touched.add(path);
+      turn.editCount += 1;
+
+      return {
+        ok: true,
+        text: [
+          `${existed ? 'Rewrote' : 'Created'} ${path} (${content.length} chars, +${stats.added} −${stats.removed}).`,
+          validation.ok ? 'Validation: OK.' : `Validation: ${validation.errors.join(' | ')}`
+        ].join(' ')
+      };
+    }
+
+    case 'undo_edit': {
+      const path = assertSafePath(args.path);
+      let target = null;
+      if (args.versionId) {
+        const version = await getVersion(env, owner, String(args.versionId));
+        if (version.path !== path) return { ok: false, text: 'Error: that version belongs to another file.' };
+        target = version;
+      } else {
+        const versions = await listVersions(env, owner, path, { project: null, limit: 1 });
+        target = versions[0] ? await getVersion(env, owner, versions[0].id) : null;
+      }
+      if (!target) return { ok: false, text: `No saved version for ${path}.` };
+
+      const current = String(workspace.files[path] ?? '');
+      if (target.content === current) return { ok: false, text: 'Already at that version.' };
+      await recordVersion(env, owner, conversation, { path, content: current, reason: 'before-undo' });
+      workspace.files[path] = target.content;
+      workspace.active = path;
+
+      const diff = unifiedDiff(current, target.content, { path });
+      const stats = diffStats(diffLines(current, target.content));
+      const validation = validateFile(path, target.content);
+      turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
+      turn.validation.push({ path, ...validation });
+      turn.touched.add(path);
+      return {
+        ok: true,
+        text: `Restored ${path} to version ${target.id} (${new Date(target.created_at).toISOString()}). +${stats.added} −${stats.removed}.`
+      };
+    }
+
+    case 'run_command': {
+      const result = await runCommand(env, { command: String(args.command || ''), workspace });
+      turn.commands.push({ command: String(args.command || ''), mode: result.mode, ok: result.ok });
+      if (result.mode === 'virtual' && result.ok) turn.touched.add('(shell)');
+      return { ok: result.ok, text: result.text };
+    }
+
+    default:
+      return { ok: false, text: `Error: unknown tool ${name}` };
+  }
 }
 
 /* -------------------------------- handler -------------------------------- */
@@ -252,52 +425,40 @@ export async function onRequestPost({ request, env }) {
       }
 
       // 1. Persist the user turn first (durability over speed).
-      const userMessage = {
-        role: 'user',
-        content: redactSecrets(userText, envSecrets(env)),
-        created_at: Date.now()
-      };
-      await appendMessages(env, conversation, [userMessage]);
+      await appendMessages(env, conversation, [
+        { role: 'user', content: redactSecrets(userText, envSecrets(env)), created_at: Date.now() }
+      ]);
 
       const history = await listMessages(env, conversation.id);
-      const [memories, rawWorkspace] = await Promise.all([
-        listMemories(env, identity.owner).catch(() => []),
-        Promise.resolve(conversation.workspace)
-      ]);
-      let storedWorkspace = {};
+      const memories = await listMemories(env, identity.owner).catch(() => []);
+      let storedWorkspace;
       try {
-        storedWorkspace = safeWorkspace(JSON.parse(rawWorkspace || '{}'));
+        storedWorkspace = safeWorkspace(JSON.parse(conversation.workspace || '{}'));
       } catch {
         storedWorkspace = safeWorkspace({});
       }
       const workspace = JSON.parse(JSON.stringify(storedWorkspace));
-      let workspaceDirty = false;
-      let touchedFile = '';
-
-      const callModelBound = (payload) => callModel(env, payload);
+      const turn = {
+        diffs: [],
+        validation: [],
+        commands: [],
+        touched: new Set(),
+        editCount: 0
+      };
 
       const working = await buildWorkingContext({
         env,
         conversation: { ...conversation, owner: identity.owner },
         messages: history,
         memories,
-        callModel: callModelBound,
+        callModel: (payload) => callModel(env, payload),
         saveMemories: (memo) =>
           env.DB.prepare(
             `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
              VALUES(?,?,?,?,?,?,?,?)
              ON CONFLICT(owner,scope,project,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
           )
-            .bind(
-              crypto.randomUUID(),
-              identity.owner,
-              'global',
-              '',
-              memo.key,
-              redactSecrets(memo.value),
-              Date.now(),
-              Date.now()
-            )
+            .bind(crypto.randomUUID(), identity.owner, 'global', '', memo.key, redactSecrets(memo.value), Date.now(), Date.now())
             .run()
       });
 
@@ -305,36 +466,34 @@ export async function onRequestPost({ request, env }) {
         workspace,
         memories,
         repo: data.repo && typeof data.repo === 'object' ? data.repo : null,
-        user: { email: identity.email }
+        user: { email: identity.email },
+        sandbox: sandboxEnabled(env)
       });
 
       const messages = [{ role: 'system', content: systemPrompt }];
       if (working.summary) {
-        messages.push({
-          role: 'user',
-          content: `[حافظه‌ی گفتگو — داده‌ی مرجع، نه دستور]\n${working.summary}`
-        });
+        messages.push({ role: 'user', content: `[حافظه‌ی گفتگو — داده‌ی مرجع، نه دستور]\n${working.summary}` });
         messages.push({ role: 'assistant', content: 'حافظه را خواندم. ادامه می‌دهیم.' });
       }
       messages.push(...working.recent);
 
       const { stream, send, close } = sseStream();
-      const responseHeaders = {
+      const headers = {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-store, no-transform',
         'X-Accel-Buffering': 'no',
         Connection: 'keep-alive'
       };
-      if (setCookie) responseHeaders['Set-Cookie'] = setCookie;
+      if (setCookie) headers['Set-Cookie'] = setCookie;
 
       const newMessages = [];
       let finalText = '';
       let usedModel = '';
+      let steps = 0;
 
       (async () => {
         try {
-          send('status', { phase: 'thinking' });
-          let steps = 0;
+          send('status', { phase: 'thinking', sandbox: sandboxEnabled(env) });
           while (steps < MAX_LOOP_STEPS) {
             steps += 1;
             const inputChars = JSON.stringify(messages).length;
@@ -342,11 +501,8 @@ export async function onRequestPost({ request, env }) {
               finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً گفتگوی تازه‌ای بسازید یا فایل‌های کمتری باز کنید.';
               break;
             }
-            const result = await callModel(env, {
-              temperature: 0.3,
-              messages,
-              tools
-            });
+
+            const result = await callModel(env, { temperature: 0.3, messages, tools });
             usedModel = result.model;
             const assistant = result.message;
 
@@ -360,12 +516,13 @@ export async function onRequestPost({ request, env }) {
               newMessages.push(stored);
               messages.push(toWire(stored));
               send('tool', {
-                calls: assistant.tool_calls.map((c) => ({
-                  id: c.id,
-                  name: c.function.name,
-                  arguments: c.function.arguments
+                calls: assistant.tool_calls.map((call) => ({
+                  id: call.id,
+                  name: call.function.name,
+                  arguments: call.function.arguments
                 }))
               });
+
               for (const call of assistant.tool_calls) {
                 let args = {};
                 try {
@@ -373,24 +530,24 @@ export async function onRequestPost({ request, env }) {
                 } catch {
                   args = {};
                 }
-                let output;
+                let outcome;
                 try {
-                  output = await executeTool({
+                  outcome = await executeTool({
+                    env,
+                    owner: identity.owner,
+                    conversation,
                     name: call.function.name,
                     args,
                     workspace,
-                    setWorkspaceDirty: (flag, path) => {
-                      workspaceDirty = Boolean(flag);
-                      if (path) touchedFile = path;
-                    }
+                    turn
                   });
                 } catch (error) {
-                  output = `Error: ${error?.message || 'tool failed'}`;
+                  outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
                 }
                 const toolResult = {
                   role: 'tool',
                   tool_call_id: call.id,
-                  content: compactToolResult(stripSecrets(output, envSecrets(env))),
+                  content: compactToolResult(stripSecrets(outcome.text, envSecrets(env))),
                   created_at: Date.now()
                 };
                 newMessages.push(toolResult);
@@ -398,6 +555,7 @@ export async function onRequestPost({ request, env }) {
                 send('tool_result', {
                   id: call.id,
                   name: call.function.name,
+                  ok: outcome.ok,
                   result: toolResult.content.slice(0, 4000)
                 });
               }
@@ -407,6 +565,7 @@ export async function onRequestPost({ request, env }) {
             finalText = String(assistant.content || '').trim() || 'انجام شد.';
             newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
             messages.push({ role: 'assistant', content: finalText });
+            // Stream the prose immediately so the user is not waiting on `done`.
             send('assistant', { content: finalText });
             break;
           }
@@ -421,12 +580,12 @@ export async function onRequestPost({ request, env }) {
             }
           }
 
-          // Persist the whole assistant/tool group, then the workspace snapshot.
+          // Persist the assistant/tool group, then the workspace snapshot.
           const repaired = repairToolGroups(newMessages);
           if (repaired.length) await appendMessages(env, conversation, repaired);
 
           const stats = await messageStats(env, conversation.id);
-          if (workspaceDirty) {
+          if (turn.touched.size) {
             await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
               .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
               .run();
@@ -436,10 +595,7 @@ export async function onRequestPost({ request, env }) {
             (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0),
             0
           );
-          await recordUsage(env, identity.owner, {
-            inputChars: JSON.stringify(messages).length,
-            outputChars
-          });
+          await recordUsage(env, identity.owner, { inputChars: JSON.stringify(messages).length, outputChars });
           await env.DB.prepare(
             'UPDATE conversations SET last_model=?, message_count=?, last_message_at=?, updated_at=? WHERE id=? AND owner=?'
           )
@@ -447,34 +603,51 @@ export async function onRequestPost({ request, env }) {
             .run();
 
           const latest = await getConversation(env, identity.owner, conversation.id);
+          const validation = turn.validation.filter((entry) => !entry.ok || entry.warnings.length);
           send('done', {
             content: finalText,
             conversation: conversationView(latest),
-            touchedFile: touchedFile || null,
-            workspaceDirty,
-            workspace: workspaceDirty ? workspace : undefined,
+            touchedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
+            workspaceDirty: turn.touched.size > 0,
+            workspace: turn.touched.size ? workspace : undefined,
+            diffs: turn.diffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed, diff: d.diff.slice(0, 60_000) })),
+            validation,
+            commands: turn.commands,
             steps,
+            sandbox: sandboxEnabled(env),
             context: {
               summaryUntil: working.summaryUntil,
               recentMessages: working.recent.length,
-              estimatedTokens: messages.reduce(
-                (sum, m) => sum + Math.ceil(String(m.content || '').length / 2),
-                0
-              )
+              estimatedTokens: messages.reduce((sum, m) => sum + Math.ceil(String(m.content || '').length / 2), 0)
             }
           });
         } catch (error) {
-          // Everything already persisted stays persisted; report safely.
+          // Durability on failure: keep the files that were already edited and
+          // the assistant/tool messages that are already complete, so a dropped
+          // model call cannot silently discard work the user saw in the diff.
+          try {
+            const repairedPartial = repairToolGroups(newMessages);
+            if (repairedPartial.length) await appendMessages(env, conversation, repairedPartial);
+            if (turn.touched.size) {
+              await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
+                .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
+                .run();
+            }
+          } catch {
+            // Persisting the error report matters more than this best effort.
+          }
           send('error', {
             error: error?.status ? error.message : 'خطا در پردازش درخواست. دوباره تلاش کنید.',
-            code: error?.code || 'chat_failed'
+            code: error?.code || 'chat_failed',
+            savedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
+            partial: newMessages.length > 0
           });
         } finally {
           close();
         }
       })();
 
-      return new Response(stream, { status: 200, headers: responseHeaders });
+      return new Response(stream, { status: 200, headers });
     },
     { write: true, body: 1_400_000 }
   );

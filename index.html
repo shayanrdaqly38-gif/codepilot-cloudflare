@@ -132,6 +132,23 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#202735;border:1px solid #3a4457;padding:9px 14px;border-radius:8px;display:none;z-index:30;max-width:90vw;font-size:12px}
 .pill{color:#93d5a9;background:#1b3026;border:1px solid #294a36;padding:3px 7px;border-radius:20px;font-size:10px;white-space:nowrap}
 .pill.off{color:#e0c07a;background:#2a2415;border-color:#4a3d1e}
+.diff-panel{display:none;flex-direction:column;border-top:1px solid #2a3242;background:#0a0e15;max-height:38%;min-height:120px}
+.diff-panel.open{display:flex}
+.diff-head{display:flex;align-items:center;gap:10px;padding:7px 11px;border-bottom:1px solid #1c2331;font-size:11px;flex:none}
+.diff-body{margin:0;padding:10px 12px;overflow:auto;font:11.5px/1.65 ui-monospace,monospace;direction:ltr;text-align:left;white-space:pre;flex:1}
+.diff-body .add{color:#8fe0ab;background:#12241a;display:block}
+.diff-body .del{color:#ff9d92;background:#281414;display:block}
+.diff-body .hunk{color:#8aaeff;display:block}
+.diff-body .meta{color:#6b748a;display:block}
+.ver-item{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:7px;padding:7px 9px;margin-top:6px;background:#111722;font-size:11px}
+.ver-item .when{color:#9aa4b8}
+.ver-item button{margin-right:auto;padding:3px 8px;font-size:10px}
+.searchbar{display:flex;gap:6px;margin-bottom:9px}
+.searchbar input{flex:1;border:1px solid #333b4b;border-radius:7px;background:#0d1118;padding:8px;outline:0;direction:ltr;text-align:left}
+.hit{border:1px solid var(--line);border-radius:7px;padding:7px 9px;margin-top:6px;background:#111722;cursor:pointer;direction:ltr;text-align:left}
+.hit:hover{border-color:#3a4a68;background:#151d2b}
+.hit .where{color:var(--blue);font-size:10.5px}
+.hit .code{font:11px ui-monospace,monospace;color:#c3ccdd;white-space:pre;overflow:hidden;text-overflow:ellipsis;display:block;padding:2px 0 0}
 .mobile-tabs{display:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 @media(max-width:1080px){.layout{grid-template-columns:200px minmax(300px,1fr)}.right{display:none}.right.show{display:flex;position:fixed;inset:52px 0 0 auto;width:min(420px,100%);z-index:6;box-shadow:-15px 0 50px #0008}.mobile-tabs{display:block}}
@@ -176,6 +193,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
     <div class="tabs">
       <div class="tab"><span class="dot" id="tabDot">●</span><span class="tab-name" id="tabName">—</span></div>
       <div class="tab-actions">
+        <button class="icon-btn" onclick="openSearch()" title="جست‌وجو در پروژه (Ctrl+K)">⌕ جست‌وجو</button>
+        <button class="icon-btn" onclick="openHistory()" title="تاریخچه‌ی نسخه‌های فایل">⟲ تاریخچه</button>
         <button class="icon-btn" onclick="saveEditor(true)" title="ذخیره در D1">ذخیره</button>
         <button class="icon-btn" onclick="deleteActive()" title="حذف فایل">حذف</button>
       </div>
@@ -184,6 +203,14 @@ button:disabled{opacity:.55;cursor:not-allowed}
       <div class="editor" id="editorWrap">
         <pre class="nums" id="nums">1</pre>
         <textarea class="code" id="editor" spellcheck="false" aria-label="ویرایشگر کد" oninput="editorChanged()" onkeydown="editorKey(event)"></textarea>
+      </div>
+      <div class="diff-panel" id="diffPanel">
+        <div class="diff-head">
+          <strong id="diffTitle">تغییرات</strong>
+          <span class="tiny" id="diffStats"></span>
+          <button class="icon-btn" style="margin-right:auto" onclick="closeDiff()">×</button>
+        </div>
+        <pre class="diff-body" id="diffBody"></pre>
       </div>
       <div class="empty-editor" id="emptyEditor" style="display:none">
         <div>
@@ -194,7 +221,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
     </div>
     <div class="bottom">
       <div class="bottom-head">
-        <span class="selected">ترمینال</span><span>خروجی</span><span class="tiny">شل مجازی و امن</span>
+        <span class="selected">ترمینال</span><span>خروجی</span><span class="tiny" id="shellMode">شل مجازی و امن</span>
         <button class="icon-btn" style="margin-right:auto" onclick="clearTerminal()">پاک‌کردن</button>
       </div>
       <div class="terminal" id="terminal"></div>
@@ -273,6 +300,39 @@ button:disabled{opacity:.55;cursor:not-allowed}
   </div>
 </div>
 
+<!-- Version history modal -->
+<div class="modal" id="histModal">
+  <div class="modal-card">
+    <h2 id="histTitle">تاریخچه</h2>
+    <p>هر ویرایش دستیار یک نسخه‌ی قابل بازگردانی می‌سازد. حداکثر ۲۵ نسخه‌ی آخر هر فایل نگه داشته می‌شود.</p>
+    <div id="histList" style="margin-top:10px"></div>
+    <div class="modal-actions">
+      <button onclick="closeModal('histModal')">بستن</button>
+    </div>
+  </div>
+</div>
+
+<!-- Search modal -->
+<div class="modal" id="searchModal">
+  <div class="modal-card">
+    <h2>جست‌وجو در پروژه</h2>
+    <div class="searchbar">
+      <input id="searchInput" placeholder="مثلاً fetch یا function\s+\w+" onkeydown="if(event.key==='Enter'){event.preventDefault();runSearch()}">
+      <button onclick="runSearch()">جست‌وجو</button>
+    </div>
+    <label class="tiny" style="display:inline-flex;gap:6px;align-items:center;margin-left:14px">
+      <input type="checkbox" id="searchRegex" style="width:auto"> regex
+    </label>
+    <label class="tiny" style="display:inline-flex;gap:6px;align-items:center">
+      <input type="checkbox" id="searchCase" style="width:auto"> حساس به بزرگی/کوچکی
+    </label>
+    <div id="searchResults" style="margin-top:10px;max-height:50vh;overflow:auto"></div>
+    <div class="modal-actions">
+      <button onclick="closeModal('searchModal')">بستن</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -290,6 +350,8 @@ const API = {
   config: '/api/config',
   state: '/api/state',
   conversations: '/api/state/conversations',
+  versions: '/api/state/versions',
+  search: '/api/state/search',
   chat: '/api/chat'
 };
 
@@ -309,7 +371,14 @@ const state = {
   busy: false,
   dirtyFiles: new Set(),
   saveTimer: null,
-  streaming: false
+  streaming: false,
+  sandbox: false,
+  diffs: [],
+  validation: [],
+  commands: [],
+  historyPath: null,
+  searchHits: [],
+  turnNotices: null
 };
 
 const $ = (id) => document.getElementById(id);
@@ -390,7 +459,12 @@ async function boot() {
       state.config = config;
       state.modelLabel = config.model || '—';
       state.contextBudget = config.contextBudgetTokens || 24000;
+      state.sandbox = Boolean(config.sandbox);
       $('modelBadge').textContent = state.modelLabel;
+      $('shellMode').textContent = state.sandbox ? 'Sandbox واقعی متصل' : 'شل مجازی و امن';
+      $('shellMode').title = state.sandbox
+        ? 'run_command در محفظه‌ی Linux واقعی اجرا می‌شود.'
+        : 'بدون Sandbox: فقط help/ls/cat/touch/echo/rm مجاز است و هیچ فرمان واقعی اجرا نمی‌شود.';
     }
   } catch { /* non-fatal */ }
 
@@ -513,6 +587,8 @@ async function openConversation(id, { fresh = false } = {}) {
     renderChat();
     renderTree();
     renderEditor();
+    closeDiff();
+    state.turnNotices = null;
     updateContextMeter(data.conversation || {});
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
     document.querySelector('.right').classList.add('show');
@@ -944,7 +1020,10 @@ async function sendMessage() {
     }
 
     const result = await consumeStream(response, bubble);
-    if (result.ok) await reloadCurrentConversation();
+    if (result.ok) {
+      await reloadCurrentConversation();
+      renderTurnNotices();
+    }
   } catch (error) {
     bubble.className = 'msg assistant error';
     bubble.textContent = 'خطا: ' + error.message;
@@ -979,8 +1058,12 @@ async function consumeStream(response, bubble) {
     } else if (event === 'tool_result') {
       const line = bubble.querySelector(`[data-tool-id="${cssEscape(data.id)}"]`);
       if (line) {
-        line.classList.add('done');
-        line.insertAdjacentHTML('beforeend', `<span style="color:#6f7d92">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:150px">${esc(String(data.result || '').slice(0, 120).replace(/\s+/g, ' '))}</span>`);
+        line.classList.add(data.ok === false ? 'fail' : 'done');
+        const preview = String(data.result || '').slice(0, 140).replace(/\s+/g, ' ');
+        line.insertAdjacentHTML(
+          'beforeend',
+          `<span style="color:#6f7d92">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:160px">${esc(preview)}</span>`
+        );
       }
     } else if (event === 'assistant') {
       assistantText = data.content || '';
@@ -991,12 +1074,27 @@ async function consumeStream(response, bubble) {
         state.workspace = normalizeWorkspace(data.workspace);
         renderTree();
         renderEditor();
-        // Commit only the file the agent actually touched, never the whole repo.
-        if (data.touchedFile) {
-          state.dirtyFiles.add(data.touchedFile);
-          commitFile(data.touchedFile).catch(() => {});
+        // Commit only the files the agent actually touched, never the whole repo.
+        for (const path of data.touchedFiles || []) {
+          state.dirtyFiles.add(path);
+          commitFile(path).catch(() => {});
         }
       }
+      state.diffs = Array.isArray(data.diffs) ? data.diffs : [];
+      state.validation = Array.isArray(data.validation) ? data.validation : [];
+      state.commands = Array.isArray(data.commands) ? data.commands : [];
+      if (data.diffs?.length) showDiff(data.diffs, data.touchedFiles);
+      if (data.validation?.length) appendValidation(bubble, data.validation);
+      state.turnNotices = {
+        validation: state.validation,
+        diffs: state.diffs,
+        conversationId: state.conversationId
+      };
+      for (const command of state.commands) {
+        addTerminal(`$ ${command.command}`, 'dim');
+        addTerminal(`  mode: ${command.mode}${command.mode === 'virtual' ? ' (شبیه‌سازی، نه اجرای واقعی)' : ''}`, command.ok ? 'ok' : 'err');
+      }
+      if (data.sandbox !== undefined) state.sandbox = Boolean(data.sandbox);
       if (data.context && Number.isFinite(data.context.estimatedTokens)) {
         state.contextTokens = data.context.estimatedTokens;
       }
@@ -1060,6 +1158,21 @@ function cssEscape(value) {
 }
 
 /**
+ * The persisted history does not carry validation results (they are per-turn,
+ * not per-message). Re-attach them to the last assistant bubble after a reload
+ * so the user still sees what the validator said.
+ */
+function renderTurnNotices() {
+  const notices = state.turnNotices;
+  if (!notices || notices.conversationId !== state.conversationId) return;
+  if (!notices.validation?.length) return;
+  const bubbles = $('chat').querySelectorAll('.msg.assistant');
+  const last = bubbles[bubbles.length - 1];
+  if (!last || last.querySelector('.msg.system')) return;
+  appendValidation(last, notices.validation);
+}
+
+/**
  * Re-read the conversation from D1 after a turn so the client shows exactly
  * what was persisted (server-assigned seq numbers, redacted text, tool groups).
  */
@@ -1099,6 +1212,167 @@ async function rewindTo(seq) {
     renderChat();
     toast('تاریخچه بازگردانی شد');
   } catch (error) { toast(error.message); }
+}
+
+/* ------------------------------ diff viewer ------------------------------ */
+
+function colorizeDiff(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => {
+      if (line.startsWith('@@')) return `<span class="hunk">${esc(line)}</span>`;
+      if (line.startsWith('+++') || line.startsWith('---')) return `<span class="meta">${esc(line)}</span>`;
+      if (line.startsWith('+')) return `<span class="add">${esc(line)}</span>`;
+      if (line.startsWith('-')) return `<span class="del">${esc(line)}</span>`;
+      return esc(line);
+    })
+    .join('\n');
+}
+
+function showDiff(diffs, touched) {
+  if (!diffs || !diffs.length) return closeDiff();
+  const totalAdded = diffs.reduce((sum, d) => sum + (d.added || 0), 0);
+  const totalRemoved = diffs.reduce((sum, d) => sum + (d.removed || 0), 0);
+  const names = diffs.map((d) => d.path).join(' · ');
+  $('diffTitle').textContent = 'تغییرات: ' + names;
+  $('diffStats').textContent = `+${faNum(totalAdded)} −${faNum(totalRemoved)} · ${faNum(diffs.length)} فایل`;
+  $('diffBody').innerHTML = diffs
+    .map((d) => colorizeDiff(d.diff || `(بدون diff برای ${d.path})`))
+    .join('\n\n');
+  $('diffPanel').classList.add('open');
+  $('diffBody').scrollTop = 0;
+  if (touched && touched.length) {
+    addTerminal(`edited: ${touched.join(', ')} (+${totalAdded} −${totalRemoved})`, 'ok');
+  }
+}
+
+function closeDiff() {
+  $('diffPanel').classList.remove('open');
+}
+
+function appendValidation(bubble, entries) {
+  const items = entries.filter((entry) => !entry.ok || (entry.warnings || []).length);
+  if (!items.length) return;
+  const html = items
+    .map((entry) => {
+      const errors = (entry.errors || []).map((e) => `<div class="err">⛔ ${esc(e)}</div>`).join('');
+      const warnings = (entry.warnings || []).map((w) => `<div style="color:#e7c77a">⚠ ${esc(w)}</div>`).join('');
+      return `<div style="margin-top:6px"><span class="where">${esc(entry.path)}</span>${errors}${warnings}</div>`;
+    })
+    .join('');
+  bubble.insertAdjacentHTML('beforeend', `<div class="msg system" style="margin-top:8px">اعتبارسنجی${html}</div>`);
+  if (items.some((entry) => !entry.ok)) toast('اعتبارسنجی هشدار داد؛ تغییرات را ببینید', 4200);
+}
+
+/* ------------------------------ version history -------------------------- */
+
+async function openHistory() {
+  const path = state.workspace.active;
+  if (!path) return toast('اول یک فایل را باز کنید');
+  state.historyPath = path;
+  $('histTitle').textContent = 'تاریخچه: ' + path;
+  $('histList').innerHTML = '<div class="tiny">در حال بارگذاری…</div>';
+  $('histModal').classList.add('open');
+  try {
+    const data = await api(`${API.versions}?path=${encodeURIComponent(path)}&limit=30`);
+    if (!data.versions.length) {
+      $('histList').innerHTML = '<div class="tiny">هنوز نسخه‌ای ثبت نشده. تاریخچه از اولین ویرایش دستیار ساخته می‌شود.</div>';
+      return;
+    }
+    $('histList').innerHTML = data.versions
+      .map(
+        (v) => `<div class="ver-item">
+          <span class="when">${new Date(v.createdAt).toLocaleString('fa-IR')}</span>
+          <span class="tiny">${esc(v.reason)} · ${faNum(v.size)} بایت</span>
+          <button onclick="restoreVersion('${esc(v.id)}')">بازگردانی</button>
+        </div>`
+      )
+      .join('');
+  } catch (error) {
+    $('histList').innerHTML = `<div class="tiny">خطا: ${esc(error.message)}</div>`;
+  }
+}
+
+async function restoreVersion(versionId) {
+  if (!state.conversationId || !state.historyPath) return;
+  if (!confirm('این نسخه جایگزین فایل فعلی شود؟ یک نسخه‌ی پشتیبان هم گرفته می‌شود.')) return;
+  try {
+    const data = await api(API.versions, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'restore',
+        conversationId: state.conversationId,
+        path: state.historyPath,
+        versionId
+      })
+    });
+    state.workspace = normalizeWorkspace(data.workspace);
+    renderTree();
+    renderEditor();
+    if (data.diff) showDiff([{ path: data.path, diff: data.diff, added: data.added, removed: data.removed }]);
+    closeModal('histModal');
+    toast('نسخه بازگردانده شد');
+    commitFile(data.path).catch(() => {});
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+/* --------------------------------- search -------------------------------- */
+
+function openSearch() {
+  $('searchModal').classList.add('open');
+  $('searchInput').value = '';
+  $('searchResults').innerHTML = '';
+  setTimeout(() => $('searchInput').focus(), 40);
+}
+
+async function runSearch() {
+  const query = $('searchInput').value.trim();
+  if (!query) return;
+  const results = $('searchResults');
+  results.innerHTML = '<div class="tiny">در حال جست‌وجو…</div>';
+  try {
+    const data = await api(API.search, {
+      method: 'POST',
+      body: JSON.stringify({
+        conversationId: state.conversationId,
+        query,
+        regex: $('searchRegex').checked,
+        caseSensitive: $('searchCase').checked
+      })
+    });
+    state.searchHits = data.results || [];
+    if (!state.searchHits.length) {
+      results.innerHTML = '<div class="tiny">نتیجه‌ای نبود.</div>';
+      return;
+    }
+    results.innerHTML = state.searchHits
+      .map(
+        (hit, index) => `<div class="hit" onclick="jumpToHit(${index})">
+          <span class="where">${esc(hit.path)}:${faNum(hit.line)}:${faNum(hit.column)}</span>
+          <code class="code">${esc(hit.snippet)}</code>
+        </div>`
+      )
+      .join('');
+  } catch (error) {
+    results.innerHTML = `<div class="tiny">خطا: ${esc(error.message)}</div>`;
+  }
+}
+
+function jumpToHit(index) {
+  const hit = state.searchHits[index];
+  if (!hit) return;
+  closeModal('searchModal');
+  openFile(hit.path);
+  const editor = $('editor');
+  const lines = editor.value.split('\n');
+  let offset = 0;
+  for (let i = 0; i < hit.line - 1 && i < lines.length; i += 1) offset += lines[i].length + 1;
+  editor.focus();
+  editor.setSelectionRange(offset, offset + Math.max(1, (lines[hit.line - 1] || '').length));
+  const lineHeight = 22;
+  editor.scrollTop = Math.max(0, (hit.line - 6) * lineHeight);
 }
 
 /* --------------------------------- memory -------------------------------- */
@@ -1200,7 +1474,21 @@ function toggleMemoryPanel() {
 
 function closeModal(id) { $(id).classList.remove('open'); }
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') document.querySelectorAll('.modal.open').forEach((m) => m.classList.remove('open'));
+  const meta = event.ctrlKey || event.metaKey;
+  if (event.key === 'Escape') {
+    document.querySelectorAll('.modal.open').forEach((m) => m.classList.remove('open'));
+  }
+  if (meta && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    openSearch();
+  }
+  if (meta && event.key.toLowerCase() === 'h' && !event.shiftKey) {
+    const tag = (event.target.tagName || '').toLowerCase();
+    if (tag !== 'textarea' && tag !== 'input') {
+      event.preventDefault();
+      openHistory();
+    }
+  }
 });
 document.querySelectorAll('.modal').forEach((modal) => {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.classList.remove('open'); });
@@ -1321,7 +1609,7 @@ function disconnectGitHub() {
 }
 
 async function commitFile(path) {
-  if (!state.repo || !state.workspace.files[path]) return;
+  if (!state.repo || state.workspace.files[path] === undefined) return;
   const content = state.workspace.files[path];
   try {
     let sha;

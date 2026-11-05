@@ -2,7 +2,7 @@
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const CREATE = [
   `CREATE TABLE IF NOT EXISTS meta (
@@ -55,6 +55,19 @@ const CREATE = [
      output_chars INTEGER NOT NULL DEFAULT 0,
      PRIMARY KEY (owner, day)
    )`,
+  `CREATE TABLE IF NOT EXISTS file_versions (
+     id TEXT PRIMARY KEY,
+     owner TEXT NOT NULL,
+     conversation_id TEXT NOT NULL DEFAULT '',
+     project TEXT NOT NULL DEFAULT '',
+     path TEXT NOT NULL,
+     content TEXT NOT NULL,
+     reason TEXT NOT NULL DEFAULT 'edit',
+     created_by TEXT NOT NULL DEFAULT 'agent',
+     created_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS file_versions_lookup
+     ON file_versions(owner, project, path, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS rate_limits (
      bucket TEXT PRIMARY KEY,
      count INTEGER NOT NULL DEFAULT 0,
@@ -86,6 +99,7 @@ const COLUMNS = {
   memories: [],
   usage_daily: [],
   rate_limits: [],
+  file_versions: [],
   meta: []
 };
 

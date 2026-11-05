@@ -70,6 +70,38 @@ npx wrangler pages deploy . --project-name=<نام-پروژه>
 | `cross_origin` | درخواست از دامنه‌ی دیگر | از خود دامنه‌ی Pages استفاده کنید |
 | `email_not_allowed` | ایمیل در `ACCESS_ALLOWED_EMAILS` نیست | لیست را اصلاح کنید |
 
+## ۷. اجرای واقعی کد (اختیاری — Sandbox)
+
+بدون این بخش، `run_command` فقط شل مجازی است و همین را هم صریح می‌گوید. برای اجرای واقعی:
+
+```toml
+# wrangler.toml
+[[durable_objects.bindings]]
+name = "SANDBOX"
+class_name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
+```
+
+سپس یک Durable Object به نام `Sandbox` بسازید که `fetch` را روی یک Container با ایمیج
+لینوکس اجرا کند و قرارداد زیر را رعایت کند:
+
+```jsonc
+// POST https://sandbox.internal/run
+// request
+{ "cmd": "npm test", "cwd": "/workspace", "timeoutMs": 20000,
+  "files": { "app.js": "…" } }        // فایل‌ها قبل از اجرا در /workspace نوشته شوند
+// response
+{ "ok": true, "exitCode": 0, "stdout": "…", "stderr": "", "durationMs": 812 }
+```
+
+تا وقتی این بایندینگ وجود نداشته باشد:
+- `/api/config` مقدار `sandbox:false` می‌دهد،
+- هدر ترمینال «شل مجازی و امن» می‌ماند،
+- و هیچ‌جا ادعا نمی‌شود فرمانی واقعاً اجرا شده است.
+
 ## نکات امنیتی
 
 - `MODEL_API_KEY` و `SESSION_SECRET` را در `wrangler.toml` یا کد نگذارید؛ فقط Secret.

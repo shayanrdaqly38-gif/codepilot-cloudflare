@@ -4,16 +4,17 @@
 const textEncoder = new TextEncoder();
 
 export class HttpError extends Error {
-  constructor(message, status = 400, code = 'bad_request') {
+  constructor(message, status = 400, code = 'bad_request', extra = null) {
     super(message);
     this.name = 'HttpError';
     this.status = status;
     this.code = code;
+    this.extra = extra || null;
   }
 }
 
-export function fail(message, status = 400, code = 'bad_request') {
-  throw new HttpError(message, status, code);
+export function fail(message, status = 400, code = 'bad_request', extra = null) {
+  throw new HttpError(message, status, code, extra);
 }
 
 const BASE_HEADERS = {
@@ -37,7 +38,10 @@ export function json(body, status = 200, headers = {}) {
 /** Convert any thrown value into a safe JSON error response. */
 export function errorResponse(error) {
   if (error instanceof HttpError) {
-    return json({ error: error.message, code: error.code }, error.status);
+    return json(
+      { error: error.message, code: error.code, ...(error.extra ? { details: error.extra } : {}) },
+      error.status
+    );
   }
   // Never leak provider internals or stack traces to the browser.
   console.error('unhandled', error && error.name ? error.name : 'Error');

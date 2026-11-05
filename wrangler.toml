@@ -13,6 +13,17 @@ binding = "DB"                      # must stay "DB" — the code reads env.DB
 database_name = "codepilot-db"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
+# Optional: real code execution. Uncomment after creating the Sandbox Durable
+# Object (see SETUP.md §7). Without it, run_command is a clearly-labelled
+# virtual shell.
+# [[durable_objects.bindings]]
+# name = "SANDBOX"
+# class_name = "Sandbox"
+#
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["Sandbox"]
+
 [vars]
 # Non-secret defaults only. Never put API keys or tokens here.
 MODEL_NAME = "gpt-4o-mini"
