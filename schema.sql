@@ -4,6 +4,17 @@
 --
 --   npx wrangler d1 execute codepilot-db --remote --file=./schema.sql
 
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
+  size INTEGER NOT NULL, chunks INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS upload_chunks (
+  upload_id TEXT NOT NULL, part INTEGER NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY(upload_id, part)
+);
+CREATE INDEX IF NOT EXISTS uploads_owner ON uploads(owner, created_at);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
