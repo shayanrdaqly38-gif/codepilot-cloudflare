@@ -1,0 +1,23 @@
+{
+  "name": "codepilot-cloudflare",
+  "version": "2.0.0",
+  "private": true,
+  "description": "CodePilot — AI coding workspace on Cloudflare Pages + D1 with durable conversation memory",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev . --d1 DB=codepilot-db",
+    "deploy": "wrangler pages deploy .",
+    "db:create": "wrangler d1 create codepilot-db",
+    "db:schema": "wrangler d1 execute codepilot-db --remote --file=./schema.sql",
+    "test": "node --test tests/state.test.mjs tests/chat.test.mjs tests/sync.test.mjs",
+    "test:ui": "node tests/ui.test.mjs",
+    "test:all": "npm test && npm run test:ui"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1",
+    "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

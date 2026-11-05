@@ -1,57 +1,1361 @@
 <!doctype html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>CodePilot — محیط توسعه هوشمند</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2374d9a1'/><text x='16' y='22' font-size='18' text-anchor='middle' fill='%2310151d'>✳</text></svg>">
 <style>
-:root{--bg:#0b0e14;--panel:#11151e;--panel2:#161b25;--line:#252b38;--text:#e6e9ef;--muted:#929bad;--green:#80d6a4;--blue:#8aaeff;--red:#ff8d8d;--yellow:#e7c77a;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;font-size:13px}button,input,textarea{font:inherit;color:inherit}button{cursor:pointer;border:1px solid var(--line);background:#1b2130;border-radius:7px;padding:7px 10px}button:hover{background:#252d3e;border-color:#3a465b}.top{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 15px;background:#0e1118}.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px}.logo{width:27px;height:27px;border-radius:8px;background:linear-gradient(140deg,#74d9a1,#6e9fff);display:grid;place-items:center;color:#10151d;font-weight:900}.status{color:var(--muted);font-size:11px}.top-actions{display:flex;gap:7px;align-items:center}.layout{height:calc(100vh - 52px);display:grid;grid-template-columns:245px minmax(350px,1fr) minmax(320px,390px);direction:ltr}.sidebar,.center,.right{min-height:0;direction:rtl}.sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column}.sidebar-head,.pane-head{height:43px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line);font-weight:650}.tiny{font-size:11px;color:var(--muted);font-weight:400}.project{padding:12px;border-bottom:1px solid var(--line);color:var(--muted);font-size:11px}.tree{padding:9px 7px;overflow:auto;flex:1}.tree-row{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;cursor:pointer;color:#c7ccda}.tree-row:hover,.tree-row.active{background:#202637;color:#fff}.tree-row .ico{width:15px;text-align:center;color:#8daeff}.indent{margin-right:18px}.sidebar-foot{border-top:1px solid var(--line);padding:10px;display:grid;gap:7px}.sidebar-foot button{width:100%;text-align:right;background:transparent;color:#bdc4d1}.center{display:flex;flex-direction:column;background:#0d1017}.tabs{height:43px;border-bottom:1px solid var(--line);display:flex;align-items:stretch;justify-content:space-between}.tab{display:flex;align-items:center;gap:8px;padding:0 14px;border-left:1px solid var(--line);font-size:12px}.tab .dot{color:#e7a96b}.editor-area{flex:1;min-height:150px;position:relative;direction:ltr}.editor{display:flex;height:100%;overflow:auto;background:#0d1017}.nums{margin:0;padding:14px 12px 24px 10px;color:#555e70;text-align:right;user-select:none;border-right:1px solid #202531;line-height:1.75;white-space:pre;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;min-width:44px}.code{width:100%;resize:none;border:0;outline:0;background:transparent;padding:14px 16px 30px;color:#d5dcf0;direction:ltr;text-align:left;white-space:pre;tab-size:2;line-height:1.75;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace}.bottom{height:220px;min-height:120px;border-top:1px solid var(--line);display:flex;flex-direction:column;background:#0c0f15}.bottom-head{height:38px;display:flex;align-items:center;gap:20px;padding:0 13px;border-bottom:1px solid var(--line);color:var(--muted)}.bottom-head .selected{color:#fff;border-bottom:2px solid var(--green);height:100%;display:flex;align-items:center}.terminal{flex:1;overflow:auto;padding:12px 14px;color:#bac3d4;direction:ltr;text-align:left;font:12px/1.8 ui-monospace,monospace;white-space:pre-wrap}.cmdline{display:flex;direction:ltr;gap:8px;align-items:center}.prompt{color:var(--green)}.cmd{background:none;border:0;outline:0;flex:1;color:#e5e9f1;font:12px ui-monospace,monospace;direction:ltr}.right{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column}.right-head{height:43px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line)}.model{border:1px solid var(--line);background:#171c26;border-radius:6px;padding:5px 7px;color:#c8cfdd;font-size:11px;max-width:125px}.chat{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}.welcome{padding:17px;border:1px solid var(--line);background:linear-gradient(145deg,#171d29,#11151e);border-radius:11px}.welcome h2{margin:0 0 8px;font-size:16px}.welcome p{margin:0;color:var(--muted);line-height:1.8}.suggestions{display:grid;gap:7px;margin-top:13px}.suggestions button{text-align:right;background:#131924;color:#c5ccda;font-size:11px}.msg{max-width:100%;padding:10px 11px;border-radius:9px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}.msg.user{background:#1b2b28;border:1px solid #294438;align-self:flex-start;max-width:90%}.msg.assistant{background:#151a24;border:1px solid #252c3a;align-self:stretch}.msg.error{border-color:#623737;color:#ffc1b8}.msg pre{direction:ltr;text-align:left;overflow:auto;background:#0b0e14;padding:10px;border-radius:6px;white-space:pre}.chatbox{padding:10px 12px 12px;border-top:1px solid var(--line)}.chat-input{width:100%;height:80px;resize:vertical;max-height:150px;background:#10141d;border:1px solid #303747;border-radius:9px;padding:10px;outline:none;line-height:1.6}.chat-input:focus,.field:focus{border-color:#5d7bb5}.sendrow{display:flex;justify-content:space-between;align-items:center;padding-top:8px}.hint{font-size:10px;color:#7f899a}.primary{background:#76d49d;color:#0c1710;border:0;font-weight:700;padding:8px 15px}.primary:hover{background:#91e7b2}.icon-btn{padding:5px 8px}.config{position:fixed;inset:0;background:#0009;display:none;place-items:center;z-index:5}.config.open{display:grid}.modal{width:min(510px,calc(100vw - 28px));background:#141923;border:1px solid #343c4c;border-radius:12px;padding:19px;box-shadow:0 20px 90px #0009}.modal h2{font-size:16px;margin:0 0 7px}.modal p{color:var(--muted);font-size:12px;line-height:1.7}.field-label{display:block;margin:13px 0 6px;color:#bfc6d3;font-size:12px}.field{width:100%;border:1px solid #333b4b;border-radius:7px;background:#0d1118;padding:10px;outline:0;direction:ltr;text-align:left}.notice{border:1px solid #655632;color:#e9d6a0;background:#252115;border-radius:8px;padding:9px;font-size:11px;line-height:1.7;margin-top:12px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#202735;border:1px solid #3a4457;padding:9px 14px;border-radius:8px;display:none;z-index:9}.pill{color:#93d5a9;background:#1b3026;border:1px solid #294a36;padding:3px 7px;border-radius:20px;font-size:10px}.mobile-tabs{display:none}
-@media(max-width:950px){.layout{grid-template-columns:190px minmax(300px,1fr)}.right{display:none}.right.show{display:flex;position:fixed;inset:52px 0 0 auto;width:min(400px,100%);z-index:3;box-shadow:-15px 0 50px #0008}.mobile-tabs{display:block}}@media(max-width:620px){.layout{grid-template-columns:1fr}.sidebar{display:none}.top .status{display:none}.top-actions{gap:4px}.top-actions button{padding:6px;font-size:10px}.github-top-btn{font-size:0!important}.github-top-btn:before{content:"↗";font-size:13px}.bottom{height:180px}}
-</style></head>
+:root{
+  --bg:#0b0e14;--panel:#11151e;--panel2:#161b25;--line:#252b38;--text:#e6e9ef;--muted:#929bad;
+  --green:#80d6a4;--blue:#8aaeff;--red:#ff8d8d;--yellow:#e7c77a;--violet:#b8a6ff;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;font-size:13px}
+button,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:#1b2130;border-radius:7px;padding:7px 10px}
+button:hover{background:#252d3e;border-color:#3a465b}
+button:disabled{opacity:.55;cursor:not-allowed}
+.top{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 15px;background:#0e1118;gap:10px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;white-space:nowrap}
+.logo{width:27px;height:27px;border-radius:8px;background:linear-gradient(140deg,#74d9a1,#6e9fff);display:grid;place-items:center;color:#10151d;font-weight:900}
+.status{color:var(--muted);font-size:11px;display:flex;align-items:center;gap:6px;min-width:0}
+.status .sync{width:7px;height:7px;border-radius:50%;background:#5a6274;flex:none;transition:background .2s}
+.status .sync.on{background:var(--green);box-shadow:0 0 0 3px #80d6a422}
+.status .sync.busy{background:var(--yellow);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.top-actions{display:flex;gap:7px;align-items:center}
+.layout{height:calc(100vh - 52px);display:grid;grid-template-columns:250px minmax(350px,1fr) minmax(330px,400px);direction:ltr}
+.sidebar,.center,.right{min-height:0;direction:rtl}
+.sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column}
+.sidebar-head,.pane-head{height:43px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line);font-weight:650;flex:none}
+.tiny{font-size:11px;color:var(--muted);font-weight:400}
+.scroll{overflow:auto;flex:1;min-height:0}
+.conv-list{padding:6px}
+.conv{display:flex;flex-direction:column;gap:3px;padding:8px;border-radius:7px;cursor:pointer;border:1px solid transparent;color:#c7ccda;position:relative}
+.conv:hover{background:#1a2030}
+.conv.active{background:#202637;border-color:#33405a;color:#fff}
+.conv .title{font-size:12px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:20px}
+.conv .meta{font-size:10px;color:#7f899a;display:flex;gap:7px}
+.conv .pin{position:absolute;left:6px;top:8px;font-size:10px}
+.conv .acts{display:flex;gap:4px;margin-top:4px;opacity:0;transition:opacity .15s}
+.conv:hover .acts,.conv.active .acts{opacity:1}
+.conv .acts button{padding:2px 6px;font-size:10px;background:#1d2433}
+.progress{display:flex;align-items:center;gap:8px;padding:6px 12px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}
+.bar{height:4px;flex:1;background:#1c2330;border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,#74d9a1,#6e9fff);border-radius:99px;transition:width .4s}
+.section-title{padding:9px 12px 4px;font-size:10px;color:#7f899a;letter-spacing:.04em}
+.project{padding:10px 12px;border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;display:flex;align-items:center;gap:6px;flex:none}
+.tree{padding:4px 7px 9px}
+.tree-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;color:#c7ccda}
+.tree-row:hover,.tree-row.active{background:#202637;color:#fff}
+.tree-row .ico{width:15px;text-align:center;color:#8daeff;flex:none}
+.tree-row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr;text-align:left}
+.tree-row .badge{margin-right:auto;font-size:9px;color:var(--yellow);background:#2a2415;border-radius:20px;padding:1px 5px}
+.sidebar-foot{border-top:1px solid var(--line);padding:9px;display:grid;gap:6px;flex:none}
+.sidebar-foot button{width:100%;text-align:right;background:transparent;color:#bdc4d1}
+.center{display:flex;flex-direction:column;background:#0d1017}
+.tabs{height:43px;border-bottom:1px solid var(--line);display:flex;align-items:stretch;justify-content:space-between;flex:none}
+.tab{display:flex;align-items:center;gap:8px;padding:0 14px;border-left:1px solid var(--line);font-size:12px;max-width:50%}
+.tab .dot{color:var(--yellow)}
+.tab .dot.ok{color:#4f8b68}
+.tab-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+.tab-actions{display:flex;align-items:center;padding:0 10px;gap:6px}
+.editor-area{flex:1;min-height:120px;position:relative;direction:ltr;display:flex;overflow:hidden}
+.editor{display:flex;width:100%;overflow:auto;background:#0d1017}
+.nums{margin:0;padding:14px 12px 24px 10px;color:#555e70;text-align:right;user-select:none;border-right:1px solid #202531;line-height:1.75;white-space:pre;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;min-width:44px;height:max-content}
+.code{flex:1;min-height:100%;resize:none;border:0;outline:0;background:transparent;padding:14px 16px 30px;color:#d5dcf0;direction:ltr;text-align:left;white-space:pre;tab-size:2;line-height:1.75;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:hidden}
+.empty-editor{flex:1;display:grid;place-items:center;color:#66708a;gap:10px;text-align:center;padding:20px}
+.bottom{height:190px;min-height:110px;border-top:1px solid var(--line);display:flex;flex-direction:column;background:#0c0f15;flex:none}
+.bottom-head{height:36px;display:flex;align-items:center;gap:18px;padding:0 13px;border-bottom:1px solid var(--line);color:var(--muted);flex:none}
+.bottom-head .selected{color:#fff;border-bottom:2px solid var(--green);height:100%;display:flex;align-items:center}
+.terminal{flex:1;overflow:auto;padding:10px 14px;color:#bac3d4;direction:ltr;text-align:left;font:12px/1.8 ui-monospace,monospace;white-space:pre-wrap;min-height:0}
+.terminal .ok{color:#8ed9a8}.terminal .err{color:#ff9d92}.terminal .dim{color:#6b748a}
+.cmdline{display:flex;direction:ltr;gap:8px;align-items:center}
+.prompt{color:var(--green)}
+.cmd{background:none;border:0;outline:0;flex:1;color:#e5e9f1;font:12px ui-monospace,monospace;direction:ltr}
+.right{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column}
+.right-head{height:43px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line);flex:none;gap:6px}
+.model-badge{font-size:10px;color:#9aa4b8;background:#171c26;border:1px solid var(--line);border-radius:20px;padding:2px 7px;direction:ltr}
+.chat{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:11px;min-height:0}
+.welcome{padding:15px;border:1px solid var(--line);background:linear-gradient(145deg,#171d29,#11151e);border-radius:11px}
+.welcome h2{margin:0 0 8px;font-size:15px}
+.welcome p{margin:0;color:var(--muted);line-height:1.8;font-size:12px}
+.welcome ol{margin:10px 0 0;padding-right:18px;color:#9aa4b8;font-size:11px;line-height:1.9}
+.suggestions{display:grid;gap:6px;margin-top:12px}
+.suggestions button{text-align:right;background:#131924;color:#c5ccda;font-size:11px}
+.msg{max-width:100%;padding:10px 11px;border-radius:9px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.user{background:#1b2b28;border:1px solid #294438;align-self:flex-start;max-width:92%}
+.msg.assistant{background:#151a24;border:1px solid #252c3a;align-self:stretch}
+.msg.error{border-color:#623737;color:#ffc1b8;background:#2a1616}
+.msg.system{background:#151b15;border:1px dashed #33452f;color:#a9c3a3;font-size:11px}
+.msg .msg-actions{display:flex;gap:5px;margin-top:7px;opacity:.55}
+.msg:hover .msg-actions{opacity:1}
+.msg .msg-actions button{padding:2px 7px;font-size:10px;background:#1b2230}
+.msg code{background:#0a0d13;border-radius:4px;padding:0 4px;font:12px ui-monospace,monospace}
+.msg pre{direction:ltr;text-align:left;overflow:auto;background:#0b0e14;padding:10px;border-radius:6px;white-space:pre;border:1px solid #1e2531}
+.msg .tool-line{display:flex;align-items:center;gap:6px;font-size:11px;color:#9fb0c8;direction:ltr;text-align:left;background:#101722;border:1px solid #223047;border-radius:6px;padding:5px 8px;margin:4px 0;font-family:ui-monospace,monospace;overflow:hidden}
+.msg .tool-line.done{color:#8ed9a8;border-color:#23402e}
+.msg .tool-line.fail{color:#ff9d92;border-color:#4a2a2a}
+.typing{display:inline-flex;gap:4px;vertical-align:middle;margin-right:4px}
+.typing i{width:5px;height:5px;border-radius:50%;background:#8aaeff;animation:bounce 1.1s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}
+.chatbox{padding:9px 11px 11px;border-top:1px solid var(--line);flex:none}
+.chat-input{width:100%;height:74px;resize:vertical;max-height:200px;background:#10141d;border:1px solid #303747;border-radius:9px;padding:9px;outline:none;line-height:1.6}
+.chat-input:focus,.field:focus{border-color:#5d7bb5}
+.sendrow{display:flex;justify-content:space-between;align-items:center;padding-top:7px;gap:8px}
+.hint{font-size:10px;color:#7f899a}
+.primary{background:#76d49d;color:#0c1710;border:0;font-weight:700;padding:8px 15px}
+.primary:hover{background:#91e7b2}
+.ghost{background:transparent}
+.icon-btn{padding:5px 8px;font-size:11px}
+.modal{position:fixed;inset:0;background:#0009;display:none;place-items:center;z-index:20;padding:14px}
+.modal.open{display:grid}
+.modal-card{width:min(540px,100%);max-height:92vh;overflow:auto;background:#141923;border:1px solid #343c4c;border-radius:12px;padding:18px;box-shadow:0 20px 90px #0009}
+.modal-card h2{font-size:16px;margin:0 0 6px}
+.modal-card p{color:var(--muted);font-size:12px;line-height:1.8;margin:0}
+.field-label{display:block;margin:13px 0 6px;color:#bfc6d3;font-size:12px}
+.field{width:100%;border:1px solid #333b4b;border-radius:7px;background:#0d1118;padding:9px;outline:0;direction:ltr;text-align:left}
+.notice{border:1px solid #655632;color:#e9d6a0;background:#252115;border-radius:8px;padding:9px;font-size:11px;line-height:1.8;margin-top:11px}
+.notice.good{border-color:#2f5a42;color:#b7e6c8;background:#152419}
+.notice.bad{border-color:#6a3a3a;color:#ffc7c0;background:#251516}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:15px;flex-wrap:wrap}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:11px;margin-top:10px;color:#b8c0cf}
+.kv b{color:#8b96aa;font-weight:500}
+.memory-item{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:7px;background:#111722}
+.memory-item .key{font-size:11px;color:var(--blue);direction:ltr;text-align:left}
+.memory-item .val{font-size:11px;color:#b8c0cf;line-height:1.7}
+.memory-item button{margin-right:auto;padding:2px 6px;font-size:10px}
+.toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#202735;border:1px solid #3a4457;padding:9px 14px;border-radius:8px;display:none;z-index:30;max-width:90vw;font-size:12px}
+.pill{color:#93d5a9;background:#1b3026;border:1px solid #294a36;padding:3px 7px;border-radius:20px;font-size:10px;white-space:nowrap}
+.pill.off{color:#e0c07a;background:#2a2415;border-color:#4a3d1e}
+.mobile-tabs{display:none}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media(max-width:1080px){.layout{grid-template-columns:200px minmax(300px,1fr)}.right{display:none}.right.show{display:flex;position:fixed;inset:52px 0 0 auto;width:min(420px,100%);z-index:6;box-shadow:-15px 0 50px #0008}.mobile-tabs{display:block}}
+@media(max-width:640px){.layout{grid-template-columns:1fr}.sidebar{display:none}.top .status span.txt{display:none}.top-actions button{padding:6px;font-size:10px}.gh-top{font-size:0!important}.gh-top:before{content:"↗";font-size:13px}.bottom{height:150px}.brand .pill{display:none}}
+</style>
+</head>
 <body>
-<header class="top"><div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill">محیط توسعه هوشمند</span></div><div class="status" id="status">فایل‌ها فقط در همین نشست مرورگر نگهداری می‌شوند</div><div class="top-actions"><button class="mobile-tabs" onclick="document.querySelector('.right').classList.toggle('show')">چت هوش مصنوعی</button><button onclick="openConfig()">⚙ اتصال API</button><button class="github-top-btn" onclick="openGitHub()">↗ GitHub</button><button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button></div></header>
+<header class="top">
+  <div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill" id="storagePill">اتصال…</span></div>
+  <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
+  <div class="top-actions">
+    <button class="mobile-tabs" onclick="document.querySelector('.right').classList.toggle('show')">چت</button>
+    <button onclick="openSettings()" title="تنظیمات و حافظه">⚙</button>
+    <button onclick="toggleMemoryPanel()" title="حافظه‌ی بلندمدت">🧠</button>
+    <button class="gh-top" onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
+    <button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button>
+  </div>
+</header>
+
 <main class="layout">
-<aside class="sidebar"><div class="sidebar-head"><span>اکسپلورر</span><span class="tiny">WORKSPACE</span></div><div class="project">⌄ &nbsp; پروژه من</div><div class="tree" id="tree"></div><div class="sidebar-foot"><button onclick="newFile()">＋ فایل جدید</button><button onclick="downloadProject()">⇩ دانلود پروژه</button><button onclick="showTerminalHelp()">⌘ راهنمای ترمینال</button></div></aside>
-<section class="center"><div class="tabs"><div class="tab"><span class="dot">●</span><span id="tabName">index.html</span><span class="tiny">×</span></div><div style="display:flex;align-items:center;padding:0 10px;gap:6px"><button class="icon-btn" title="ذخیره فایل" onclick="saveEditor()">ذخیره</button><button class="icon-btn" title="حذف" onclick="deleteActive()">حذف</button></div></div><div class="editor-area"><div class="editor"><pre class="nums" id="nums">1</pre><textarea class="code" id="editor" spellcheck="false" aria-label="ویرایشگر کد" oninput="editorChanged()" onkeydown="editorKey(event)"></textarea></div></div><div class="bottom"><div class="bottom-head"><span class="selected">ترمینال</span><span>خروجی</span><span class="tiny">محیط مجازی امن</span><button class="icon-btn" style="margin-right:auto" onclick="clearTerminal()">پاک‌کردن</button></div><div class="terminal" id="terminal"><div>CodePilot Terminal · شل مجازی پروژه</div><div>برای دیدن دستورها، <span style="color:#80d6a4">help</span> را وارد کنید. اجرای دستورهای سیستم‌عامل در این نسخه غیرفعال است.</div><div class="cmdline"><span class="prompt">~/project $</span><input class="cmd" id="cmd" autocomplete="off" placeholder="help" onkeydown="if(event.key==='Enter')runCommand()"></div></div></div></section>
-<aside class="right"><div class="right-head"><strong>همراه کدنویسی</strong><button class="tiny" onclick="openConfig()">⚙ تنظیمات API</button></div><div class="chat" id="chat"><div class="welcome"><h2>سلام! آماده‌ی ساختنیم.</h2><p>در مورد تغییرات پروژه بگو. می‌توانم فایل‌ها را بخوانم و ویرایش کنم، ساختار پروژه را ببینم و دستورات مجاز شل مجازی را اجرا کنم.</p><div class="suggestions"><button onclick="quickPrompt('این پروژه را بررسی کن و پیشنهادهای بهبود بده.')">این پروژه را بررسی کن</button><button onclick="quickPrompt('یک صفحه فرود مدرن و واکنش‌گرا برای محصول من بساز.')">یک صفحه فرود بساز</button><button onclick="quickPrompt('کد فایل فعلی را توضیح بده و باگ‌های احتمالی را پیدا کن.')">کد فعلی را بررسی کن</button></div></div></div><div class="chatbox"><textarea class="chat-input" id="prompt" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea><div class="sendrow"><span class="hint">Enter ارسال · Shift+Enter خط جدید</span><button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button></div></div></aside>
+  <aside class="sidebar">
+    <div class="sidebar-head"><span>گفتگوها</span><span class="tiny" id="convCount">۰</span></div>
+    <div class="scroll">
+      <div id="convList" class="conv-list"></div>
+      <div class="progress" title="حجم تقریبی زمینه‌ی ارسالی به مدل">
+        <span id="ctxLabel">زمینه</span>
+        <span class="bar"><i id="ctxBar" style="width:0%"></i></span>
+      </div>
+      <div class="section-title">فایل‌های پروژه</div>
+      <div class="project" id="repoLine">⌂ مخزن متصل نیست</div>
+      <div id="tree" class="tree"></div>
+    </div>
+    <div class="sidebar-foot">
+      <button onclick="newConversation()">＋ گفتگوی جدید</button>
+      <button onclick="newFile()">＋ فایل جدید</button>
+      <button onclick="downloadProject()">⇩ دانلود پروژه</button>
+      <button onclick="showTerminalHelp()">⌘ راهنمای شل</button>
+    </div>
+  </aside>
+
+  <section class="center">
+    <div class="tabs">
+      <div class="tab"><span class="dot" id="tabDot">●</span><span class="tab-name" id="tabName">—</span></div>
+      <div class="tab-actions">
+        <button class="icon-btn" onclick="saveEditor(true)" title="ذخیره در D1">ذخیره</button>
+        <button class="icon-btn" onclick="deleteActive()" title="حذف فایل">حذف</button>
+      </div>
+    </div>
+    <div class="editor-area">
+      <div class="editor" id="editorWrap">
+        <pre class="nums" id="nums">1</pre>
+        <textarea class="code" id="editor" spellcheck="false" aria-label="ویرایشگر کد" oninput="editorChanged()" onkeydown="editorKey(event)"></textarea>
+      </div>
+      <div class="empty-editor" id="emptyEditor" style="display:none">
+        <div>
+          <div style="font-size:26px">◇</div>
+          <p style="color:#8b96aa;max-width:320px;line-height:1.9">هیچ فایلی وجود ندارد. با «فایل جدید» شروع کنید یا مخزن GitHub را وصل کنید تا فایل‌ها بارگذاری شوند.</p>
+        </div>
+      </div>
+    </div>
+    <div class="bottom">
+      <div class="bottom-head">
+        <span class="selected">ترمینال</span><span>خروجی</span><span class="tiny">شل مجازی و امن</span>
+        <button class="icon-btn" style="margin-right:auto" onclick="clearTerminal()">پاک‌کردن</button>
+      </div>
+      <div class="terminal" id="terminal"></div>
+    </div>
+  </section>
+
+  <aside class="right">
+    <div class="right-head">
+      <strong>همراه کدنویسی</strong>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="model-badge" id="modelBadge">—</span>
+        <button class="tiny ghost" onclick="openSettings()">حافظه</button>
+      </div>
+    </div>
+    <div class="chat" id="chat"></div>
+    <div class="chatbox">
+      <textarea class="chat-input" id="prompt" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+      <div class="sendrow">
+        <span class="hint" id="composerHint">Enter ارسال · Shift+Enter خط جدید</span>
+        <button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
+      </div>
+    </div>
+  </aside>
 </main>
-<div class="config" id="config" onclick="if(event.target===this)closeConfig()"><div class="modal"><h2>اتصال به API هوش مصنوعی</h2><p>اطلاعات در مرورگر ذخیره نمی‌شوند؛ کلید فقط برای درخواست فعلی ارسال می‌شود. آدرس از طریق سرور همین برنامه به API می‌رود.</p><label class="field-label" for="baseUrl">آدرس پایه API</label><input class="field" id="baseUrl" value="https://tooken.club/v1" autocomplete="url"><label class="field-label" for="apiKey">کلید API</label><input class="field" id="apiKey" type="password" placeholder="کلید را اینجا وارد کنید" autocomplete="new-password"><label class="field-label" for="model">نام مدل</label><input class="field" id="model" value="gpt-4o-mini" placeholder="مثلاً gpt-4o-mini"><div class="notice">امنیت: کلیدی که قبلاً در گفتگو فرستاده‌اید دیگر محرمانه محسوب نمی‌شود. پیش از استفاده، آن را از پنل ارائه‌دهنده باطل و یک کلید تازه بسازید. این نمونه فقط به https://tooken.club اجازه اتصال می‌دهد.</div><div class="modal-actions"><button onclick="closeConfig()">انصراف</button><button class="primary" onclick="saveConfig()">اعمال تنظیمات</button></div></div></div><div class="config" id="githubConfig" onclick="if(event.target===this)closeGitHub()"><div class="modal"><h2>اتصال مخزن GitHub</h2><p>با اتصال، دستیار می‌تواند فایل‌های مخزن انتخابی را بخواند و تغییرات را مستقیم Commit کند؛ Cloudflare سپس سایت را خودکار به‌روزرسانی می‌کند.</p><label class="field-label" for="repoUrl">آدرس مخزن GitHub</label><input class="field" id="repoUrl" placeholder="https://github.com/username/repository"><label class="field-label" for="repoBranch">شاخه</label><input class="field" id="repoBranch" value="main"><label class="field-label" for="ghToken">توکن Fine-grained GitHub</label><input class="field" id="ghToken" type="password" placeholder="توکن را اینجا وارد کن" autocomplete="new-password"><div class="notice">توکن در همین گوشی ذخیره می‌شود تا لازم نباشد هر بار واردش کنی؛ به مدل هوش مصنوعی فرستاده نمی‌شود. برای کم‌کردن خطر، توکن را فقط به همین مخزن محدود کن. در GitHub فقط دسترسی همین مخزن و Contents: Read and write بده؛ توکن را در چت یا فایل‌های مخزن نفرست.</div><label class="field-label" style="display:flex;align-items:center;gap:8px"><input id="rememberGh" type="checkbox" checked style="width:auto"> روی همین گوشی به خاطر بسپار</label><div id="ghMessage" class="tiny" style="margin-top:10px"></div><div class="modal-actions"><button onclick="disconnectGitHub()">قطع اتصال</button><button onclick="closeGitHub()">بستن</button><button class="primary" id="ghConnectBtn" onclick="connectGitHub()">اتصال و بارگذاری</button></div></div></div><div class="toast" id="toast"></div>
+
+<!-- GitHub modal -->
+<div class="modal" id="ghModal">
+  <div class="modal-card">
+    <h2>اتصال مخزن GitHub</h2>
+    <p>دستیار فایل‌ها را از مخزن می‌خواند و تغییرات را Commit می‌کند. توکن فقط در همین مرورگر می‌ماند و هرگز به مدل یا D1 فرستاده نمی‌شود؛ توکن جایگزین ورود کاربر نیست.</p>
+    <label class="field-label" for="repoUrl">آدرس مخزن</label>
+    <input class="field" id="repoUrl" placeholder="https://github.com/username/repo" autocomplete="url">
+    <label class="field-label" for="repoBranch">شاخه</label>
+    <input class="field" id="repoBranch" value="main">
+    <label class="field-label" for="ghToken">توکن Fine-grained (Contents: Read &amp; Write)</label>
+    <input class="field" id="ghToken" type="password" placeholder="github_pat_…" autocomplete="off">
+    <label class="field-label" style="display:flex;align-items:center;gap:8px">
+      <input id="rememberGh" type="checkbox" checked style="width:auto"> روی این دستگاه به خاطر بسپار (localStorage)
+    </label>
+    <div class="notice">توکن را در فایل‌های پروژه، چت یا حافظه نگذارید. پس از هر اشتباه، از GitHub باطلش کنید.</div>
+    <div id="ghMessage" class="tiny" style="margin-top:9px"></div>
+    <div class="modal-actions">
+      <button onclick="disconnectGitHub()">قطع اتصال</button>
+      <button onclick="closeModal('ghModal')">بستن</button>
+      <button class="primary" onclick="connectGitHub()">اتصال و بارگذاری</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings / memory modal -->
+<div class="modal" id="settingsModal">
+  <div class="modal-card">
+    <h2>تنظیمات و حافظه</h2>
+    <p>حساب، ذخیره‌سازی پایدار و حافظه‌ی بلندمدت دستیار.</p>
+
+    <div class="kv" id="accountInfo"></div>
+
+    <div class="section-title" style="padding-right:0;margin-top:14px">افزودن حافظه</div>
+    <label class="field-label" for="memKey">کلید (مثلاً stack)</label>
+    <input class="field" id="memKey" placeholder="stack" maxlength="80">
+    <label class="field-label" for="memValue">مقدار</label>
+    <input class="field" id="memValue" placeholder="پروژه با Cloudflare Pages و Vanilla JS نوشته می‌شود" maxlength="2000">
+    <label class="field-label" for="memScope">دامنه</label>
+    <select class="field" id="memScope"><option value="global">همه‌ی گفتگوها</option><option value="project">این پروژه</option></select>
+
+    <div id="memList" style="margin-top:12px"></div>
+
+    <div class="notice" id="storageNotice" style="display:none"></div>
+
+    <div class="modal-actions">
+      <button onclick="deleteAllData()" style="color:#ff9d92">حذف همه‌ی داده‌ها</button>
+      <button onclick="exportData()">خروجی JSON</button>
+      <button onclick="addMemory()" class="primary">افزودن حافظه</button>
+      <button onclick="closeModal('settingsModal')">بستن</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
-const files={
- 'index.html':'<!doctype html>\n<html lang="fa" dir="rtl">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <title>پروژه‌ی من</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <main class="hero">\n    <span class="eyebrow">یک شروع خوب</span>\n    <h1>ایده‌ات را به محصول تبدیل کن.</h1>\n    <p>این صفحه را با ویرایشگر یا دستیار هوش مصنوعی تغییر بده.</p>\n    <button onclick="document.querySelector(\'h1\').textContent=\'سلام دنیا!\'">امتحان کن</button>\n  </main>\n  <script src="app.js"><\/script>\n</body>\n</html>',
- 'style.css':':root { color-scheme: dark; font-family: system-ui, sans-serif; }\nbody { margin: 0; background: #101827; color: #f4f6fb; }\n.hero { min-height: 100vh; display: grid; align-content: center; justify-items: center; gap: 18px; text-align: center; padding: 24px; }\nh1 { font-size: clamp(2.2rem, 7vw, 5rem); margin: 0; }\np { color: #b7c1d2; }\nbutton { border: 0; border-radius: 999px; padding: 12px 22px; background: #8de0ad; color: #102018; cursor: pointer; }',
- 'app.js':'// جاوااسکریپت پروژه را اینجا بنویس.\nconsole.log("پروژه آماده است!");'
-};let active='index.html',dirty=false,apiKey='',baseUrl='https://tooken.club/v1',model='gpt-4o-mini',busy=false;let ghToken='',ghOwner='',ghRepo='',ghBranch='main',ghConnected=false;try{const g=JSON.parse(localStorage.getItem('cp-gh')||sessionStorage.getItem('cp-gh')||'{}');ghToken=g.token||'';ghOwner=g.owner||'';ghRepo=g.repo||'';ghBranch=g.branch||'main'}catch{}
-const $=id=>document.getElementById(id);function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function renderTree(){const tree=$('tree');tree.innerHTML='';Object.keys(files).sort().forEach(f=>{let row=document.createElement('div');row.className='tree-row'+(f===active?' active':'');row.innerHTML=`<span class="ico">${f.endsWith('.html')?'◇':f.endsWith('.css')?'▧':'JS'}</span><span>${escapeHtml(f)}</span>`;row.onclick=()=>openFile(f);tree.appendChild(row)})}
-function openFile(f){if(!(f in files))return;active=f;$('tabName').textContent=f;$('editor').value=files[f];dirty=false;updateNums();renderTree()}
-function editorChanged(){dirty=true;updateNums()}function saveEditor(){files[active]=$('editor').value;dirty=false;renderTree();toast('فایل ذخیره شد')}
-function updateNums(){const n=$('editor').value.split('\n').length;$('nums').textContent=Array.from({length:n},(_,i)=>i+1).join('\n')}
-function editorKey(e){if(e.key==='Tab'){e.preventDefault();let t=e.target,s=t.selectionStart,end=t.selectionEnd;t.value=t.value.slice(0,s)+'  '+t.value.slice(end);t.selectionStart=t.selectionEnd=s+2;editorChanged()}if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveEditor()}}
-function newFile(){let name=prompt('نام فایل جدید (مثلاً app.js):');if(!name)return;if(name.includes('/')||name.includes('..'))return toast('نام فایل نامعتبر است');if(files[name]!=null)return toast('این فایل وجود دارد');files[name]='';openFile(name);renderTree()}
-function deleteActive(){if(Object.keys(files).length<2)return toast('حداقل یک فایل باید باقی بماند');if(confirm(`فایل ${active} حذف شود؟`)){delete files[active];active=Object.keys(files)[0];openFile(active)}}
-function downloadProject(){Object.entries(files).forEach(([name,txt])=>{let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain'}));a.download=name;a.click();URL.revokeObjectURL(a.href)});toast('دانلود فایل‌ها شروع شد')}
-function addTerminal(text){const term=$('terminal'),line=document.createElement('div');line.textContent=text;term.insertBefore(line,term.lastElementChild);term.scrollTop=term.scrollHeight}
-function clearTerminal(){const t=$('terminal');t.innerHTML='<div>ترمینال پاک شد.</div><div class="cmdline"><span class="prompt">~/project $</span><input class="cmd" id="cmd" autocomplete="off" placeholder="help" onkeydown="if(event.key===\'Enter\')runCommand()"></div>'}
-function helpText(){return 'دستورهای شل مجازی: help, ls, pwd, cat <file>, touch <file>, mkdir <name>, echo <text> > <file>, rm <file>, clear, preview\nاین ترمینال به سیستم‌عامل و اینترنت دسترسی ندارد؛ فقط روی فایل‌های مجازی همین پروژه کار می‌کند.'}
-function showTerminalHelp(){addTerminal(helpText())}
-function runCommand(){const el=$('cmd');if(!el)return;const c=el.value.trim();if(!c)return;addTerminal('~/project $ '+c);el.value='';const [op,...rest]=c.split(/\s+/),arg=rest.join(' ');if(op==='help')addTerminal(helpText());else if(op==='pwd')addTerminal('/workspace/project');else if(op==='ls')addTerminal(Object.keys(files).join('   ')||'(خالی)');else if(op==='cat'){addTerminal(files[arg]!==undefined?files[arg]:`cat: فایل پیدا نشد: ${arg}`)}else if(op==='touch'){if(arg)files[arg]??='';renderTree();addTerminal(arg?'فایل ساخته شد':'نام فایل را وارد کنید')}else if(op==='mkdir'){addTerminal('پوشه‌ها در این نسخه پشتیبانی نمی‌شوند.')}else if(op==='rm'){if(files[arg]!==undefined&&Object.keys(files).length>1){delete files[arg];if(active===arg)openFile(Object.keys(files)[0]);renderTree();addTerminal('حذف شد')}else addTerminal('فایل پیدا نشد یا آخرین فایل پروژه است')}else if(op==='clear')clearTerminal();else if(op==='preview')runPreview();else if(op==='echo'&&c.includes('>')){const m=c.match(/^echo\s+(.*?)\s*>\s*(\S+)$/);if(m){files[m[2]]=m[1].replace(/^['"]|['"]$/g,'');renderTree();addTerminal('نوشته شد')}else addTerminal('الگو: echo متن > نام‌فایل')}else addTerminal('دستور ناشناخته. برای راهنما help را بزنید.')}
-function runPreview(){saveEditor();const html=files['index.html']||'<h1>فایل index.html نیست</h1>';const css=files['style.css']||'',js=files['app.js']||'';const src=html.replace(/<link[^>]*href=["']style\.css["'][^>]*>/i,`<style>${css.replace(/<\/style/gi,'<\\/style')}</style>`).replace(/<script[^>]*src=["']app\.js["'][^>]*><\/script>/i,`<script>${js.replace(/<\/script/gi,'<\\/script')}<\/script>`);const w=window.open('about:blank','_blank');if(w){w.document.open();w.document.write(src);w.document.close()}else toast('برای پیش‌نمایش، بازشدن پنجره را مجاز کنید')}
-function openConfig(){$('config').classList.add('open');$('baseUrl').value=baseUrl;$('apiKey').value=apiKey;$('model').value=model}function closeConfig(){$('config').classList.remove('open')}function saveConfig(){baseUrl=$('baseUrl').value.trim().replace(/\/$/,'');apiKey=$('apiKey').value.trim();model=$('model').value.trim()||'gpt-4o-mini';closeConfig();$('status').textContent=apiKey?'API آماده · کلید در حافظه نشست':'برای استفاده از دستیار، API را وصل کنید';toast(apiKey?'تنظیمات اعمال شد':'آدرس و مدل ذخیره شد')}
-function toast(t){const el=$('toast');el.textContent=t;el.style.display='block';setTimeout(()=>el.style.display='none',2400)}function quickPrompt(t){$('prompt').value=t;$('prompt').focus()}
-function appendMsg(text,who='assistant',isError=false){const chat=$('chat');const welcome=chat.querySelector('.welcome');if(welcome)welcome.remove();const div=document.createElement('div');div.className='msg '+who+(isError?' error':'');div.textContent=text;chat.appendChild(div);chat.scrollTop=chat.scrollHeight;return div}
-function openGitHub(){const saved=ghOwner&&ghRepo?`https://github.com/${ghOwner}/${ghRepo}`:'';$('repoUrl').value=saved;$('repoBranch').value=ghBranch||'main';$('ghToken').value=ghToken;$('ghMessage').textContent=ghConnected?'مخزن متصل است؛ تغییرات دستیار مستقیم ثبت می‌شوند.':'';$('githubConfig').classList.add('open')}
-function closeGitHub(){$('githubConfig').classList.remove('open')}
-function parseRepoUrl(value){const m=String(value||'').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/#?]+)\/?$/i);if(!m)throw new Error('آدرس مخزن را کامل وارد کن؛ مثل https://github.com/name/repo');return{owner:m[1],repo:m[2].replace(/\.git$/,'')}}
-function safeRepoPath(path){return typeof path==='string'&&path.length>0&&path.length<240&&!path.startsWith('/')&&!path.includes('..')&&!path.includes('\\')&&!path.startsWith('.github/')&&!/^(\.env|.*\.pem|.*\.key)$/i.test(path)}
-function b64ToUtf8(b64){const bin=atob(String(b64).replace(/\s/g,''));const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));return new TextDecoder('utf-8').decode(bytes)}
-function utf8ToB64(text){const bytes=new TextEncoder().encode(String(text));let bin='';for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);return btoa(bin)}
-async function ghFetch(path,options={}){const url=`https://api.github.com/repos/${encodeURIComponent(ghOwner)}/${encodeURIComponent(ghRepo)}/${path}`;const res=await fetch(url,{...options,headers:{'Accept':'application/vnd.github+json','Authorization':`Bearer ${ghToken}`,'X-GitHub-Api-Version':'2022-11-28',...(options.headers||{})}});let data={};try{data=await res.json()}catch{}if(!res.ok)throw new Error(data.message||`GitHub API error ${res.status}`);return data}
-async function connectGitHub(silent=false){const btn=$('ghConnectBtn'),msg=$('ghMessage');try{const parsed=parseRepoUrl($('repoUrl').value),token=$('ghToken').value.trim(),branch=$('repoBranch').value.trim()||'main';if(!token)throw new Error('توکن GitHub را وارد کن.');ghOwner=parsed.owner;ghRepo=parsed.repo;ghBranch=branch;ghToken=token;ghConnected=false;if(btn)btn.disabled=true;if(msg)msg.textContent='در حال بررسی مخزن و بارگذاری فایل‌ها…';const tree=await ghFetch(`git/trees/${encodeURIComponent(ghBranch)}?recursive=1`);if(tree.truncated)throw new Error('مخزن خیلی بزرگ است؛ فقط مخزن کوچک پروژه را وصل کن.');const entries=(tree.tree||[]).filter(x=>x.type==='blob'&&x.size<500000&&/\.(html|css|js|mjs|json|md|txt|yml|yaml|toml)$/i.test(x.path)&&safeRepoPath(x.path)&&!x.path.startsWith('.github/')).slice(0,100);if(!entries.length)throw new Error('فایل متنی قابل‌بارگذاری در مخزن پیدا نشد.');const loaded={};for(const entry of entries){try{const obj=await ghFetch(`contents/${entry.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ghBranch)}`);if(obj.type==='file'&&obj.content)loaded[entry.path]=b64ToUtf8(obj.content)}catch(e){console.warn('Skipped',entry.path,e.message)}}if(!loaded['index.html'])throw new Error('در ریشهٔ مخزن index.html پیدا نشد.');Object.keys(files).forEach(k=>delete files[k]);Object.assign(files,loaded);active='index.html';openFile(active);renderTree();ghConnected=true;const saved={owner:ghOwner,repo:ghRepo,branch:ghBranch,token:ghToken};if($('rememberGh')?.checked){localStorage.setItem('cp-gh',JSON.stringify(saved));sessionStorage.removeItem('cp-gh')}else{sessionStorage.setItem('cp-gh',JSON.stringify(saved));localStorage.removeItem('cp-gh')}if(msg)msg.textContent=`اتصال موفق؛ ${Object.keys(files).length} فایل بارگذاری شد. دستیار اکنون می‌تواند مستقیم Commit کند.`;$('status').textContent=`GitHub متصل: ${ghOwner}/${ghRepo}`;if(!silent)toast('مخزن GitHub متصل شد')}catch(e){ghConnected=false;if(msg)msg.textContent='خطا: '+e.message;else toast('GitHub: '+e.message)}finally{if(btn)btn.disabled=false}}
-function disconnectGitHub(){ghConnected=false;ghToken='';ghOwner='';ghRepo='';ghBranch='main';sessionStorage.removeItem('cp-gh');localStorage.removeItem('cp-gh');if($('ghToken'))$('ghToken').value='';if($('ghMessage'))$('ghMessage').textContent='اتصال قطع شد؛ فایل‌های فعلی در حافظه باقی مانده‌اند.';$('status').textContent='GitHub قطع است؛ فایل‌ها فقط در نشست مرورگر هستند';toast('اتصال GitHub پاک شد')}
-window.addEventListener('load',()=>{if(ghOwner&&ghRepo){$('repoUrl').value=`https://github.com/${ghOwner}/${ghRepo}`;$('repoBranch').value=ghBranch;if(ghToken){$('ghToken').value=ghToken;$('rememberGh').checked=!!localStorage.getItem('cp-gh');connectGitHub(true)}else $('status').textContent='مخزن آمادهٔ اتصال'}});
-const tools=[{type:'function',function:{name:'list_files',description:'List all files in the project workspace',parameters:{type:'object',properties:{},required:[]}}},{type:'function',function:{name:'read_file',description:'Read a project file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},{type:'function',function:{name:'write_file',description:'Create or overwrite a project file. When GitHub is connected, this immediately commits the file to the selected repository and triggers deployment; use only when the user asked for edits.',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},{type:'function',function:{name:'run_command',description:'Run one safe virtual shell command. Allowed: help, ls, pwd, cat, touch, echo >, preview',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}}];
-async function toolResult(name,args){if(name==='list_files')return JSON.stringify(Object.keys(files));if(name==='read_file')return files[args.path]??`Error: file not found: ${args.path}`;if(name==='write_file'){const path=String(args.path||'');if(!safeRepoPath(path))return 'Error: unsafe or invalid file path';const content=String(args.content??'');if(ghConnected){try{let sha;try{const old=await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ghBranch)}`);sha=old.sha}catch(e){if(!String(e.message).includes('Not Found'))throw e}const body={message:`CodePilot update: ${path}`,content:utf8ToB64(content),branch:ghBranch};if(sha)body.sha=sha;await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});files[path]=content;renderTree();if(path===active)openFile(active);return `Committed ${path} to GitHub branch ${ghBranch}. Cloudflare Pages will deploy the commit automatically.`}catch(e){return `GitHub write failed for ${path}: ${e.message}. Local file was not changed.`}}files[path]=content;renderTree();if(path===active)openFile(active);return `Saved ${path} locally (${content.length} chars). Connect GitHub to commit directly.`}if(name==='run_command'){const c=String(args.command||'').trim();if(c==='ls')return Object.keys(files).join('\n');if(c==='pwd')return '/workspace/project';if(c==='help')return helpText();if(c.startsWith('cat '))return files[c.slice(4)]??'Error: file not found';if(c.startsWith('touch ')){files[c.slice(6)]??='';renderTree();return 'File created locally'}if(c.startsWith('echo ')&&c.includes(' > ')){const m=c.match(/^echo\s+(.*?)\s*>\s*(\S+)$/);if(m){files[m[2]]=m[1];renderTree();return 'File written locally'}}if(c==='preview')return 'Preview can be opened with the Preview button.';return 'Command not allowed in the virtual shell.'}return 'Unknown tool'}
-async function apiCall(messages){const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseUrl,apiKey,payload:{model,messages,tools,tool_choice:'auto',temperature:0.3}})});let data;try{data=await res.json()}catch{throw new Error('پاسخ API قابل‌خواندن نیست')}if(!res.ok)throw new Error(data.error?.message||data.error||`خطای API (${res.status})`);return data}
-async function sendMessage(){if(busy)return;const text=$('prompt').value.trim();if(!text)return;if(!apiKey){openConfig();toast('اول اتصال API را تنظیم کنید');return}busy=true;$('sendBtn').textContent='در حال فکر…';$('sendBtn').disabled=true;$('prompt').value='';appendMsg(text,'user');const status=$('status');status.textContent='در حال دریافت پاسخ…';let messages=[{role:'system',content:'You are CodePilot, a helpful coding assistant. Work in the project files loaded from the connected GitHub repository, if connected; otherwise use the local virtual workspace. Inspect files before editing. When connected, write_file directly commits to the selected repository and triggers deployment, so only call write_file when the user explicitly asks for file changes. Keep changes focused. Explain what you changed in Persian unless the user uses another language. Never claim a command ran unless a tool confirms it. The shell is virtual and sandboxed.'},{role:'user',content:text}];try{let finalText='';for(let turn=0;turn<80;turn++){const data=await apiCall(messages),m=data.choices?.[0]?.message;if(!m)throw new Error('ساختار پاسخ API شناخته‌شده نیست؛ سازگاری با Chat Completions را بررسی کنید.');messages.push(m);if(m.tool_calls?.length){for(const call of m.tool_calls){let args={};try{args=JSON.parse(call.function.arguments||'{}')}catch{}const result=await toolResult(call.function.name,args);messages.push({role:'tool',tool_call_id:call.id,name:call.function.name,content:result})}continue}finalText=m.content||'عملیات انجام شد.';break}if(!finalText)finalText='به سقف مراحل ابزار رسیدم؛ درخواست را به بخش‌های کوچک‌تر تقسیم کنید.';appendMsg(finalText,'assistant');}catch(e){appendMsg('خطا: '+e.message,'assistant',true)}finally{busy=false;$('sendBtn').textContent='ارسال ↑';$('sendBtn').disabled=false;status.textContent='فایل‌ها فقط در همین نشست مرورگر نگهداری می‌شوند'}}
-renderTree();openFile(active);
-</script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55bc749bb19d398',t:'MTc5Mzg4MDg2OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55bc749bb19d398',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body></html>
+/* =========================================================================
+   CodePilot front-end
+   - Server (Cloudflare D1) is the source of truth. localStorage only caches
+     the GitHub connection and the last open conversation id.
+   - The Access-protected session is a HttpOnly cookie; the browser can never
+     read it, and it is refreshed by GET /api/auth.
+   ========================================================================= */
+'use strict';
+
+const API = {
+  auth: '/api/auth',
+  config: '/api/config',
+  state: '/api/state',
+  conversations: '/api/state/conversations',
+  chat: '/api/chat'
+};
+
+const state = {
+  ready: false,
+  auth: null,
+  config: null,
+  conversations: [],
+  conversationId: null,
+  messages: [],
+  memory: [],
+  workspace: { files: {}, active: '' },
+  repo: null,
+  modelLabel: '—',
+  contextTokens: 0,
+  contextBudget: 24000,
+  busy: false,
+  dirtyFiles: new Set(),
+  saveTimer: null,
+  streaming: false
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+const nowFa = (ts) => {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'همین حالا';
+  if (diff < 3_600_000) return faNum(Math.floor(diff / 60_000)) + ' دقیقه پیش';
+  if (diff < 86_400_000) return faNum(Math.floor(diff / 3_600_000)) + ' ساعت پیش';
+  return faNum(Math.floor(diff / 86_400_000)) + ' روز پیش';
+};
+
+function toast(text, ms = 2600) {
+  const el = $('toast');
+  el.textContent = text;
+  el.style.display = 'block';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (el.style.display = 'none'), ms);
+}
+function setSync(mode, text) {
+  const dot = $('syncDot');
+  dot.className = 'sync' + (mode === 'busy' ? ' busy' : mode === 'on' ? ' on' : '');
+  if (text) $('statusText').textContent = text;
+}
+function setStoragePill(ok, text) {
+  const pill = $('storagePill');
+  pill.textContent = text;
+  pill.className = 'pill' + (ok ? '' : ' off');
+}
+
+/* ----------------------------------- API ---------------------------------- */
+
+async function api(path, options = {}) {
+  const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
+  if (init.body && !init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
+  let res;
+  try {
+    res = await fetch(path, init);
+  } catch {
+    throw new Error('ارتباط با سرور برقرار نشد.');
+  }
+  let data = null;
+  const type = res.headers.get('Content-Type') || '';
+  if (type.includes('application/json')) {
+    try { data = await res.json(); } catch { data = null; }
+  }
+  if (!res.ok) {
+    const error = new Error((data && data.error) || `خطای سرور (${res.status})`);
+    error.status = res.status;
+    error.code = data && data.code;
+    throw error;
+  }
+  return data || {};
+}
+
+/* ---------------------------------- boot --------------------------------- */
+
+async function boot() {
+  renderTerminalIntro();
+  setSync('busy', 'در حال بررسی نشست…');
+  try {
+    const auth = await api(API.auth);
+    state.auth = auth;
+    setStoragePill(true, 'ذخیره‌سازی D1');
+    setSync('on', 'متصل · ' + (auth.user.email || 'حساب Access'));
+  } catch (error) {
+    setStoragePill(false, 'بدون ورود');
+    setSync('', 'نیاز به ورود');
+    showSignedOut(error);
+    return;
+  }
+
+  try {
+    const config = await api(API.config).catch(() => null);
+    if (config) {
+      state.config = config;
+      state.modelLabel = config.model || '—';
+      state.contextBudget = config.contextBudgetTokens || 24000;
+      $('modelBadge').textContent = state.modelLabel;
+    }
+  } catch { /* non-fatal */ }
+
+  try {
+    const snapshot = await api(API.state);
+    state.conversations = snapshot.conversations || [];
+    state.memory = snapshot.memory || [];
+    renderConversations();
+    renderMemory();
+  } catch (error) {
+    toast('بارگذاری گفتگوها ناموفق بود: ' + error.message, 4200);
+  }
+
+  restoreGitHub();
+  state.ready = true;
+
+  const last = localStorage.getItem('cp-last-conversation');
+  if (last && state.conversations.some((c) => c.id === last)) {
+    await openConversation(last);
+  } else if (state.conversations.length) {
+    await openConversation(state.conversations[0].id);
+  } else {
+    await newConversation(false);
+  }
+  if (!state.workspace.active && Object.keys(state.workspace.files).length === 0) {
+    addTerminal('workspace خالی است. فایل بسازید یا مخزن GitHub را وصل کنید.', 'dim');
+  }
+  setSync('on', 'همگام با ابر · ' + (state.auth.user.email || ''));
+}
+
+function showSignedOut(error) {
+  const chat = $('chat');
+  chat.innerHTML = `
+    <div class="welcome">
+      <h2>ورود امن لازم است</h2>
+      <p>${esc(error.message || '')}</p>
+      <div class="notice bad" style="margin-top:12px;direction:rtl">
+        این نسخه با <b>Cloudflare Access</b> محافظت می‌شود. اگر صفحه‌ی ورود نیامده، پروژه‌ی Pages را به Access وصل کنید
+        (تنظیمات لازم در فایل SETUP.md آمده است). پس از تنظیم، همین صفحه را دوباره بارگذاری کنید.
+        <br><br>کد خطا: <span style="direction:ltr;display:inline-block">${esc(error.code || error.status || '')}</span>
+      </div>
+      <div class="suggestions"><button onclick="location.reload()">↻ تلاش دوباره</button></div>
+    </div>`;
+  $('sendBtn').disabled = true;
+  $('prompt').disabled = true;
+}
+
+/* ------------------------------ conversations ---------------------------- */
+
+function renderConversations() {
+  const list = $('convList');
+  list.innerHTML = '';
+  $('convCount').textContent = faNum(state.conversations.length);
+  if (!state.conversations.length) {
+    list.innerHTML = '<div class="tiny" style="padding:10px">گفتگویی نیست.</div>';
+    return;
+  }
+  for (const conv of state.conversations) {
+    const row = document.createElement('div');
+    row.className = 'conv' + (conv.id === state.conversationId ? ' active' : '');
+    row.innerHTML = `
+      ${conv.pinned ? '<span class="pin">📌</span>' : ''}
+      <span class="title">${esc(conv.title || 'گفتگوی جدید')}</span>
+      <span class="meta"><span>${faNum(conv.messageCount || 0)} پیام</span><span>${nowFa(conv.updatedAt)}</span></span>
+      <div class="acts">
+        <button data-act="pin" title="سنجاق">${conv.pinned ? 'برداشتن سنجاق' : 'سنجاق'}</button>
+        <button data-act="rename" title="تغییر نام">نام</button>
+        <button data-act="delete" title="حذف">حذف</button>
+      </div>`;
+    row.onclick = (event) => {
+      const act = event.target.closest('button')?.dataset.act;
+      if (act === 'pin') return togglePin(conv);
+      if (act === 'rename') return renameConversation(conv);
+      if (act === 'delete') return removeConversation(conv);
+      openConversation(conv.id);
+    };
+    list.appendChild(row);
+  }
+}
+
+async function newConversation(open = true) {
+  setSync('busy', 'ساخت گفتگوی جدید…');
+  try {
+    const workspace = snapshotWorkspace();
+    const result = await api(API.state, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'create', workspace })
+    });
+    const conv = {
+      id: result.id,
+      title: 'گفتگوی جدید',
+      messageCount: 0,
+      updatedAt: Date.now(),
+      pinned: false
+    };
+    state.conversations.unshift(conv);
+    renderConversations();
+    if (open) await openConversation(result.id, { fresh: true });
+    setSync('on', 'گفتگوی جدید در D1 ذخیره شد');
+    return result.id;
+  } catch (error) {
+    toast('ساخت گفتگو ناموفق بود: ' + error.message, 3500);
+    setSync('', 'خطا در ذخیره‌سازی');
+    return null;
+  }
+}
+
+async function openConversation(id, { fresh = false } = {}) {
+  if (!fresh && id === state.conversationId && state.messages.length) return;
+  setSync('busy', 'بارگذاری گفتگو…');
+  try {
+    const data = await api(`${API.conversations}/${encodeURIComponent(id)}`);
+    state.conversationId = id;
+    state.messages = data.messages || [];
+    state.workspace = normalizeWorkspace(data.workspace || {});
+    localStorage.setItem('cp-last-conversation', id);
+    const conv = state.conversations.find((c) => c.id === id);
+    if (conv) Object.assign(conv, data.conversation || {});
+    renderConversations();
+    renderChat();
+    renderTree();
+    renderEditor();
+    updateContextMeter(data.conversation || {});
+    setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
+    document.querySelector('.right').classList.add('show');
+  } catch (error) {
+    toast('بازکردن گفتگو ناموفق بود: ' + error.message, 4000);
+    setSync('', 'خطا در بارگذاری');
+  }
+}
+
+async function togglePin(conv) {
+  try {
+    await api(API.state, { method: 'POST', body: JSON.stringify({ action: 'flags', id: conv.id, pinned: !conv.pinned }) });
+    conv.pinned = !conv.pinned;
+    renderConversations();
+  } catch (error) { toast(error.message); }
+}
+
+async function renameConversation(conv) {
+  const title = prompt('نام جدید گفتگو:', conv.title || '');
+  if (!title) return;
+  try {
+    const result = await api(API.state, { method: 'POST', body: JSON.stringify({ action: 'rename', id: conv.id, title }) });
+    conv.title = result.title;
+    renderConversations();
+  } catch (error) { toast(error.message); }
+}
+
+async function removeConversation(conv) {
+  if (!confirm('گفتگو و همه‌ی پیام‌هایش از پایگاه‌داده حذف شود؟')) return;
+  try {
+    await api(API.state, { method: 'POST', body: JSON.stringify({ action: 'delete', id: conv.id }) });
+    state.conversations = state.conversations.filter((c) => c.id !== conv.id);
+    if (state.conversationId === conv.id) {
+      state.conversationId = null;
+      state.messages = [];
+      if (state.conversations.length) await openConversation(state.conversations[0].id);
+      else await newConversation();
+    }
+    renderConversations();
+    toast('گفتگو حذف شد');
+  } catch (error) { toast(error.message); }
+}
+
+function updateContextMeter(conv) {
+  const used = Math.min(1, (state.contextTokens || 0) / state.contextBudget);
+  $('ctxBar').style.width = Math.round(used * 100) + '%';
+  $('ctxLabel').textContent = 'زمینه ' + faNum(Math.round(used * 100)) + '٪';
+  if (conv && conv.summaryUntil) {
+    $('ctxLabel').title = 'خلاصه‌ی حافظه تا پیام ' + conv.summaryUntil;
+  }
+}
+
+/* -------------------------------- workspace ------------------------------ */
+
+function normalizeWorkspace(input) {
+  const files = input && input.files && typeof input.files === 'object' ? { ...input.files } : {};
+  const active = input && input.active && files[input.active] !== undefined ? input.active : Object.keys(files)[0] || '';
+  return { files, active };
+}
+function snapshotWorkspace() {
+  return { files: state.workspace.files, active: state.workspace.active };
+}
+
+function renderTree() {
+  const tree = $('tree');
+  tree.innerHTML = '';
+  const names = Object.keys(state.workspace.files).sort();
+  $('repoLine').textContent = state.repo
+    ? `⌂ ${state.repo.owner}/${state.repo.repo} · ${state.repo.branch}`
+    : '⌂ مخزن متصل نیست (فایل‌ها در D1)';
+  if (!names.length) {
+    tree.innerHTML = '<div class="tiny" style="padding:8px">فایلی نیست</div>';
+    return;
+  }
+  for (const name of names) {
+    const row = document.createElement('div');
+    row.className = 'tree-row' + (name === state.workspace.active ? ' active' : '');
+    const icon = name.endsWith('.html') ? '◇' : name.endsWith('.css') ? '▧' : name.endsWith('.json') ? '{}' : name.endsWith('.md') ? '¶' : 'JS';
+    const dirty = state.dirtyFiles.has(name) ? '<span class="badge">●</span>' : '';
+    row.innerHTML = `<span class="ico">${icon}</span><span class="name">${esc(name)}</span>${dirty}`;
+    row.onclick = () => openFile(name);
+    tree.appendChild(row);
+  }
+}
+
+function openFile(name) {
+  if (state.workspace.files[name] === undefined) return;
+  state.workspace.active = name;
+  renderTree();
+  renderEditor();
+}
+
+function renderEditor() {
+  const name = state.workspace.active;
+  const has = name && state.workspace.files[name] !== undefined;
+  $('editorWrap').style.display = has ? 'flex' : 'none';
+  $('emptyEditor').style.display = has ? 'none' : 'grid';
+  if (!has) {
+    $('tabName').textContent = '—';
+    return;
+  }
+  $('tabName').textContent = name;
+  $('editor').value = state.workspace.files[name];
+  $('tabDot').className = 'dot' + (state.dirtyFiles.has(name) ? '' : ' ok');
+  updateNums();
+}
+
+function updateNums() {
+  const lines = $('editor').value.split('\n').length;
+  $('nums').textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+}
+
+function editorChanged() {
+  const name = state.workspace.active;
+  if (!name) return;
+  state.workspace.files[name] = $('editor').value;
+  state.dirtyFiles.add(name);
+  $('tabDot').className = 'dot';
+  updateNums();
+  renderTree();
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(() => saveEditor(false), 1200);
+}
+
+function editorKey(event) {
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    const el = event.target;
+    const start = el.selectionStart;
+    el.value = el.value.slice(0, start) + '  ' + el.value.slice(el.selectionEnd);
+    el.selectionStart = el.selectionEnd = start + 2;
+    editorChanged();
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    saveEditor(true);
+  }
+}
+
+async function saveEditor(notify = false) {
+  if (!state.conversationId) return;
+  const name = state.workspace.active;
+  if (name) state.workspace.files[name] = $('editor').value;
+  try {
+    setSync('busy', 'ذخیره در D1…');
+    await api(API.state, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'workspace', id: state.conversationId, workspace: snapshotWorkspace() })
+    });
+    state.dirtyFiles.clear();
+    renderTree();
+    $('tabDot').className = 'dot ok';
+    setSync('on', 'ذخیره شد');
+    if (notify) toast('فایل در D1 ذخیره شد');
+  } catch (error) {
+    setSync('', 'ذخیره نشد');
+    toast('ذخیره ناموفق: ' + error.message);
+  }
+}
+
+function newFile() {
+  const name = prompt('نام فایل جدید (مثلاً app.js):');
+  if (!name) return;
+  if (!/^[\w./-]{1,200}$/.test(name) || name.includes('..') || name.startsWith('/')) return toast('نام فایل نامعتبر است');
+  if (state.workspace.files[name] !== undefined) return toast('این فایل وجود دارد');
+  state.workspace.files[name] = '';
+  state.workspace.active = name;
+  state.dirtyFiles.add(name);
+  renderTree();
+  renderEditor();
+  saveEditor(false);
+}
+
+function deleteActive() {
+  const name = state.workspace.active;
+  if (!name) return;
+  if (Object.keys(state.workspace.files).length < 2) return toast('حداقل یک فایل باید بماند');
+  if (!confirm(`فایل ${name} حذف شود؟`)) return;
+  delete state.workspace.files[name];
+  state.dirtyFiles.delete(name);
+  state.workspace.active = Object.keys(state.workspace.files)[0] || '';
+  renderTree();
+  renderEditor();
+  saveEditor(false);
+}
+
+function downloadProject() {
+  const names = Object.keys(state.workspace.files);
+  if (!names.length) return toast('فایلی برای دانلود نیست');
+  names.forEach((name, i) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([state.workspace.files[name]], { type: 'text/plain' }));
+      a.download = name.split('/').pop();
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, i * 250);
+  });
+  toast('دانلود فایل‌ها آغاز شد');
+}
+
+/* -------------------------------- terminal ------------------------------- */
+
+function addTerminal(text, cls = '') {
+  const term = $('terminal');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = text;
+  term.appendChild(line);
+  term.scrollTop = term.scrollHeight;
+}
+function renderTerminalIntro() {
+  const term = $('terminal');
+  term.innerHTML = '';
+  addTerminal('CodePilot shell · virtual sandbox', 'dim');
+  addTerminal('help را بزنید تا دستورهای مجاز را ببینید. اجرای فرمان سیستم‌عامل و دسترسی شبکه غیرفعال است.', 'dim');
+  const line = document.createElement('div');
+  line.className = 'cmdline';
+  line.innerHTML = '<span class="prompt">~/project $</span><input class="cmd" id="cmd" autocomplete="off" placeholder="help" onkeydown="if(event.key===\'Enter\')runLocalCommand()">';
+  term.appendChild(line);
+}
+function clearTerminal() { renderTerminalIntro(); }
+function showTerminalHelp() {
+  addTerminal('help, pwd, ls, cat <file>, touch <file>, echo <text> > <file>, rm <file>, clear, preview — همه محلی و بی‌خطر.', 'dim');
+}
+function runLocalCommand() {
+  const el = $('cmd');
+  if (!el) return;
+  const command = el.value.trim();
+  if (!command) return;
+  el.value = '';
+  addTerminal('~/project $ ' + command);
+  const files = state.workspace.files;
+  const [op, ...rest] = command.split(/\s+/);
+  const arg = rest.join(' ');
+  if (op === 'help') return showTerminalHelp();
+  if (op === 'pwd') return addTerminal('/workspace/project');
+  if (op === 'ls') return addTerminal(Object.keys(files).sort().join('   ') || '(خالی)');
+  if (op === 'cat') return addTerminal(files[arg] !== undefined ? files[arg] : 'cat: فایل پیدا نشد: ' + arg);
+  if (op === 'rm') {
+    if (files[arg] === undefined) return addTerminal('فایل پیدا نشد', 'err');
+    if (Object.keys(files).length < 2) return addTerminal('آخرین فایل را نمی‌توان حذف کرد', 'err');
+    delete files[arg];
+    if (state.workspace.active === arg) state.workspace.active = Object.keys(files)[0] || '';
+    renderTree();
+    renderEditor();
+    saveEditor(false);
+    return addTerminal('حذف شد', 'ok');
+  }
+  if (op === 'touch' && arg) {
+    if (files[arg] === undefined) files[arg] = '';
+    renderTree();
+    saveEditor(false);
+    return addTerminal('ساخته شد', 'ok');
+  }
+  if (op === 'echo' && command.includes('>')) {
+    const match = command.match(/^echo\s+([\s\S]*?)\s*>\s*(\S+)$/);
+    if (match) {
+      files[match[2]] = match[1].replace(/^["']|["']$/g, '');
+      renderTree();
+      saveEditor(false);
+      return addTerminal('نوشته شد', 'ok');
+    }
+  }
+  if (op === 'clear') return clearTerminal();
+  if (op === 'preview') return runPreview();
+  addTerminal('دستور پشتیبانی نمی‌شود. help را بزنید.', 'err');
+}
+
+/* -------------------------------- preview -------------------------------- */
+
+function runPreview() {
+  const name = state.workspace.active;
+  if (name && $('editor').value !== undefined) state.workspace.files[name] = $('editor').value;
+  const html = state.workspace.files['index.html'];
+  if (!html) return toast('index.html در فایل‌های پروژه نیست');
+  const css = state.workspace.files['style.css'] || '';
+  const js = state.workspace.files['app.js'] || '';
+  const src = html
+    .replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, () => `<style>${css.replace(/<\/style/gi, '<\\/style')}</style>`)
+    .replace(/<script[^>]*src=["']app\.js["'][^>]*><\/script>/i, () => `<script>${js.replace(/<\/script/gi, '<\\/script')}<\/script>`);
+  const win = window.open('about:blank', '_blank');
+  if (!win) return toast('برای پیش‌نمایش، پنجره‌ی جدید را مجاز کنید');
+  win.document.open();
+  win.document.write(src);
+  win.document.close();
+}
+
+/* ---------------------------------- chat --------------------------------- */
+
+function renderChat() {
+  const chat = $('chat');
+  chat.innerHTML = '';
+  if (!state.messages.length) {
+    chat.innerHTML = welcomeHtml();
+    return;
+  }
+  for (const message of state.messages) appendMessageElement(message);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function welcomeHtml() {
+  return `<div class="welcome">
+    <h2>سلام! گفتگو در ابر ذخیره می‌شود.</h2>
+    <p>هر پیام، تغییر فایل و خلاصه‌ی حافظه در D1 نگه داشته می‌شود؛ با هر دستگاه دیگری وارد شوید، همین گفتگو را ادامه می‌دهید.</p>
+    <ol>
+      <li>«فایل‌ها را بررسی کن» → دستیار اول می‌خواند، بعد ویرایش می‌کند.</li>
+      <li>تغییرات با write_file ذخیره و در صورت اتصال GitHub، Commit می‌شوند.</li>
+      <li>حافظه‌ی بلندمدت را از ⚙ مدیریت کنید.</li>
+    </ol>
+    <div class="suggestions">
+      <button onclick="quickPrompt('فایل‌های پروژه را بررسی کن و یک جمع‌بندی کوتاه بده.')">فایل‌ها را بررسی کن</button>
+      <button onclick="quickPrompt('یک صفحه فرود مدرن و واکنش‌گرا برای محصول من بساز.')">صفحه فرود بساز</button>
+      <button onclick="quickPrompt('باگ‌های احتمالی فایل فعلی را پیدا کن و توضیح بده.')">بازبینی کد فعلی</button>
+    </div>
+  </div>`;
+}
+
+function quickPrompt(text) {
+  $('prompt').value = text;
+  $('prompt').focus();
+}
+
+function appendMessageElement(message) {
+  const chat = $('chat');
+  const welcome = chat.querySelector('.welcome');
+  if (welcome) welcome.remove();
+  const div = document.createElement('div');
+  const role = message.role === 'user' ? 'user' : 'assistant';
+  div.className = 'msg ' + role;
+  if (message.role === 'tool') {
+    div.className = 'msg assistant';
+    const label = { list_files: 'فهرست فایل‌ها', read_file: 'خواندن فایل', write_file: 'نوشتن فایل', run_command: 'اجرای فرمان' };
+    div.innerHTML =
+      `<div class="tool-line done">✔ نتیجه‌ی ابزار · <span style="direction:ltr;display:inline-block">${esc(message.tool_call_id || '')}</span></div>` +
+      `<pre style="max-height:240px">${esc(String(message.content || '').slice(0, 4000))}</pre>`;
+    chat.appendChild(div);
+    return div;
+  }
+  if (role === 'user') {
+    div.textContent = message.content || '';
+  } else {
+    div.innerHTML = renderMarkdownish(message.content || '');
+    if (Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        div.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.function.name, call.function.arguments, false));
+      }
+    }
+    const acts = document.createElement('div');
+    acts.className = 'msg-actions';
+    acts.innerHTML = '<button>کپی</button><button>حذف از اینجا</button>';
+    acts.children[0].onclick = () => { navigator.clipboard?.writeText(message.content || ''); toast('کپی شد'); };
+    acts.children[1].onclick = () => rewindTo(message.seq);
+    div.appendChild(acts);
+  }
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function toolLineHtml(id, name, detail, done) {
+  const label = { list_files: '📂 فهرست فایل‌ها', read_file: '📄 خواندن فایل', write_file: '✏️ نوشتن فایل', run_command: '⌘ اجرای فرمان' }[name] || name;
+  const short = String(detail || '').replace(/\s+/g, ' ').slice(0, 160);
+  return `<div class="tool-line ${done ? 'done' : ''}" data-tool-id="${esc(id)}">${label}<span style="color:#6f7d92">·</span><span style="overflow:hidden;text-overflow:ellipsis">${esc(short)}</span></div>`;
+}
+
+// Minimal, safe markdown: code fences + inline code + line breaks. No raw HTML.
+function renderMarkdownish(text) {
+  const parts = String(text).split(/```/);
+  return parts
+    .map((part, index) => {
+      if (index % 2 === 1) {
+        const body = part.replace(/^[a-zA-Z0-9_-]*\n/, '');
+        return `<pre>${esc(body)}</pre>`;
+      }
+      return esc(part).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    })
+    .join('');
+}
+
+async function sendMessage() {
+  if (state.busy) return;
+  const input = $('prompt');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
+  if (!state.conversationId) {
+    const id = await newConversation(false);
+    if (!id) return;
+  }
+
+  state.busy = true;
+  $('sendBtn').disabled = true;
+  $('sendBtn').textContent = 'در حال کار…';
+  $('composerHint').textContent = 'در حال اجرا…';
+  input.value = '';
+  setSync('busy', 'درخواست به مدل…');
+
+  const userMessage = { role: 'user', content: text, created_at: Date.now() };
+  state.messages.push(userMessage);
+  appendMessageElement(userMessage);
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg assistant';
+  bubble.innerHTML = '<div class="msg-text"><span class="typing"><i></i><i></i><i></i></span></div>';
+  $('chat').appendChild(bubble);
+  $('chat').scrollTop = $('chat').scrollHeight;
+
+  try {
+    const response = await fetch(API.chat, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: state.conversationId,
+        message: text,
+        repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
+      })
+    });
+
+    if (!response.ok) {
+      let data = null;
+      try { data = await response.json(); } catch { /* ignore */ }
+      throw new Error((data && data.error) || `خطای سرور (${response.status})`);
+    }
+    if (!(response.headers.get('Content-Type') || '').includes('text/event-stream')) {
+      const data = await response.json();
+      throw new Error(data.error || 'پاسخ سرور قابل خواندن نیست');
+    }
+
+    const result = await consumeStream(response, bubble);
+    if (result.ok) await reloadCurrentConversation();
+  } catch (error) {
+    bubble.className = 'msg assistant error';
+    bubble.textContent = 'خطا: ' + error.message;
+    state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+  } finally {
+    state.busy = false;
+    $('sendBtn').disabled = false;
+    $('sendBtn').textContent = 'ارسال ↑';
+    $('composerHint').textContent = 'Enter ارسال · Shift+Enter خط جدید';
+    setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
+    loadConversations();
+  }
+}
+
+async function consumeStream(response, bubble) {
+  let persisted = false;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let assistantText = '';
+  const textArea = bubble.querySelector('.msg-text');
+  textArea.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+
+  const handle = (event, data) => {
+    if (event === 'status') {
+      setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
+    } else if (event === 'tool') {
+      for (const call of data.calls || []) {
+        bubble.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.name, call.arguments, false));
+      }
+      $('chat').scrollTop = $('chat').scrollHeight;
+    } else if (event === 'tool_result') {
+      const line = bubble.querySelector(`[data-tool-id="${cssEscape(data.id)}"]`);
+      if (line) {
+        line.classList.add('done');
+        line.insertAdjacentHTML('beforeend', `<span style="color:#6f7d92">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:150px">${esc(String(data.result || '').slice(0, 120).replace(/\s+/g, ' '))}</span>`);
+      }
+    } else if (event === 'assistant') {
+      assistantText = data.content || '';
+      textArea.innerHTML = renderMarkdownish(assistantText);
+      $('chat').scrollTop = $('chat').scrollHeight;
+    } else if (event === 'done') {
+      if (data.workspace) {
+        state.workspace = normalizeWorkspace(data.workspace);
+        renderTree();
+        renderEditor();
+        // Commit only the file the agent actually touched, never the whole repo.
+        if (data.touchedFile) {
+          state.dirtyFiles.add(data.touchedFile);
+          commitFile(data.touchedFile).catch(() => {});
+        }
+      }
+      if (data.context && Number.isFinite(data.context.estimatedTokens)) {
+        state.contextTokens = data.context.estimatedTokens;
+      }
+      if (data.conversation) {
+        updateContextMeter(data.conversation);
+        $('ctxLabel').title =
+          'خلاصه تا پیام ' + faNum(data.context?.summaryUntil || 0) + ' · ' +
+          faNum(data.context?.recentMessages || 0) + ' پیام اخیر در زمینه';
+      }
+      if (assistantText) {
+        bubble.querySelectorAll('.msg-actions').forEach((el) => el.remove());
+        const acts = document.createElement('div');
+        acts.className = 'msg-actions';
+        acts.innerHTML = '<button>کپی</button><button>حذف از اینجا</button>';
+        acts.children[0].onclick = () => { navigator.clipboard?.writeText(assistantText); toast('کپی شد'); };
+        acts.children[1].onclick = () => rewindTo(state.messages.at(-1)?.seq);
+        bubble.appendChild(acts);
+      }
+      persisted = true;
+      setSync('on', 'ذخیره شد در D1');
+    } else if (event === 'error') {
+      throw new Error(data.error || 'خطای پردازش');
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let index;
+      while ((index = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        let eventName = 'message';
+        let dataRaw = '';
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataRaw += line.slice(5).trim();
+        }
+        if (!dataRaw) continue;
+        let data;
+        try { data = JSON.parse(dataRaw); } catch { continue; }
+        handle(eventName, data);
+      }
+    }
+  } catch (error) {
+    bubble.className = 'msg assistant error';
+    bubble.textContent = 'خطا: ' + error.message;
+    state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+  } finally {
+    if (!assistantText && !bubble.textContent.trim()) {
+      bubble.innerHTML = '<span class="tiny">بدون پاسخ</span>';
+    }
+  }
+  return { ok: persisted, text: assistantText };
+}
+
+function cssEscape(value) {
+  return String(value || '').replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * Re-read the conversation from D1 after a turn so the client shows exactly
+ * what was persisted (server-assigned seq numbers, redacted text, tool groups).
+ */
+async function reloadCurrentConversation() {
+  if (!state.conversationId) return;
+  try {
+    const data = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}`);
+    state.messages = data.messages || [];
+    const conv = state.conversations.find((c) => c.id === state.conversationId);
+    if (conv && data.conversation) Object.assign(conv, data.conversation);
+    renderChat();
+    updateContextMeter(data.conversation || {});
+  } catch { /* keep the optimistic view */ }
+}
+
+async function loadConversations() {
+  try {
+    const data = await api(API.conversations);
+    state.conversations = data.conversations || [];
+    renderConversations();
+  } catch { /* silent */ }
+}
+
+/** Rewind: drop every message from `seq` onwards on the server and in the UI. */
+async function rewindTo(seq) {
+  if (typeof seq !== 'number') return toast('این پیام قابل بازگردانی نیست');
+  if (!confirm('همه‌ی پیام‌های بعد از این نقطه حذف شوند؟ (فایل‌ها دست نمی‌خورند)')) return;
+  const index = state.messages.findIndex((m) => m.seq === seq);
+  if (index < 0) return;
+  const kept = state.messages.slice(0, index);
+  try {
+    await api(API.state, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'replace-messages', id: state.conversationId, messages: kept })
+    });
+    state.messages = kept;
+    renderChat();
+    toast('تاریخچه بازگردانی شد');
+  } catch (error) { toast(error.message); }
+}
+
+/* --------------------------------- memory -------------------------------- */
+
+function renderMemory() {
+  const list = $('memList');
+  if (!list) return;
+  if (!state.memory.length) {
+    list.innerHTML = '<div class="tiny" style="padding:6px">حافظه‌ای ثبت نشده. دستیار از خلاصه‌ی گفتگوها هم استفاده می‌کند.</div>';
+    return;
+  }
+  list.innerHTML = state.memory
+    .map(
+      (m) => `<div class="memory-item">
+        <div style="min-width:0">
+          <div class="key">${esc(m.key)} <span style="color:#6f7d92">[${esc(m.scope)}]</span></div>
+          <div class="val">${esc(m.value)}</div>
+        </div>
+        <button onclick="removeMemory('${esc(m.key)}','${esc(m.scope)}')">حذف</button>
+      </div>`
+    )
+    .join('');
+}
+
+async function addMemory() {
+  const key = $('memKey').value.trim();
+  const value = $('memValue').value.trim();
+  const scope = $('memScope').value;
+  if (!key || !value) return toast('کلید و مقدار لازم است');
+  try {
+    const result = await api('/api/state/memory', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'upsert', key, value, scope, project: state.repo ? state.repo.repo : '' })
+    });
+    state.memory = [result.memory, ...state.memory.filter((m) => !(m.key === key && m.scope === scope))];
+    $('memKey').value = '';
+    $('memValue').value = '';
+    renderMemory();
+    toast('حافظه ذخیره شد');
+  } catch (error) { toast(error.message); }
+}
+
+async function removeMemory(key, scope) {
+  try {
+    await api('/api/state/memory', { method: 'POST', body: JSON.stringify({ action: 'delete', key, scope }) });
+    state.memory = state.memory.filter((m) => !(m.key === key && m.scope === scope));
+    renderMemory();
+  } catch (error) { toast(error.message); }
+}
+
+/* -------------------------------- settings ------------------------------- */
+
+function openSettings() {
+  const info = $('accountInfo');
+  info.innerHTML = `
+    <b>حساب</b><span style="direction:ltr;text-align:left">${esc(state.auth?.user?.email || '—')}</span>
+    <b>ذخیره‌سازی</b><span>Cloudflare D1 (سرور) · ورود با Cloudflare Access</span>
+    <b>مدل</b><span style="direction:ltr;text-align:left">${esc(state.modelLabel)}</span>
+    <b>مخزن</b><span style="direction:ltr;text-align:left">${state.repo ? esc(`${state.repo.owner}/${state.repo.repo}@${state.repo.branch}`) : 'متصل نیست'}</span>`;
+  renderMemory();
+  $('settingsModal').classList.add('open');
+}
+
+async function exportData() {
+  try {
+    const data = await api(API.state, { method: 'POST', body: JSON.stringify({ action: 'export' }) });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `codepilot-export-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('خروجی آماده شد');
+  } catch (error) { toast(error.message); }
+}
+
+async function deleteAllData() {
+  if (!confirm('همه‌ی گفتگوها، پیام‌ها و حافظه‌ی این حساب از D1 حذف شوند؟ این کار برگشت‌پذیر نیست.')) return;
+  if (!confirm('مطمئنید؟ یک نسخه‌ی پشتیبان با دکمه‌ی خروجی JSON بگیرید.')) return;
+  try {
+    await api(API.state, { method: 'POST', body: JSON.stringify({ action: 'delete-all' }) });
+    state.conversations = [];
+    state.memory = [];
+    state.messages = [];
+    state.conversationId = null;
+    renderConversations();
+    renderMemory();
+    renderChat();
+    await newConversation();
+    toast('داده‌ها حذف شد');
+  } catch (error) { toast(error.message); }
+}
+
+function toggleMemoryPanel() {
+  openSettings();
+  if (state.memory.length) $('memList').scrollIntoView({ block: 'nearest' });
+  else $('memKey').focus();
+}
+
+function closeModal(id) { $(id).classList.remove('open'); }
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') document.querySelectorAll('.modal.open').forEach((m) => m.classList.remove('open'));
+});
+document.querySelectorAll('.modal').forEach((modal) => {
+  modal.addEventListener('click', (event) => { if (event.target === modal) modal.classList.remove('open'); });
+});
+
+/* --------------------------------- GitHub -------------------------------- */
+
+const GH_STORE = 'cp-gh';
+
+function restoreGitHub() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(GH_STORE) || sessionStorage.getItem(GH_STORE) || 'null');
+  } catch { saved = null; }
+  if (!saved || !saved.owner || !saved.repo || !saved.token) return;
+  state.repo = { owner: saved.owner, repo: saved.repo, branch: saved.branch || 'main' };
+  renderTree();
+  syncRepoWorkspace().catch(() => {});
+}
+
+function openGitHub() {
+  $('repoUrl').value = state.repo ? `https://github.com/${state.repo.owner}/${state.repo.repo}` : '';
+  $('repoBranch').value = state.repo?.branch || 'main';
+  const saved = localStorage.getItem(GH_STORE) ? JSON.parse(localStorage.getItem(GH_STORE)) : null;
+  $('ghToken').value = saved?.token || '';
+  $('ghMessage').textContent = '';
+  $('ghModal').classList.add('open');
+}
+
+function parseRepoUrl(value) {
+  const match = String(value || '').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/#?]+?)(?:\.git)?\/?$/i);
+  if (!match) throw new Error('آدرس کامل مخزن را وارد کنید: https://github.com/user/repo');
+  return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+}
+
+async function ghFetch(path, options = {}) {
+  const repo = state.repo;
+  const saved = JSON.parse(localStorage.getItem(GH_STORE) || sessionStorage.getItem(GH_STORE) || '{}');
+  const token = saved.token;
+  if (!token) throw new Error('توکن GitHub در این دستگاه نیست؛ دوباره وصل کنید.');
+  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/${path}`, {
+    ...options,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(options.headers || {})
+    }
+  });
+  let data = {};
+  try { data = await response.json(); } catch { /* ignore */ }
+  if (!response.ok) throw new Error(data.message || `GitHub ${response.status}`);
+  return data;
+}
+
+function utf8ToB64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+function b64ToUtf8(value) {
+  const binary = atob(String(value).replace(/\s+/g, ''));
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+async function connectGitHub() {
+  const message = $('ghMessage');
+  try {
+    const parsed = parseRepoUrl($('repoUrl').value);
+    const token = $('ghToken').value.trim();
+    const branch = $('repoBranch').value.trim() || 'main';
+    if (!token) throw new Error('توکن را وارد کنید');
+    state.repo = { ...parsed, branch };
+    const saved = { ...parsed, branch, token };
+    const remember = $('rememberGh').checked;
+    if (remember) { localStorage.setItem(GH_STORE, JSON.stringify(saved)); sessionStorage.removeItem(GH_STORE); }
+    else { sessionStorage.setItem(GH_STORE, JSON.stringify(saved)); localStorage.removeItem(GH_STORE); }
+    message.textContent = 'در حال خواندن مخزن…';
+    await syncRepoWorkspace();
+    message.textContent = 'اتصال موفق؛ فایل‌ها از مخزن بارگذاری و در D1 ذخیره شدند.';
+    renderTree();
+    await saveEditor(false);
+    toast('مخزن GitHub وصل شد');
+  } catch (error) {
+    message.textContent = 'خطا: ' + error.message;
+  }
+}
+
+async function syncRepoWorkspace() {
+  if (!state.repo) return;
+  const tree = await ghFetch(`git/trees/${encodeURIComponent(state.repo.branch)}?recursive=1`);
+  if (tree.truncated) throw new Error('مخزن بیش از حد بزرگ است');
+  const entries = (tree.tree || []).filter(
+    (item) => item.type === 'blob' && item.size < 200_000 && /\.(html|css|js|mjs|json|md|txt|yml|yaml|toml|svg)$/i.test(item.path)
+  ).slice(0, 80);
+  const loaded = {};
+  for (const entry of entries) {
+    try {
+      const file = await ghFetch(`contents/${entry.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(state.repo.branch)}`);
+      if (file.content) loaded[entry.path] = b64ToUtf8(file.content);
+    } catch { /* skip unreadable files */ }
+  }
+  state.workspace = normalizeWorkspace({ files: loaded, active: loaded['index.html'] !== undefined ? 'index.html' : Object.keys(loaded)[0] });
+  state.dirtyFiles.clear();
+  renderTree();
+  renderEditor();
+}
+
+function disconnectGitHub() {
+  state.repo = null;
+  localStorage.removeItem(GH_STORE);
+  sessionStorage.removeItem(GH_STORE);
+  renderTree();
+  $('ghMessage').textContent = 'اتصال قطع شد؛ فایل‌های D1 دست‌نخورده ماندند.';
+  toast('GitHub قطع شد');
+}
+
+async function commitFile(path) {
+  if (!state.repo || !state.workspace.files[path]) return;
+  const content = state.workspace.files[path];
+  try {
+    let sha;
+    try {
+      const existing = await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(state.repo.branch)}`);
+      sha = existing.sha;
+    } catch (error) {
+      if (!/not found/i.test(error.message)) throw error;
+    }
+    const body = { message: `CodePilot: update ${path}`, content: utf8ToB64(content), branch: state.repo.branch };
+    if (sha) body.sha = sha;
+    await ghFetch(`contents/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    state.dirtyFiles.delete(path);
+    renderTree();
+    addTerminal(`Committed ${path} → ${state.repo.owner}/${state.repo.repo}@${state.repo.branch}`, 'ok');
+  } catch (error) {
+    addTerminal(`Commit failed for ${path}: ${error.message}`, 'err');
+  }
+}
+
+/* --------------------------------- start --------------------------------- */
+
+window.addEventListener('DOMContentLoaded', boot);
+
+// Best-effort flush when the tab is hidden (mobile browsers may kill it).
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && state.dirtyFiles.size && state.conversationId) {
+    saveEditor(false);
+  }
+});
+</script>
+</body>
+</html>

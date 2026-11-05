@@ -1,0 +1,20 @@
+# Cloudflare Pages configuration.
+# 1) npx wrangler d1 create codepilot-db
+# 2) paste the returned uuid below
+# 3) set secrets: SESSION_SECRET, MODEL_API_KEY, ACCESS_TEAM_DOMAIN, ACCESS_AUD
+#    (see SETUP.md)
+
+name = "codepilot-cloudflare"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"                      # must stay "DB" — the code reads env.DB
+database_name = "codepilot-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+# Non-secret defaults only. Never put API keys or tokens here.
+MODEL_NAME = "gpt-4o-mini"
+CONTEXT_BUDGET_TOKENS = "24000"
+ACCESS_ALLOWED_EMAILS = ""
