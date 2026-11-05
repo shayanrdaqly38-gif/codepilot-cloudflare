@@ -7,6 +7,7 @@
 
 import { route, methodNotAllowed } from '../../_lib/api.js';
 import { fail } from '../../_lib/util.js';
+import { recentPaths } from '../../_lib/versions.js';
 import {
   conversationView,
   createConversation,
@@ -30,11 +31,12 @@ import {
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
-    const [conversations, memories, usage, user] = await Promise.all([
+    const [conversations, memories, usage, user, edited] = await Promise.all([
       listConversations(env, identity.owner),
       listMemories(env, identity.owner),
       getUsage(env, identity.owner),
-      getUser(env, identity.owner)
+      getUser(env, identity.owner),
+      recentPaths(env, identity.owner, { limit: 20 }).catch(() => [])
     ]);
     return {
       ok: true,
@@ -45,7 +47,13 @@ export async function onRequestGet({ request, env }) {
       },
       conversations: conversations.map(conversationView),
       memory: memories,
-      usage
+      usage,
+      recentFiles: edited.map((row) => ({
+        path: row.path,
+        versions: row.versions,
+        lastAt: row.last_at,
+        project: row.project
+      }))
     };
   });
 }

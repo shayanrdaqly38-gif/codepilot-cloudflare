@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   PRIMARY KEY (owner, day)
 );
 
+-- Snapshot of a file before each agent edit. Enables per-file undo/diff.
+CREATE TABLE IF NOT EXISTS file_versions (
+  id              TEXT PRIMARY KEY,
+  owner           TEXT NOT NULL,
+  conversation_id TEXT NOT NULL DEFAULT '',
+  project         TEXT NOT NULL DEFAULT '',
+  path            TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  reason          TEXT NOT NULL DEFAULT 'edit',
+  created_by      TEXT NOT NULL DEFAULT 'agent',
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS file_versions_lookup
+  ON file_versions(owner, project, path, created_at DESC);
+
 -- Sliding per-owner request counters (protects the model budget).
 CREATE TABLE IF NOT EXISTS rate_limits (
   bucket   TEXT PRIMARY KEY,
@@ -85,5 +101,5 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   reset_at INTEGER NOT NULL
 );
 
-INSERT INTO meta(key, value) VALUES ('schema_version', '3')
+INSERT INTO meta(key, value) VALUES ('schema_version', '4')
   ON CONFLICT(key) DO UPDATE SET value = excluded.value;

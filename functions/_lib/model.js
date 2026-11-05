@@ -3,7 +3,16 @@
 
 import { fail, sleep, stripSecrets, envSecrets } from './util.js';
 
-const ALLOWED_TOOLS = new Set(['list_files', 'read_file', 'write_file', 'run_command']);
+export const ALLOWED_TOOLS = new Set([
+  'list_files',
+  'read_file',
+  'search_code',
+  'list_symbols',
+  'write_file',
+  'apply_patch',
+  'undo_edit',
+  'run_command'
+]);
 const DEFAULT_TIMEOUT_MS = 90_000;
 
 function endpoint(env) {
@@ -17,7 +26,7 @@ export function sanitizeTools(tools) {
   if (!Array.isArray(tools)) fail('تعریف ابزارها نامعتبر است.', 400, 'bad_tools');
   const out = [];
   const seen = new Set();
-  for (const tool of tools.slice(0, 12)) {
+  for (const tool of tools.slice(0, 16)) {
     const fn = tool && tool.function;
     if (!fn || typeof fn.name !== 'string' || !ALLOWED_TOOLS.has(fn.name) || seen.has(fn.name)) {
       fail('ابزار ناشناخته یا تکراری است.', 400, 'bad_tools');

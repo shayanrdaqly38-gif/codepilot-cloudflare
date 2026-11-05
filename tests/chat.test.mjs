@@ -121,7 +121,7 @@ test('tool loop: write_file → tool result → final answer, workspace persiste
     assert.ok(names.includes('tool_result'));
     const done = events.at(-1);
     assert.equal(done.name, 'done');
-    assert.equal(done.data.touchedFile, 'index.html');
+    assert.deepEqual(done.data.touchedFiles, ['index.html']);
     assert.equal(done.data.workspace.files['index.html'], '<h1>CodePilot</h1>');
   } finally {
     restore();
@@ -155,8 +155,14 @@ test('credentials in tool output and user text never reach the model unredacted'
     const payload = modelCalls.at(-1);
     const flat = JSON.stringify(payload.messages);
     assert.ok(!flat.includes('sk-abcdefghijklmnopqrstuvwxyz123456'), 'secret leaked to model');
-    assert.ok(Array.isArray(payload.tools) && payload.tools.length === 4);
-    assert.ok(payload.tools.every((t) => ['list_files', 'read_file', 'write_file', 'run_command'].includes(t.function.name)));
+    assert.ok(Array.isArray(payload.tools) && payload.tools.length === 8, String(payload.tools?.length));
+    assert.ok(
+      payload.tools.every((t) =>
+        ['list_files', 'read_file', 'search_code', 'list_symbols', 'write_file', 'apply_patch', 'undo_edit', 'run_command'].includes(
+          t.function.name
+        )
+      )
+    );
   } finally {
     restore();
   }
