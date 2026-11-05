@@ -863,7 +863,8 @@ export async function onRequestPost({ request, env }) {
 
       return new Response(stream, { status: 200, headers });
     },
-    { write: true, body: 1_800_000 }
+    // 20 MB of files expands to ~26.7 MB in Base64; leave room for message metadata.
+    { write: true, body: 28_000_000 }
   );
 }
 

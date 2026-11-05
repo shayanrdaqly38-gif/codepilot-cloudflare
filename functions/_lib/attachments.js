@@ -1,6 +1,6 @@
 import { fail, redactSecrets } from './util.js';
 
-export const MAX_ATTACHMENT_BYTES = 1_000_000;
+export const MAX_ATTACHMENT_BYTES = 20_000_000;
 export function validateAttachments(value) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 5) fail('حداکثر ۵ فایل مجاز است.', 400, 'bad_attachments');
@@ -11,7 +11,7 @@ export function validateAttachments(value) {
       fail('پیوست نامعتبر است.', 400, 'bad_attachment');
     }
     total += file.data.length / 4 * 3 - (file.data.endsWith('==') ? 2 : file.data.endsWith('=') ? 1 : 0);
-    if (total > MAX_ATTACHMENT_BYTES) fail('مجموع حجم فایل‌ها حداکثر ۱ مگابایت است.', 413, 'too_large');
+    if (total > MAX_ATTACHMENT_BYTES) fail('مجموع حجم فایل‌ها حداکثر ۲۰ مگابایت است.', 413, 'too_large');
     const type = typeof file.type === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(file.type) ? file.type : 'application/octet-stream';
     return { name: file.name.replace(/[\x00-\x1f]/g, '').slice(0, 180) || 'file', type, data: file.data };
   });
