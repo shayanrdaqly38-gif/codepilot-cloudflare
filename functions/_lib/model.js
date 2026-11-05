@@ -136,108 +136,166 @@ export function normalizeToolCalls(calls) {
   return out;
 }
 
+const FALLBACK_MODELS = ['claude-sonnet-5-5', 'gpt-6.1-sol', 'claude-haiku-5-5'];
+
+function downgradeUnsupportedFileParts(messages) {
+  if (!Array.isArray(messages)) return null;
+  let changed = false;
+  const next = messages.map((msg) => {
+    if (!Array.isArray(msg?.content)) return msg;
+    let msgChanged = false;
+    const parts = msg.content.map((part) => {
+      if (part && part.type === 'file') {
+        changed = true;
+        msgChanged = true;
+        const name = part.file?.filename || 'attachment';
+        return { type: 'text', text: `[فایل باینری پیوست‌شده: ${name}]` };
+      }
+      return part;
+    });
+    return msgChanged ? { ...msg, content: parts } : msg;
+  });
+  return changed ? next : null;
+}
+
 /**
  * POST a Chat Completions request.
- * Retries once on 429/5xx/timeout; never exposes provider error bodies.
+ * Retries on 429/5xx/timeout, downgrades unsupported binary `file` content parts,
+ * and on live Cloudflare Pages automatically fails over to a healthy backup model
+ * if the selected upstream model channel returns 502/503/504.
  */
 export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
     fail('MODEL_API_KEY در Cloudflare Secrets تنظیم نشده است.', 503, 'model_key_missing');
   }
   const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
-  const model = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
+  const requestedModel = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
   const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS, 120_000);
-  const body = JSON.stringify({
-    model,
-    stream: false,
-    temperature: payload.temperature ?? 0.3,
-    ...(payload.max_tokens ? { max_tokens: payload.max_tokens } : {}),
-    messages: payload.messages,
-    ...(payload.tools && payload.tools.length ? { tools: payload.tools, tool_choice: payload.tool_choice || 'auto' } : {})
-  });
+  const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off';
+  const candidates = [requestedModel];
+  if (allowFailover) {
+    for (const candidate of FALLBACK_MODELS) {
+      if (!candidates.includes(candidate)) candidates.push(candidate);
+      if (candidates.length >= 3) break;
+    }
+  }
 
+  let activeMessages = payload.messages;
+  let downgradedOnce = false;
   let lastStatus = 0;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let response;
-    try {
-      response = await fetch(modelEndpoint(env), {
-        method: 'POST',
-        // Cloudflare Workers rejects redirect:'error' outright (the fetch call
-        // throws before leaving the isolate), so follow the edge-compatible
-        // contract: manual, then treat any 3xx as a failure below.
-        redirect: 'manual',
-        signal: AbortSignal.timeout(timeout),
-        headers: {
-          Authorization: `Bearer ${env.MODEL_API_KEY}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body
+
+  for (let cIndex = 0; cIndex < candidates.length; cIndex += 1) {
+    const model = candidates[cIndex];
+    const maxAttempts = cIndex === 0 ? 2 : 1;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const body = JSON.stringify({
+        model,
+        stream: false,
+        temperature: payload.temperature ?? 0.3,
+        ...(payload.max_tokens ? { max_tokens: payload.max_tokens } : {}),
+        messages: activeMessages,
+        ...(payload.tools && payload.tools.length
+          ? { tools: payload.tools, tool_choice: payload.tool_choice || 'auto' }
+          : {})
       });
-    } catch (error) {
-      lastStatus = 0;
-      if (attempt === 0) {
-        await sleep(400);
+
+      let response;
+      try {
+        response = await fetch(modelEndpoint(env), {
+          method: 'POST',
+          // Cloudflare Workers rejects redirect:'error' outright (the fetch call
+          // throws before leaving the isolate), so follow the edge-compatible
+          // contract: manual, then treat any 3xx as a failure below.
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeout),
+          headers: {
+            Authorization: `Bearer ${env.MODEL_API_KEY}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          },
+          body
+        });
+      } catch (error) {
+        lastStatus = 0;
+        if (attempt === 0) {
+          await sleep(400);
+          continue;
+        }
+        if (cIndex + 1 < candidates.length) break;
+        fail(
+          error?.name === 'TimeoutError' || error?.name === 'AbortError'
+            ? 'پاسخ مدل در زمان مجاز دریافت نشد. دوباره تلاش کنید.'
+            : 'ارتباط با سرویس مدل برقرار نشد.',
+          504,
+          'model_unreachable'
+        );
+      }
+
+      if (response.status >= 300 && response.status < 400) {
+        fail(
+          'آدرس سرویس مدل ریدایرکت می‌شود. MODEL_BASE_URL را بررسی کنید (باید دقیقاً به /v1 اشاره کند).',
+          502,
+          'model_redirect'
+        );
+      }
+
+      if (response.ok) {
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          fail('پاسخ سرویس مدل قابل خواندن نبود.', 502, 'model_bad_response');
+        }
+        const message = data?.choices?.[0]?.message;
+        if (!message || typeof message !== 'object') {
+          fail('ساختار پاسخ مدل با Chat Completions سازگار نیست.', 502, 'model_bad_response');
+        }
+        const secrets = envSecrets(env);
+        const rawReasoning =
+          typeof message.reasoning_content === 'string'
+            ? message.reasoning_content
+            : typeof message.thinking === 'string'
+              ? message.thinking
+              : '';
+        return {
+          model: String(data.model || model),
+          reasoning: rawReasoning ? stripSecrets(rawReasoning, secrets) : '',
+          message: {
+            role: 'assistant',
+            content: typeof message.content === 'string' ? stripSecrets(message.content, secrets) : '',
+            tool_calls: normalizeToolCalls(message.tool_calls)
+          },
+          usage: {
+            prompt_tokens: Number(data?.usage?.prompt_tokens) || 0,
+            completion_tokens: Number(data?.usage?.completion_tokens) || 0
+          }
+        };
+      }
+
+      lastStatus = response.status;
+      await response.text().catch(() => '');
+
+      if (!downgradedOnce && [400, 422, 500, 502, 503].includes(response.status)) {
+        const stripped = downgradeUnsupportedFileParts(activeMessages);
+        if (stripped) {
+          activeMessages = stripped;
+          downgradedOnce = true;
+          attempt -= 1;
+          continue;
+        }
+      }
+
+      if ((response.status === 429 || response.status >= 500) && attempt === 0) {
+        const retryAfter = Number(response.headers.get('Retry-After') || 0);
+        await sleep(Math.min(Math.max(retryAfter * 1000, 600), 4_000));
         continue;
       }
-      fail(
-        error?.name === 'TimeoutError' || error?.name === 'AbortError'
-          ? 'پاسخ مدل در زمان مجاز دریافت نشد. دوباره تلاش کنید.'
-          : 'ارتباط با سرویس مدل برقرار نشد.',
-        504,
-        'model_unreachable'
-      );
+      break;
     }
 
-    if (response.status >= 300 && response.status < 400) {
-      fail(
-        'آدرس سرویس مدل ریدایرکت می‌شود. MODEL_BASE_URL را بررسی کنید (باید دقیقاً به /v1 اشاره کند).',
-        502,
-        'model_redirect'
-      );
-    }
-
-    if (response.ok) {
-      let data;
-      try {
-        data = await response.json();
-      } catch {
-        fail('پاسخ سرویس مدل قابل خواندن نبود.', 502, 'model_bad_response');
-      }
-      const message = data?.choices?.[0]?.message;
-      if (!message || typeof message !== 'object') {
-        fail('ساختار پاسخ مدل با Chat Completions سازگار نیست.', 502, 'model_bad_response');
-      }
-      const secrets = envSecrets(env);
-      const rawReasoning =
-        typeof message.reasoning_content === 'string'
-          ? message.reasoning_content
-          : typeof message.thinking === 'string'
-            ? message.thinking
-            : '';
-      return {
-        model: String(data.model || model),
-        reasoning: rawReasoning ? stripSecrets(rawReasoning, secrets) : '',
-        message: {
-          role: 'assistant',
-          content: typeof message.content === 'string' ? stripSecrets(message.content, secrets) : '',
-          tool_calls: normalizeToolCalls(message.tool_calls)
-        },
-        usage: {
-          prompt_tokens: Number(data?.usage?.prompt_tokens) || 0,
-          completion_tokens: Number(data?.usage?.completion_tokens) || 0
-        }
-      };
-    }
-
-    lastStatus = response.status;
-    await response.text().catch(() => '');
-    if ((response.status === 429 || response.status >= 500) && attempt === 0) {
-      const retryAfter = Number(response.headers.get('Retry-After') || 0);
-      await sleep(Math.min(Math.max(retryAfter * 1000, 600), 4_000));
-      continue;
-    }
-    break;
+    // Only fail over to another model on upstream 5xx / network errors, never on 401/403/404.
+    if (lastStatus !== 0 && lastStatus < 500) break;
   }
 
   if (lastStatus === 401 || lastStatus === 403) {
@@ -253,10 +311,14 @@ export async function callModel(env, payload) {
   }
   if (lastStatus === 400 || lastStatus === 422) {
     fail(
-      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً مدل «${model}» روی این سرویس فعال نیست یا از ابزارها پشتیبانی نمی‌کند؛ مدل دیگری انتخاب کنید.`,
+      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً مدل «${requestedModel}» روی این سرویس فعال نیست یا از ابزارها پشتیبانی نمی‌کند؛ مدل دیگری انتخاب کنید.`,
       502,
       'model_rejected'
     );
   }
-  fail(`سرویس مدل پاسخ نداد (کد ${lastStatus || 'شبکه'}).`, 502, 'model_failed');
+  fail(
+    `سرویس ارائه‌دهنده‌ی هوش مصنوعی موقتاً در دسترس نیست (کد ${lastStatus || 'شبکه'}). چند ثانیه بعد تلاش کنید یا از دکمه‌ی «✦ مدل» مدل دیگری انتخاب کنید.`,
+    502,
+    'model_failed'
+  );
 }
