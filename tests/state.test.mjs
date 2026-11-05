@@ -185,7 +185,7 @@ test('usage and config endpoints respond', async () => {
   assert.ok(Array.isArray(usage.days));
   const config = await (await configApi.onRequestGet(ctx(req('/api/config', { headers: { Cookie: cookie } }), env))).json();
   assert.equal(config.storage, 'd1');
-  assert.equal(config.model, 'gpt-4o-mini');
+  assert.equal(config.model, 'claude-sonnet-5-5');
   assert.ok(!JSON.stringify(config).includes('sk-test'));
 });
 

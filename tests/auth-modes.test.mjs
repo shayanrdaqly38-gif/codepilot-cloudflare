@@ -312,3 +312,33 @@ test('the UI stops the composer when storage is unreachable', async () => {
   // It must not fall through to "ready" after a storage failure.
   assert.match(html, /showStorageFailure\(error\);\s*return;/);
 });
+
+test('sessions work with only MODEL_API_KEY set (no SESSION_SECRET)', async () => {
+  // A beginner configuring the dashboard can now stop after the one setting
+  // that is genuinely required. The signing key is derived from MODEL_API_KEY
+  // with a domain separator, so the raw key is never the signing key.
+  const auth2 = await import(`${root}/_lib/auth.js`);
+  const bare = makeEnv(keys);
+  delete bare.SESSION_SECRET;
+  delete bare.ACCESS_TEAM_DOMAIN;
+  delete bare.ACCESS_AUD;
+  bare.DEV_ACCESS_EMAIL = 'only-key@example.com';
+
+  const email = auth2.devFallbackEmail(bare);
+  assert.equal(email, 'only-key@example.com');
+
+  const secret = await auth2.sessionSecretForTest(bare);
+  assert.equal(typeof secret, 'string');
+  assert.equal(secret.length, 64);
+  assert.notEqual(secret, bare.MODEL_API_KEY);
+  // Stable across calls, otherwise every request would invalidate the cookie.
+  assert.equal(secret, await auth2.sessionSecretForTest(bare));
+
+  // A different key must produce a different signing key.
+  const other = makeEnv(keys);
+  delete other.SESSION_SECRET;
+  delete other.ACCESS_TEAM_DOMAIN;
+  delete other.ACCESS_AUD;
+  other.MODEL_API_KEY = 'sk-a-completely-different-key-1234567890';
+  assert.notEqual(await auth2.sessionSecretForTest(other), secret);
+});

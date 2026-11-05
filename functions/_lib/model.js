@@ -81,7 +81,7 @@ export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
     fail('MODEL_API_KEY در Cloudflare Secrets تنظیم نشده است.', 503, 'model_key_missing');
   }
-  const model = String(env.MODEL_NAME || 'gpt-4o-mini');
+  const model = String(env.MODEL_NAME || 'claude-sonnet-5-5');
   const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS, 120_000);
   const body = JSON.stringify({
     model,
@@ -184,7 +184,7 @@ export async function callModel(env, payload) {
   }
   if (lastStatus === 400 || lastStatus === 422) {
     fail(
-      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً نام MODEL_NAME («${String(env.MODEL_NAME || 'gpt-4o-mini')}») روی این سرویس موجود نیست یا از tool call پشتیبانی نمی‌کند.`,
+      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً نام MODEL_NAME («${String(env.MODEL_NAME || 'claude-sonnet-5-5')}») روی این سرویس موجود نیست یا از tool call پشتیبانی نمی‌کند.`,
       502,
       'model_rejected'
     );

@@ -200,3 +200,24 @@ test('wrangler.toml declares no [vars], so the dashboard stays editable', async 
   const memory = await readFile(`${repo}functions/_lib/memory.js`, 'utf8');
   assert.match(memory, /CONTEXT_BUDGET_TOKENS\)\s*\|\|\s*/, 'budget needs a default');
 });
+
+test('the default model exists in the provider catalog', async () => {
+  // tooken.club does not serve gpt-4o-mini. A fresh deployment with everything
+  // else configured correctly used to fail with model_not_found purely because
+  // of the default, so the default must be a model the provider actually lists.
+  const source = await readFile(new URL('../functions/_lib/model.js', import.meta.url), 'utf8');
+  const match = source.match(/env\.MODEL_NAME \|\| '([^']+)'/);
+  assert.ok(match, 'model.js must declare a MODEL_NAME default');
+  const fallback = match[1];
+
+  assert.notEqual(fallback, 'gpt-4o-mini', 'gpt-4o-mini is not in the provider catalog');
+
+  const catalog = [
+    'gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-terra',
+    'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1',
+    'claude-opus-4-5', 'deepseek-v4.1-flash-1017', 'deepseek-v4-pro', 'kimi-k3.1-pro',
+    'glm-5.3-flash', 'glm-5.3', 'gemini-3-8-flash', 'gemini-4-argon', 'grok-4.7',
+    'gpt-image-2.5-sunburst'
+  ];
+  assert.ok(catalog.includes(fallback), `default model "${fallback}" is not in the catalog`);
+});
