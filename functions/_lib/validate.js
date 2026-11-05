@@ -162,6 +162,18 @@ export function checkHtml(source) {
     const isClose = full.startsWith('</');
     const selfClosing = /\/\s*>$/.test(full) || VOID_TAGS.has(name);
     if (selfClosing && !isClose) continue;
+    if (!isClose && (name === 'script' || name === 'style')) {
+      // HTML5 raw-text elements: JS/CSS inside <script> or <style> may contain
+      // `<div`, `<script`, or `x < y` comparisons that are NOT HTML tags.
+      const closeRaw = name === 'script' ? /<\/script\s*>/gi : /<\/style\s*>/gi;
+      closeRaw.lastIndex = tagRegex.lastIndex;
+      const endMatch = closeRaw.exec(text);
+      if (!endMatch) {
+        return { ok: false, message: `تگ <${name}> بسته نشده است` };
+      }
+      tagRegex.lastIndex = closeRaw.lastIndex;
+      continue;
+    }
     if (!isClose) {
       stack.push(name);
     } else {
@@ -267,6 +279,7 @@ const SECRET_SHAPES = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}/,
   /\bsk-(?:proj-|live-)?[A-Za-z0-9_-]{20,}/,
+  /\btc_(?:live|test)_[A-Za-z0-9_-]{12,}/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bAIza[0-9A-Za-z_-]{30,}/,
   /\bxox[baprs]-[0-9A-Za-z-]{10,}/,

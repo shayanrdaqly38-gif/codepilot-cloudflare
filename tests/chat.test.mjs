@@ -158,15 +158,19 @@ test('credentials in tool output and user text never reach the model unredacted'
     // Assert the *set*, not the count: adding a tool must not break the security
     // test, but removing one silently would.
     const expectedTools = [
+      'think',
       'list_files',
       'read_file',
       'search_code',
       'list_symbols',
       'write_file',
       'apply_patch',
+      'delete_file',
       'undo_edit',
       'file_history',
-      'run_command'
+      'run_command',
+      'web_search',
+      'fetch_url'
     ];
     const names = (payload.tools || []).map((t) => t.function.name).sort();
     assert.deepEqual(names, [...expectedTools].sort());

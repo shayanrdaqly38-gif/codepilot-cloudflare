@@ -7,7 +7,7 @@ import { clamp, fail, redactCode, redactSecrets, safeInt } from './util.js';
 
 const MAX_CONVERSATIONS_PER_USER = 300;
 const MAX_MESSAGES_PER_CONVERSATION = 4000;
-const MAX_WORKSPACE_CHARS = 900_000;
+const MAX_WORKSPACE_CHARS = 1_800_000;
 const MAX_TITLE = 120;
 
 export async function db(env) {
