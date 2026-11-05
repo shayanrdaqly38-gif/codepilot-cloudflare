@@ -56,6 +56,19 @@ deployment) چون متغیرها در بیلد بعدی اعمال می‌شو�
 https://<سایت>/api/health
 ```
 
+> ### چرا بعضی ردیف‌ها در داشبورد قفل‌اند؟
+>
+> اگر هر نامی در `[vars]` فایل `wrangler.toml` باشد، Cloudflare آن را مالِ فایل
+> می‌داند و در داشبورد قفل می‌کند:
+> *"Environment variables for this project are being managed through wrangler.toml.
+> Only Secrets can be managed via the Dashboard."*
+>
+> برای همین این پروژه **هیچ `[vars]`ی ندارد**. همه‌ی متغیرهای غیرحساس از داشبورد
+> قابل ویرایش‌اند و کد برای هر کدام پیش‌فرض امن دارد:
+> `MODEL_NAME`، `DEV_ACCESS_EMAIL`، `CONTEXT_BUDGET_TOKENS`، `ACCESS_ALLOWED_EMAILS`.
+>
+> فقط Secret‌ها (`MODEL_API_KEY`، `SESSION_SECRET`) به‌هرحال از داشبورد ساخته می‌شوند.
+
 ## ۰. جزئیات حالت تک‌کاربره (بدون Cloudflare Access)
 
 اگر الان فقط می‌خواهید کار کنید و Access را بعداً تنظیم کنید:
