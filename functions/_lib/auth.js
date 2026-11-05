@@ -51,16 +51,41 @@ function accessAllowEmails(env) {
     .filter(Boolean);
 }
 
-function sessionSecret(env) {
+/**
+ * The key that signs session cookies.
+ *
+ * SESSION_SECRET should be set explicitly. When it is missing we derive a
+ * stable per-deployment key from MODEL_API_KEY instead of hard-failing, so the
+ * app works after the one setting that is genuinely required. It is derived
+ * with a domain separator and hashed, so the raw API key never becomes the
+ * signing key and cannot be recovered from a cookie signature.
+ *
+ * Rotating MODEL_API_KEY therefore rotates sessions too -- acceptable, and
+ * documented in the UI.
+ */
+async function sessionSecret(env) {
   const raw = String(env.SESSION_SECRET || '').trim();
-  if (raw.length < 32) {
+  if (raw.length >= 32) return raw;
+  if (raw.length > 0) {
     fail(
-      'SESSION_SECRET تنظیم نشده یا کوتاه است (حداقل ۳۲ کاراکتر). با دستور openssl rand -base64 32 بسازید.',
+      'SESSION_SECRET کوتاه است (حداقل ۳۲ کاراکتر). یا آن را کامل کنید یا خالی بگذارید تا خودکار ساخته شود.',
       503,
       'session_secret_missing'
     );
   }
-  return raw;
+  const seed = String(env.MODEL_API_KEY || '').trim();
+  if (!seed) {
+    fail(
+      'برای ساخت نشست به یک راز نیاز است: SESSION_SECRET (حداقل ۳۲ کاراکتر) را تنظیم کنید.',
+      503,
+      'session_secret_missing'
+    );
+  }
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`codepilot-session-v1:${seed}`)
+  );
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function loadJwks(domain, force = false) {
@@ -186,7 +211,7 @@ async function verifyAccessToken(token, env) {
 async function hmacKey(env) {
   return crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(sessionSecret(env)),
+    new TextEncoder().encode(await sessionSecret(env)),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign', 'verify']
@@ -304,6 +329,11 @@ export async function authenticate(request, env) {
  *     compatible if you switch to Access later,
  *   - `/api/config` and the UI surface a loud warning.
  */
+/** Exposed for tests: the derived/configured session signing key. */
+export function sessionSecretForTest(env) {
+  return sessionSecret(env);
+}
+
 export function devFallbackEmail(env) {
   const email = String(env.DEV_ACCESS_EMAIL || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;

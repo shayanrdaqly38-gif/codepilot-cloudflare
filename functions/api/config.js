@@ -11,7 +11,7 @@ export async function onRequestGet({ request, env }) {
     singleTenant: identity.via === 'dev-fallback',
     storage: 'd1',
     user: { email: identity.email, name: identity.name },
-    model: String(env.MODEL_NAME || 'gpt-4o-mini'),
+    model: String(env.MODEL_NAME || 'claude-sonnet-5-5'),
     contextBudgetTokens: Number(env.CONTEXT_BUDGET_TOKENS) || 24000,
     sandbox: sandboxEnabled(env),
     features: {
