@@ -516,6 +516,33 @@ async function boot() {
   setSync('on', 'همگام با ابر · ' + (state.auth.user.email || ''));
 }
 
+async function probeModel() {
+  const box = $('probeBox');
+  if (!box) return;
+  box.innerHTML = '<div class="tiny">در حال فرستادن یک درخواست کوچک به مدل…</div>';
+  try {
+    const res = await fetch(API.health + '?probe=1', { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+    const data = await res.json();
+    const probe = data.probe;
+    if (!probe) {
+      box.innerHTML = '<div class="notice bad">این استقرار نسخه‌ی تست مدل را ندارد. پروژه را از کد جدید Deploy کنید.</div>';
+      return;
+    }
+    if (probe.ok) {
+      box.innerHTML = `<div class="notice ok">مدل پاسخ داد (${esc(String(probe.latencyMs))} میلی‌ثانیه).
+        مدل: <code style="direction:ltr;display:inline-block">${esc(probe.model || '')}</code></div>`;
+    } else {
+      box.innerHTML = `<div class="notice bad">
+        مدل پاسخ نداد: ${esc(probe.error || '')}
+        ${probe.code ? `<br>کد: <code style="direction:ltr;display:inline-block">${esc(probe.code)}</code>` : ''}
+        ${probe.endpoint ? `<br>آدرس: <code style="direction:ltr;display:inline-block">${esc(probe.endpoint)}</code>` : ''}
+      </div>`;
+    }
+  } catch (error) {
+    box.innerHTML = '<div class="notice bad">درخواست تست ناموفق بود.</div>';
+  }
+}
+
 async function runDiagnostics() {
   const box = $('diagBox');
   if (!box) return;
@@ -562,6 +589,8 @@ function showSignedOut(error) {
         <button onclick="runDiagnostics()">🔍 عیب‌یابی تنظیمات</button>
       </div>
       <div id="diagBox" style="margin-top:12px;direction:rtl"></div>
+      <div class="suggestions" style="margin-top:8px"><button onclick="probeModel()">⚡ تست اتصال مدل</button></div>
+      <div id="probeBox" style="margin-top:8px;direction:rtl"></div>
     </div>`;
   $('sendBtn').disabled = true;
   $('prompt').disabled = true;

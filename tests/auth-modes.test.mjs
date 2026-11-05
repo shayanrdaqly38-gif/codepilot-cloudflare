@@ -209,3 +209,72 @@ test('an unreachable Access certs endpoint is a clear 503, not a 500', async () 
     globalThis.fetch = original;
   }
 });
+
+test('health?probe=1 reports whether the model itself works', async () => {
+  const health = await import(`${root}/api/health.js`);
+  const { makeD1 } = await import('./harness.mjs');
+  const env = {
+    DB: makeD1(),
+    ACCESS_TEAM_DOMAIN: 'myteam.cloudflareaccess.com',
+    ACCESS_AUD: 'aud',
+    SESSION_SECRET: 'x'.repeat(40),
+    MODEL_API_KEY: 'sk-test-1234567890',
+    MODEL_NAME: 'test-model'
+  };
+  const original = globalThis.fetch;
+
+  // 1. Anonymous: the probe refuses, and must not call the provider.
+  // Only the model endpoint is intercepted; the JWKS mock must keep working.
+  let called = 0;
+  globalThis.fetch = async (input) => {
+    if (String(input).includes('/chat/completions')) {
+      called += 1;
+      return new Response('nope', { status: 500 });
+    }
+    return original(input);
+  };
+  let res = await health.onRequestGet({ request: new Request('https://x/api/health?probe=1'), env });
+  let body = await res.json();
+  assert.equal(body.probe.ok, false);
+  assert.match(body.probe.error, /وارد/);
+  assert.equal(called, 0, 'an anonymous probe must not spend the provider quota');
+
+  // 2. Signed in but the provider rejects the key: the probe explains it.
+  // Reuse the module-level key pair: the JWKS cache is keyed by team domain, so
+  // a fresh key set for the same domain would not be picked up.
+  const signedEnv = { ...makeEnv(keys), DB: makeD1() };
+  delete signedEnv.DEV_ACCESS_EMAIL;
+  globalThis.fetch = async (input) =>
+    String(input).includes('/chat/completions') ? new Response('nope', { status: 401 }) : original(input);
+  res = await health.onRequestGet({
+    request: new Request('https://x/api/health?probe=1', {
+      headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys) }
+    }),
+    env: signedEnv
+  });
+  body = await res.json();
+  assert.equal(body.probe.ok, false);
+  assert.equal(body.probe.code, 'model_auth');
+  assert.match(body.probe.endpoint, /\/chat\/completions$/);
+
+  // 3. Working provider: the probe passes and reports latency.
+  globalThis.fetch = async (input) =>
+    String(input).includes('/chat/completions')
+      ? new Response(
+          JSON.stringify({ model: 'test-model', choices: [{ message: { role: 'assistant', content: 'ok' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      : original(input);
+  res = await health.onRequestGet({
+    request: new Request('https://x/api/health?probe=1', {
+      headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys) }
+    }),
+    env: signedEnv
+  });
+  body = await res.json();
+  assert.equal(body.probe.ok, true, JSON.stringify(body.probe));
+  assert.equal(body.probe.model, 'test-model');
+  assert.equal(typeof body.probe.latencyMs, 'number');
+
+  globalThis.fetch = original;
+});
