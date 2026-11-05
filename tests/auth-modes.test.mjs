@@ -278,3 +278,16 @@ test('health?probe=1 reports whether the model itself works', async () => {
 
   globalThis.fetch = original;
 });
+
+test('health.ok is true for a working single-tenant deployment', async () => {
+  const health = await import(`${root}/api/health.js`);
+  const { makeD1 } = await import('./harness.mjs');
+  const res = await health.onRequestGet({
+    request: new Request('https://x/api/health'),
+    env: { DB: makeD1(), DEV_ACCESS_EMAIL: 'me@example.com', SESSION_SECRET: 'x'.repeat(40), MODEL_API_KEY: 'k' }
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true, JSON.stringify(body.missing));
+  assert.match(body.modeWarning, /تک‌کاربره/);
+});
