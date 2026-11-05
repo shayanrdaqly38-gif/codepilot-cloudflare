@@ -249,12 +249,21 @@ export function truncate(text, max) {
   return `${s.slice(0, Math.max(0, max - 20))}\n… [بریده شد]`;
 }
 
-/** Cheap token estimate: Latin runs ~4 chars/token, Persian ~2 chars/token. */
+/** Cheap token estimate: Latin runs ~4 chars/token, Persian ~2 chars/token. Bounded O(1) for huge strings. */
 export function estimateTokens(text) {
   const s = String(text ?? '');
-  let ascii = 0;
-  for (let i = 0; i < s.length; i += 1) if (s.charCodeAt(i) < 128) ascii += 1;
-  const nonAscii = s.length - ascii;
+  const len = s.length;
+  if (!len) return 0;
+  const step = len > 4000 ? Math.ceil(len / 2000) : 1;
+  let asciiSample = 0;
+  let samples = 0;
+  for (let i = 0; i < len; i += step) {
+    if (s.charCodeAt(i) < 128) asciiSample += 1;
+    samples += 1;
+  }
+  const asciiRatio = samples ? asciiSample / samples : 1;
+  const ascii = Math.round(len * asciiRatio);
+  const nonAscii = len - ascii;
   return Math.ceil(ascii / 4 + nonAscii / 2);
 }
 
