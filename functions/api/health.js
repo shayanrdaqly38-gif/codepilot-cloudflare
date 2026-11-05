@@ -117,7 +117,9 @@ export async function onRequestGet({ request, env }) {
 
     return json(
       {
-        ok: missing.length === 0 && (!probe || probe.ok),
+        // `ok` means "this deployment can serve requests". Single-tenant mode is
+        // a valid state (it only downgrades login), so it must not flip ok=false.
+        ok: (authMode === 'dev-fallback' || missing.length === 0) && (!probe || probe.ok),
         authMode,
         sandbox: sandboxEnabled(env),
         model: String(env.MODEL_NAME || 'gpt-4o-mini'),
