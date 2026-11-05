@@ -161,6 +161,7 @@ const HARD_SECRET_PATTERNS = [
   [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_GITHUB_TOKEN]'],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '[REDACTED_GITHUB_TOKEN]'],
   [/\bsk-(?:proj-|live-|test-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_API_KEY]'],
+  [/\btc_(?:live|test)_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_API_KEY]'],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]'],
   [/\bAIza[0-9A-Za-z_-]{30,}\b/g, '[REDACTED_GOOGLE_KEY]'],
   [/\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g, '[REDACTED_SLACK_TOKEN]'],

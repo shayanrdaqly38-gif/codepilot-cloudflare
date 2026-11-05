@@ -119,6 +119,40 @@ function mockFetch(url, init = {}) {
       results: [{ path: 'index.html', line: 1, column: 5, snippet: '<h1>hi</h1>' }]
     });
   }
+  if (path === '/api/run') {
+    const body = JSON.parse(init.body || '{}');
+    return jsonResponse({
+      ok: true,
+      mode: 'linux-container',
+      exitCode: 0,
+      stdout: `Linux container: ran ${body.command}\n`,
+      stderr: '',
+      text: `Linux container: ran ${body.command}`
+    });
+  }
+  if (String(url).startsWith('https://api.github.com/repos/u/r/')) {
+    const ghSub = String(url).replace('https://api.github.com/repos/u/r/', '');
+    if (ghSub === 'git/ref/heads/main') {
+      return jsonResponse({ object: { sha: 'head111111111111' } });
+    }
+    if (ghSub === 'git/commits/head111111111111') {
+      return jsonResponse({ tree: { sha: 'tree000000000000' } });
+    }
+    if (ghSub === 'git/trees' && init.method === 'POST') {
+      return jsonResponse({ sha: 'tree222222222222' });
+    }
+    if (ghSub === 'git/commits' && init.method === 'POST') {
+      return jsonResponse({ sha: 'commit3333333333' });
+    }
+    if (ghSub === 'git/refs/heads/main' && init.method === 'PATCH') {
+      return jsonResponse({ object: { sha: 'commit3333333333' } });
+    }
+    if (ghSub.startsWith('commits/') && ghSub.endsWith('/check-runs')) {
+      return jsonResponse({
+        check_runs: [{ name: 'Cloudflare Pages', status: 'completed', conclusion: 'success' }]
+      });
+    }
+  }
   if (path === '/api/chat') {
     // Mirror what the real server persists for this turn.
     const body = JSON.parse(init.body || '{}');
@@ -233,6 +267,28 @@ assert.ok($('accountInfo').textContent.includes('dev@example.com'));
 await window.newConversation(true);
 assert.equal(window.state?.conversationId ?? null, null, 'new conversation should not reuse old id (state is module-scoped)');
 assert.ok($('convList').textContent.includes('گفتگوی جدید'));
+
+// --- model selector modal + thinking toggle
+window.openModelModal();
+assert.ok($('modelModal').classList.contains('open'));
+$('customModelInput').value = 'claude-opus-5-5';
+window.applyCustomModel();
+assert.equal($('modelBadge').textContent, 'claude-opus-5-5');
+window.toggleThinking();
+assert.ok($('thinkBtn').textContent.includes('تفکر'));
+
+// --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
+window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));
+window.restoreGitHub();
+$('editor').value = '<h1>atomic</h1>';
+window.editorChanged();
+const commitSha = await window.commitChangesAtomically(['index.html', 'style.css'], ['old.js'], 'Atomic multi-file test');
+assert.equal(commitSha, 'commit3333333333');
+const ghTreeCalls = calls.filter((c) => String(c.url).endsWith('/git/trees') && c.init.method === 'POST');
+assert.equal(ghTreeCalls.length, 1, 'expected exactly 1 atomic git/trees call');
+const treePayload = JSON.parse(ghTreeCalls[0].init.body);
+assert.equal(treePayload.tree.length, 3, '2 touched + 1 deleted in single tree');
+assert.ok(treePayload.tree.some((e) => e.path === 'old.js' && e.sha === null), 'deleted file should have sha: null');
 
 // --- signed-out fallback path
 const dom2 = new JSDOM(html, {
