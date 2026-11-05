@@ -1,17 +1,32 @@
 # Cloudflare Pages configuration.
-# 1) npx wrangler d1 create codepilot-db
-# 2) paste the returned uuid below
-# 3) set secrets: SESSION_SECRET, MODEL_API_KEY, ACCESS_TEAM_DOMAIN, ACCESS_AUD
-#    (see SETUP.md)
+#
+# Nothing in this file needs to be edited before a deploy works. Secrets and
+# the D1 binding live in the Cloudflare dashboard (see SETUP.md).
+#
+# Commit with a placeholder id in [[d1_databases]] and the deploy step fails,
+# Cloudflare keeps serving the previous successful build, and the site silently
+# stays on old code. That is the failure mode this file is written to avoid.
 
 name = "codepilot-cloudflare"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "."
 
-[[d1_databases]]
-binding = "DB"                      # must stay "DB" — the code reads env.DB
-database_name = "codepilot-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+# The D1 binding is configured in the Cloudflare dashboard, NOT here.
+#
+# Why: a placeholder `database_id` makes `wrangler pages deploy` fail, and a
+# failed deploy leaves the previous build serving production — which is why a
+# site can keep showing an old error message no matter what you push.
+# Binding it in the dashboard (Settings → Functions → D1 database bindings,
+# variable name: DB) also applies to every future deploy, so the repo stays
+# free of one person's database id.
+#
+# If you prefer IaC, uncomment this with your real id — but never commit a
+# placeholder, and never commit a half-filled one:
+#
+# [[d1_databases]]
+# binding = "DB"                    # must stay "DB" — the code reads env.DB
+# database_name = "codepilot-db"
+# database_id = "<your-real-uuid>"
 
 # Optional: real code execution. Uncomment after creating the Sandbox Durable
 # Object (see SETUP.md §7). Without it, run_command is a clearly-labelled

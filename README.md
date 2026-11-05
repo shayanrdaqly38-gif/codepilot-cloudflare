@@ -95,8 +95,8 @@ npx wrangler login
 npx wrangler d1 create codepilot-db
 ```
 
-خروجی یک `database_id` می‌دهد. آن را در `wrangler.toml` جای
-`REPLACE_WITH_YOUR_D1_DATABASE_ID` بگذارید.
+خروجی یک `database_id` می‌دهد. **آن را در `wrangler.toml` نگذارید.** اتصال را در
+داشبورد بزنید (گام بعد) — دلیلش را پایین توضیح داده‌ام.
 
 ```bash
 # اختیاری ولی توصیه‌شده: ساخت جدول‌ها به‌صورت صریح
@@ -111,7 +111,22 @@ npx wrangler d1 execute codepilot-db --remote --file=./schema.sql
 اگر از داشبورد استفاده می‌کنید: **Workers & Pages → پروژه → Settings → Functions →
 D1 database bindings → Add**: نام متغیر **`DB`** و همان دیتابیس `codepilot-db`.
 
-اگر با Wrangler منتشر می‌کنید، همان `wrangler.toml` اتصال را می‌سازد.
+اگر با Wrangler منتشر می‌کنید، بلوک `[[d1_databases]]` در `wrangler.toml` هست ولی
+عمداً کامنت شده است. اگر ترجیح می‌دهید IaC باشد، با uuid واقعی از کامنت درش بیاورید —
+**هرگز با مقدار placeholder کامیت نکنید.**
+
+> ### چرا این مهم است
+>
+> اگر `database_id` در `wrangler.toml` مقدار جعلی (`REPLACE_WITH_...`) داشته باشد،
+> مرحله‌ی deploy در Cloudflare شکست می‌خورد. Cloudflare در این حالت **نسخه‌ی موفق
+> قبلی را سرو می‌کند** و فقط یک علامت قرمز کوچک در داشبورد نشان می‌دهد. نتیجه:
+> هرچه push کنید، سایت همان خطای قدیمی را نشان می‌دهد.
+>
+> **همیشه بعد از push، وضعیت deploy را چک کنید:**
+> ```bash
+> gh pr checks $(gh pr view --json number -q .number)   # یا صفحه‌ی PR در GitHub
+> ```
+> اگر `Cloudflare Pages` قرمز بود، کد شما روی سایت نیست — حتی اگر merge شده باشد.
 
 ### ۳) Secrets (نه متغیرهای عادی)
 
