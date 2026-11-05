@@ -560,7 +560,10 @@ async function runDiagnostics() {
     box.innerHTML = '<div class="notice bad">سرویس عیب‌یابی در دسترس نیست. ممکن است این استقرار هنوز کد قدیمی را اجرا کند — پروژه را از شاخه‌ی جدید دوباره Deploy کنید.</div>';
     return;
   }
-  const rows = Object.entries(data.checks || {}).filter(([, v]) => v && v.ok === false);
+  const missingKeys = Array.isArray(data.missing) ? new Set(data.missing) : null;
+  const rows = Object.entries(data.checks || {}).filter(
+    ([k, v]) => v && v.ok === false && (!missingKeys || missingKeys.has(k))
+  );
   const okRows = Object.entries(data.checks || {}).filter(([, v]) => v && v.ok === true);
   if (!rows.length) {
     box.innerHTML = `<div class="notice ok">همه‌ی تنظیمات لازم موجود است (${esc(data.authMode || '')}). اگر باز هم خطا می‌گیرید، کلید مدل یا بایندینگ D1 را بررسی کنید.</div>`;

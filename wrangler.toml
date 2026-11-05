@@ -1,32 +1,18 @@
 # Cloudflare Pages configuration.
 #
-# Nothing in this file needs to be edited before a deploy works. Secrets and
-# the D1 binding live in the Cloudflare dashboard (see SETUP.md).
-#
-# Commit with a placeholder id in [[d1_databases]] and the deploy step fails,
-# Cloudflare keeps serving the previous successful build, and the site silently
-# stays on old code. That is the failure mode this file is written to avoid.
+# When `pages_build_output_dir` is present, Cloudflare Pages treats this file as
+# the source of truth for bindings (locking the Bindings section in the
+# dashboard). Binding D1 (`DB` -> `codepilot-db`) directly here means every
+# deployment automatically has storage wired up without extra dashboard clicks.
 
 name = "codepilot-cloudflare"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "."
 
-# The D1 binding is configured in the Cloudflare dashboard, NOT here.
-#
-# Why: a placeholder `database_id` makes `wrangler pages deploy` fail, and a
-# failed deploy leaves the previous build serving production — which is why a
-# site can keep showing an old error message no matter what you push.
-# Binding it in the dashboard (Settings → Functions → D1 database bindings,
-# variable name: DB) also applies to every future deploy, so the repo stays
-# free of one person's database id.
-#
-# If you prefer IaC, uncomment this with your real id — but never commit a
-# placeholder, and never commit a half-filled one:
-#
-# [[d1_databases]]
-# binding = "DB"                    # must stay "DB" — the code reads env.DB
-# database_name = "codepilot-db"
-# database_id = "<your-real-uuid>"
+[[d1_databases]]
+binding = "DB"                    # must stay "DB" — the code reads env.DB
+database_name = "codepilot-db"
+database_id = "88ad30cf-247a-4f66-af1d-b2d5a7722167"
 
 # Optional: real code execution. Uncomment after creating the Sandbox Durable
 # Object (see SETUP.md §7). Without it, run_command is a clearly-labelled
@@ -39,21 +25,14 @@ pages_build_output_dir = "."
 # tag = "v1"
 # new_sqlite_classes = ["Sandbox"]
 
-# No [vars] block on purpose.
-#
-# Cloudflare treats a `[vars]` entry as owned by this file: once a name is
-# declared here, the dashboard shows it locked and only Secrets remain editable
-# ("Environment variables for this project are being managed through
-# wrangler.toml. Only Secrets can be managed via the Dashboard."). That forced a
-# code edit and a redeploy just to change a model name or an email.
-#
-# Everything is therefore dashboard-managed:
+# Secrets in the Cloudflare dashboard (Settings -> Variables and secrets):
 #   MODEL_API_KEY      Secret     provider key            (required)
-#   SESSION_SECRET     Secret     32+ random chars        (required)
-#   MODEL_NAME         Text       default: gpt-4o-mini
-#   DEV_ACCESS_EMAIL   Text       single-tenant login email
-#   CONTEXT_BUDGET_TOKENS Text    default: 24000
-#   ACCESS_ALLOWED_EMAILS Text    comma-separated allow-list
+#   DEV_ACCESS_EMAIL   Secret     single-tenant login email
+#   SESSION_SECRET     Secret     optional (derived from MODEL_API_KEY if omitted)
+#   MODEL_NAME         Secret     optional (default: claude-sonnet-5-5)
+#   CONTEXT_BUDGET_TOKENS Secret  optional (default: 24000)
+#   ACCESS_ALLOWED_EMAILS Secret  optional comma-separated allow-list
 #
-# The code has safe defaults for every optional name, so an empty configuration
-# still answers /api/health and explains what is missing.
+# Note: because `pages_build_output_dir` is set, Cloudflare Pages only allows
+# adding encrypted Secrets in the dashboard — every runtime setting works
+# identically when saved as a Secret.
