@@ -341,4 +341,18 @@ test('sessions work with only MODEL_API_KEY set (no SESSION_SECRET)', async () =
   delete other.ACCESS_AUD;
   other.MODEL_API_KEY = 'sk-a-completely-different-key-1234567890';
   assert.notEqual(await auth2.sessionSecretForTest(other), secret);
+
+  // And /api/health must report zero missing items for this minimal setup.
+  const health = await import(`${root}/api/health.js`);
+  const { makeD1 } = await import('./harness.mjs');
+  const res = await health.onRequestGet({
+    request: new Request('https://x/api/health'),
+    env: { DB: makeD1(), DEV_ACCESS_EMAIL: 'only-key@example.com', MODEL_API_KEY: 'tc_live_test_12345' }
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.missing, []);
+  assert.equal(body.checks.SESSION_SECRET.ok, true);
+  assert.equal(body.checks.SESSION_SECRET.derived, true);
 });
