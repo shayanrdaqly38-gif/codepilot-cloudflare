@@ -229,12 +229,16 @@ function sessionCookie(value, maxAge, request) {
 export async function authenticate(request, env) {
   const session = await verifySession(cookieValue(request, SESSION_COOKIE), env).catch(() => null);
   if (session) {
+    // A session must remember HOW it was established: reporting every cookie
+    // session as "cloudflare-access" would hide the single-tenant mode from the
+    // UI (and from any security review of the deployment).
+    const via = session.via === 'dev-fallback' ? 'dev-fallback' : 'cloudflare-access';
     return {
       identity: {
         owner: String(session.owner),
         email: String(session.email || ''),
         name: String(session.name || ''),
-        via: 'session'
+        via
       },
       setCookie: null
     };
@@ -242,6 +246,8 @@ export async function authenticate(request, env) {
 
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
   if (!token) {
+    const fallback = devFallbackEmail(env);
+    if (fallback) return issueSession(request, env, devFallbackIdentity(fallback));
     fail('برای ادامه، از طریق Cloudflare Access وارد شوید.', 401, 'access_required');
   }
   const identity = await verifyAccessToken(token, env);
@@ -259,6 +265,60 @@ export async function authenticate(request, env) {
   return {
     identity: { owner: identity.owner, email: identity.email, name: identity.name, via: identity.via },
     setCookie: sessionCookie(cookie, payload.exp - now, request)
+  };
+}
+
+/* ----------------------- single-tenant fallback --------------------------- */
+
+/**
+ * Emergency/unblock mode: one fixed identity from `DEV_ACCESS_EMAIL`.
+ *
+ * Use it only while Cloudflare Access is not configured yet (or when the app is
+ * already protected by another gate such as a secret URL or Cloudflare WAF).
+ * It is deliberately narrow:
+ *   - needs a syntactically valid email in DEV_ACCESS_EMAIL,
+ *   - refuses to start if ACCESS_TEAM_DOMAIN is set (that would mean Access is
+ *     half-configured and the fallback could mask a real misconfiguration),
+ *   - produces the same owner string shape as Access (iss|sub) so data stays
+ *     compatible if you switch to Access later,
+ *   - `/api/config` and the UI surface a loud warning.
+ */
+export function devFallbackEmail(env) {
+  const email = String(env.DEV_ACCESS_EMAIL || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  if (String(env.ACCESS_TEAM_DOMAIN || '').trim()) {
+    fail(
+      'پیکربندی متناقض: هم ACCESS_TEAM_DOMAIN و هم DEV_ACCESS_EMAIL تنظیم شده‌اند. DEV_ACCESS_EMAIL را حذف کنید یا ACCESS_TEAM_DOMAIN را کامل کنید.',
+      503,
+      'auth_conflict'
+    );
+  }
+  return email;
+}
+
+function devFallbackIdentity(email) {
+  return {
+    owner: `local|${email}`,
+    email,
+    name: email,
+    via: 'dev-fallback'
+  };
+}
+
+async function issueSession(request, env, identity) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    owner: identity.owner,
+    email: identity.email,
+    name: identity.name,
+    via: identity.via,
+    iat: now,
+    exp: now + SESSION_TTL_SECONDS
+  };
+  const cookie = await signSession(payload, env);
+  return {
+    identity: { owner: identity.owner, email: identity.email, name: identity.name, via: identity.via },
+    setCookie: sessionCookie(cookie, SESSION_TTL_SECONDS, request)
   };
 }
 

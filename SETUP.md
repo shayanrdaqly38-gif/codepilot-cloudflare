@@ -1,5 +1,39 @@
 # راه‌اندازی Cloudflare — چک‌لیست کوتاه
 
+> **خطای «Access is not configured» چه معنایی دارد؟**
+> سرور `ACCESS_TEAM_DOMAIN` و/یا `ACCESS_AUD` را پیدا نکرده است. دو راه دارید:
+> **الف) فعال‌سازی فوری (تک‌کاربره)** — فقط یک متغیر اضافه کنید (بخش ۰).
+> **ب) راه‌اندازی کامل Access** — بخش‌های ۱ تا ۴.
+>
+> برای دیدن دقیقاً چه چیزی کم است: `curl -s https://<سایت>/api/health | jq`
+
+## ۰. فعال‌سازی فوری بدون Cloudflare Access (تک‌کاربره)
+
+اگر الان فقط می‌خواهید کار کنید و Access را بعداً تنظیم کنید:
+
+```bash
+npx wrangler pages secret put SESSION_SECRET     # openssl rand -base64 32
+npx wrangler pages secret put MODEL_API_KEY      # کلید tooken.club
+```
+
+و در **Settings → Variables and Secrets → Add** (نوع: *Variable* نه Secret):
+
+```
+DEV_ACCESS_EMAIL = your-email@example.com
+```
+
+نتیجه: سایت با یک هویت ثابت بالا می‌آید و یک **نوار هشدار زرد** در بالای صفحه
+می‌گوید ورود واقعی نیست. `/api/health` هم `authMode: "dev-fallback"` برمی‌گرداند.
+
+> ⚠️ در این حالت **هر کسی که آدرس سایت را بداند** می‌تواند گفتگوها و فایل‌ها را ببیند.
+> این حالت را فقط برای آزمایش یا پشت یک لایه‌ی دیگر (Cloudflare WAF / URL مخفی) استفاده کنید.
+>
+> اگر بعداً `ACCESS_TEAM_DOMAIN` را تنظیم کنید، سرور به‌جای حالت تک‌کاربره، خطای
+> `auth_conflict` می‌دهد تا مجبور شوید انتخاب کنید — این عمدی است.
+
+
+## مسیر کامل (چند کاربر / امن واقعی)
+
 بدون این مراحل، برنامه اجرا می‌شود ولی همگام‌سازی بین دستگاه‌ها و حافظه‌ی پایدار **کار
 نمی‌کند**. ترتیب را رعایت کنید.
 
@@ -62,7 +96,9 @@ npx wrangler pages deploy . --project-name=<نام-پروژه>
 
 | پیام | معنا | کار |
 | --- | --- | --- |
-| `access_unconfigured` | `ACCESS_TEAM_DOMAIN`/`ACCESS_AUD` نیست یا قالب اشتباه است | مرحله ۳ |
+| `Access is not configured.` | **کد قدیمی** روی `main`؛ یعنی نسخه‌ی جدید منتشر نشده | PR را merge و دوباره Deploy کنید |
+| `access_unconfigured` | `ACCESS_TEAM_DOMAIN`/`ACCESS_AUD` نیست یا قالب اشتباه است | بخش ۰ یا مرحله ۳ |
+| `auth_conflict` | هم `DEV_ACCESS_EMAIL` و هم `ACCESS_TEAM_DOMAIN` تنظیم شده | یکی را بردارید |
 | `session_secret_missing` | `SESSION_SECRET` نیست یا < ۳۲ کاراکتر | `openssl rand -base64 32` |
 | `db_missing` | اتصال `DB` نیست | مرحله ۱ |
 | `model_key_missing` | `MODEL_API_KEY` نیست | مرحله ۲ |

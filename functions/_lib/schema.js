@@ -1,4 +1,6 @@
 // D1 schema + idempotent bootstrap.
+
+import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
@@ -111,10 +113,10 @@ const ready = new WeakMap();
 /** Ensure the schema exists. */
 export function ensureSchema(env) {
   if (!env.DB) {
-    const error = new Error('D1 binding DB is missing.');
-    error.status = 503;
-    error.code = 'db_missing';
-    throw error;
+    // Use the shared HttpError so the client gets a precise 503 + code instead
+    // of a generic "unexpected server error". A plain Error with .status was
+    // silently degrading to 500.
+    fail('بایندینگ D1 با نام DB پیدا نشد. در Pages → Settings → Functions → D1 bindings آن را با نام DB اضافه کنید.', 503, 'db_missing');
   }
   const cached = ready.get(env.DB);
   if (cached) return cached;

@@ -27,7 +27,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .status .sync.busy{background:var(--yellow);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.35}}
 .top-actions{display:flex;gap:7px;align-items:center}
-.layout{height:calc(100vh - 52px);display:grid;grid-template-columns:250px minmax(350px,1fr) minmax(330px,400px);direction:ltr}
+.layout{height:calc(100vh - 52px);transition:height .15s ease;display:grid;grid-template-columns:250px minmax(350px,1fr) minmax(330px,400px);direction:ltr}
 .sidebar,.center,.right{min-height:0;direction:rtl}
 .sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column}
 .sidebar-head,.pane-head{height:43px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line);font-weight:650;flex:none}
@@ -149,6 +149,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .hit:hover{border-color:#3a4a68;background:#151d2b}
 .hit .where{color:var(--blue);font-size:10.5px}
 .hit .code{font:11px ui-monospace,monospace;color:#c3ccdd;white-space:pre;overflow:hidden;text-overflow:ellipsis;display:block;padding:2px 0 0}
+.warnbar{display:none;align-items:center;gap:10px;padding:7px 14px;background:#3a2a12;border-bottom:1px solid #6a4d1e;color:#f0d9a8;font-size:11.5px;line-height:1.7}
+.warnbar.show{display:flex}
+.warnbar strong{color:#ffd98a;white-space:nowrap}
+.warnbar span{flex:1}
+.warnbar code{background:#241a0d;padding:1px 4px;border-radius:4px;direction:ltr;display:inline-block}
+.warnbar button{background:#5a4318;border-color:#7d5f24;color:#ffe6b8;padding:3px 9px;font-size:10.5px}
 .mobile-tabs{display:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 @media(max-width:1080px){.layout{grid-template-columns:200px minmax(300px,1fr)}.right{display:none}.right.show{display:flex;position:fixed;inset:52px 0 0 auto;width:min(420px,100%);z-index:6;box-shadow:-15px 0 50px #0008}.mobile-tabs{display:block}}
@@ -167,6 +173,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
     <button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button>
   </div>
 </header>
+
+<div class="warnbar" id="warnBar">
+  <strong>حالت تک‌کاربره بدون ورود واقعی</strong>
+  <span>Cloudflare Access تنظیم نشده و سرور با <code>DEV_ACCESS_EMAIL</code> کار می‌کند. هر کسی که این آدرس را بداند می‌تواند گفتگوها را ببیند. برای امن‌شدن، Access را طبق SETUP.md فعال کنید.</span>
+  <button onclick="document.getElementById('warnBar').style.display='none'">فهمیدم</button>
+</div>
 
 <main class="layout">
   <aside class="sidebar">
@@ -373,6 +385,7 @@ const state = {
   saveTimer: null,
   streaming: false,
   sandbox: false,
+  authMode: 'cloudflare-access',
   diffs: [],
   validation: [],
   commands: [],
@@ -444,8 +457,15 @@ async function boot() {
   try {
     const auth = await api(API.auth);
     state.auth = auth;
+    state.authMode = auth.auth || 'cloudflare-access';
     setStoragePill(true, 'ذخیره‌سازی D1');
     setSync('on', 'متصل · ' + (auth.user.email || 'حساب Access'));
+    if (auth.auth === 'dev-fallback') {
+      $('warnBar').classList.add('show');
+      document.documentElement.style.setProperty('--warnbar-h', '38px');
+      document.querySelector('.layout').style.height = 'calc(100vh - 52px - 38px)';
+      setSync('on', 'حالت تک‌کاربره · ' + (auth.user.email || ''));
+    }
   } catch (error) {
     setStoragePill(false, 'بدون ورود');
     setSync('', 'نیاز به ورود');
@@ -1429,7 +1449,12 @@ function openSettings() {
   const info = $('accountInfo');
   info.innerHTML = `
     <b>حساب</b><span style="direction:ltr;text-align:left">${esc(state.auth?.user?.email || '—')}</span>
-    <b>ذخیره‌سازی</b><span>Cloudflare D1 (سرور) · ورود با Cloudflare Access</span>
+    <b>ذخیره‌سازی</b><span>Cloudflare D1 (سرور)</span>
+    <b>ورود</b><span>${
+      state.authMode === 'dev-fallback'
+        ? '⚠ تک‌کاربره (DEV_ACCESS_EMAIL) — بدون ورود واقعی'
+        : 'Cloudflare Access (امضای JWT)'
+    }</span>
     <b>مدل</b><span style="direction:ltr;text-align:left">${esc(state.modelLabel)}</span>
     <b>مخزن</b><span style="direction:ltr;text-align:left">${state.repo ? esc(`${state.repo.owner}/${state.repo.repo}@${state.repo.branch}`) : 'متصل نیست'}</span>`;
   renderMemory();

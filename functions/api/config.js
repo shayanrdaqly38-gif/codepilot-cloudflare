@@ -7,7 +7,8 @@ import { sandboxEnabled } from '../_lib/sandbox.js';
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => ({
     ok: true,
-    auth: 'cloudflare-access',
+    auth: identity.via === 'dev-fallback' ? 'dev-fallback' : 'cloudflare-access',
+    singleTenant: identity.via === 'dev-fallback',
     storage: 'd1',
     user: { email: identity.email, name: identity.name },
     model: String(env.MODEL_NAME || 'gpt-4o-mini'),
@@ -22,7 +23,8 @@ export async function onRequestGet({ request, env }) {
       search: true,
       validation: true,
       versionHistory: true,
-      realShell: sandboxEnabled(env)
+      realShell: sandboxEnabled(env),
+      realLogin: identity.via !== 'dev-fallback'
     }
   }));
 }

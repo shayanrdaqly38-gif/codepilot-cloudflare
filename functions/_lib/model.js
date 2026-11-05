@@ -90,7 +90,10 @@ export async function callModel(env, payload) {
     try {
       response = await fetch(endpoint(env), {
         method: 'POST',
-        redirect: 'error',
+        // Cloudflare Workers rejects redirect:'error' outright (the fetch call
+        // throws before leaving the isolate), so follow the edge-compatible
+        // contract: manual, then treat any 3xx as a failure below.
+        redirect: 'manual',
         signal: AbortSignal.timeout(timeout),
         headers: {
           Authorization: `Bearer ${env.MODEL_API_KEY}`,
@@ -111,6 +114,16 @@ export async function callModel(env, payload) {
           : 'ارتباط با سرویس مدل برقرار نشد.',
         504,
         'model_unreachable'
+      );
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      // A redirect means the base URL is wrong or the provider moved; retrying
+      // will not help, so fail with a precise message instead of a generic one.
+      fail(
+        'آدرس سرویس مدل ریدایرکت می‌شود. MODEL_BASE_URL را بررسی کنید (باید دقیقاً به /v1 اشاره کند).',
+        502,
+        'model_redirect'
       );
     }
 

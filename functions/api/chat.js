@@ -335,14 +335,20 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       const existed = workspace.files[path] !== undefined;
       const before = existed ? String(workspace.files[path]) : '';
       if (existed && before === content) return { ok: false, text: 'No change: content is identical.' };
-      if (existed) {
-        await recordVersion(env, owner, conversation, { path, content: before, reason: 'before-write' });
-      }
+      // Snapshot even for a brand-new file: an empty first version is what makes
+      // "delete this file" / "undo the creation" reachable from the history UI.
+      await recordVersion(env, owner, conversation, {
+        path,
+        content: before,
+        reason: existed ? 'before-write' : 'created'
+      });
       workspace.files[path] = content;
       workspace.active = path;
 
-      const diff = existed ? unifiedDiff(before, content, { path }) : '';
-      const stats = existed ? diffStats(diffLines(before, content)) : { added: content.split('\n').length, removed: 0 };
+      // Always produce a diff: a newly created file reads as one all-additions
+      // hunk, which is what the UI panel renders.
+      const diff = unifiedDiff(before, content, { path });
+      const stats = diffStats(diffLines(before, content));
       const validation = validateFile(path, content);
       turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
       turn.validation.push({ path, ...validation });

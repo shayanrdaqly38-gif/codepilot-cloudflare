@@ -205,3 +205,15 @@ test('export and delete-all work and are owner-scoped', async () => {
   assert.equal(after.conversations.length, 0);
   assert.equal(after.memory.length, 0);
 });
+
+test('a missing D1 binding returns a precise 503, not a generic 500', async () => {
+  const env = makeEnv(keys);
+  delete env.DB;
+  const res = await auth.onRequestGet(
+    ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys) } }), env)
+  );
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.equal(body.code, 'db_missing');
+  assert.match(body.error, /DB/);
+});
