@@ -35,12 +35,15 @@ export async function onRequestGet({ request, env }) {
       ? { ok: true }
       : { ok: false, hint: 'تنظیم نشده. Application Audience (AUD) Tag را از اپلیکیشن Access بردارید.' };
 
-    const secret = String(env.SESSION_SECRET || '');
-    checks.SESSION_SECRET = !secret
-      ? { ok: false, hint: 'تنظیم نشده. با openssl rand -base64 32 بسازید.' }
-      : secret.length >= 32
+    const secret = String(env.SESSION_SECRET || '').trim();
+    checks.SESSION_SECRET =
+      secret.length >= 32
         ? { ok: true }
-        : { ok: false, hint: `کوتاه است (${secret.length} کاراکتر). حداقل ۳۲ لازم است.` };
+        : secret.length > 0
+          ? { ok: false, hint: `کوتاه است (${secret.length} کاراکتر). حداقل ۳۲ لازم است.` }
+          : String(env.MODEL_API_KEY || '').trim()
+            ? { ok: true, derived: true }
+            : { ok: false, hint: 'تنظیم نشده. با openssl rand -base64 32 بسازید یا MODEL_API_KEY را تنظیم کنید.' };
 
     checks.MODEL_API_KEY = env.MODEL_API_KEY
       ? { ok: true }
