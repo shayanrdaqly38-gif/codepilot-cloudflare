@@ -259,12 +259,17 @@ export async function replaceMessages(env, conversation, messages) {
 export function safeWorkspace(input) {
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const files = {};
+  let approxChars = 64;
   const rawFiles = source.files && typeof source.files === 'object' && !Array.isArray(source.files) ? source.files : {};
   for (const [path, content] of Object.entries(rawFiles).slice(0, 200)) {
     if (!isSafePath(path) || typeof content !== 'string' || content.length > 400_000) continue;
+    approxChars += path.length + content.length + 8;
+    if (approxChars > MAX_WORKSPACE_CHARS) {
+      fail('حجم فایل‌های کاری بیش از حد مجاز است.', 413, 'too_large');
+    }
     files[path] = content;
   }
-  const out = {
+  return {
     files,
     active: typeof source.active === 'string' && files[source.active] !== undefined ? source.active : Object.keys(files)[0] || '',
     repo:
@@ -276,11 +281,6 @@ export function safeWorkspace(input) {
           }
         : null
   };
-  const serialized = JSON.stringify(out);
-  if (serialized.length > MAX_WORKSPACE_CHARS) {
-    fail('حجم فایل‌های کاری بیش از حد مجاز است.', 413, 'too_large');
-  }
-  return out;
 }
 
 export function isSafePath(path) {

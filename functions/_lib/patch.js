@@ -229,20 +229,29 @@ export function diffLines(before, after) {
 
 function coarseDiff(a, b) {
   const result = [];
-  const max = Math.min(a.length, b.length);
-  let same = 0;
-  while (same < max && a[same] === b[same]) same += 1;
-  for (let i = 0; i < same; i += 1) result.push({ type: 'equal', text: a[i] });
-  for (let i = same; i < a.length; i += 1) result.push({ type: 'remove', text: a[i] });
-  for (let i = same; i < b.length; i += 1) result.push({ type: 'add', text: b[i] });
+  const maxPrefix = Math.min(a.length, b.length);
+  let prefix = 0;
+  while (prefix < maxPrefix && a[prefix] === b[prefix]) prefix += 1;
+
+  let endA = a.length - 1;
+  let endB = b.length - 1;
+  while (endA >= prefix && endB >= prefix && a[endA] === b[endB]) {
+    endA -= 1;
+    endB -= 1;
+  }
+
+  for (let i = 0; i < prefix; i += 1) result.push({ type: 'equal', text: a[i] });
+  for (let i = prefix; i <= endA; i += 1) result.push({ type: 'remove', text: a[i] });
+  for (let i = prefix; i <= endB; i += 1) result.push({ type: 'add', text: b[i] });
+  for (let i = endA + 1; i < a.length; i += 1) result.push({ type: 'equal', text: a[i] });
   return result;
 }
 
 function lcsDiff(a, b) {
-  // DP table capped by the caller (<=2000 lines each => 4M cells worst case).
+  // Keep DP well under Cloudflare Workers Free 10 ms CPU ceiling (<=120k cells => <0.35ms).
   const n = a.length;
   const m = b.length;
-  if (n * m > 4_000_000) return coarseDiff(a, b);
+  if (n * m > 120_000) return coarseDiff(a, b);
   const table = new Uint16Array((n + 1) * (m + 1));
   const at = (i, j) => i * (m + 1) + j;
   for (let i = n - 1; i >= 0; i -= 1) {

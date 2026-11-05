@@ -80,3 +80,100 @@ test('chunks enforce exact size, order and aggregate trusted file sizes', async 
   assert.equal(refs[0].size,CHUNK_BYTES+1);
   assert.equal(refs[0].name,'big.bin');
 });
+
+test('resilient chat hydration handles multi-MB (>20 chunk) uploads, binary files, and deleted history refs without 503 CPU spikes', async () => {
+  const env = makeEnv();
+  const totalChunks = 22; // ~4.22 MB (> MAX_FULL_HYDRATE_CHUNKS)
+  const size = totalChunks * CHUNK_BYTES;
+  const started = await uploadAction(env, 'alice', { action: 'start', name: 'report.pdf', size, type: 'application/pdf' });
+  const headerBuf = Buffer.alloc(CHUNK_BYTES, 0);
+  Buffer.from('%PDF-1.7 Sample Embedded Text Inside Large Binary').copy(headerBuf, 0);
+  const fullChunkB64 = Buffer.alloc(CHUNK_BYTES, 65).toString('base64');
+  await uploadAction(env, 'alice', { action: 'chunk', id: started.id, part: 0, data: headerBuf.toString('base64') });
+  for (let part = 1; part < totalChunks; part += 1) {
+    await uploadAction(env, 'alice', { action: 'chunk', id: started.id, part, data: fullChunkB64 });
+  }
+  const refs = await resolveUploadRefs(env, 'alice', [started]);
+
+  // Include a deleted historical upload on an older turn + the active 4.22 MB PDF on the latest turn.
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: 'old' }, { type: 'text', text: '[پیوست: gone.bin]', uploadId: '00000000-0000-0000-0000-000000000000' }] },
+    { role: 'user', content: [{ type: 'text', text: 'old2' }, { type: 'text', text: '[پیوست: gone2.bin]', uploadId: '00000000-0000-0000-0000-000000000001' }] },
+    toWire({ role: 'user', content: 'خلاصه کن', attachments: refs })
+  ];
+
+  const t0 = performance.now();
+  await hydrateUploadParts(env, 'alice', messages, { resilient: true });
+  const elapsedMs = performance.now() - t0;
+
+  assert.ok(elapsedMs < 35, `hydration took too long: ${elapsedMs.toFixed(2)}ms`);
+  assert.match(messages[0].content[1].text, /در پیام‌های قبلی بررسی شد/);
+  assert.match(messages[1].content[1].text, /در دسترس نیست/);
+  assert.equal(messages[2].content[1].type, 'text');
+  assert.match(messages[2].content[1].text, /Sample Embedded Text Inside Large Binary/);
+});
+
+test('callModel recovers from upstream 503 via binary file-part downgrade and CF_PAGES model failover', async () => {
+  const { callModel } = await import('../functions/_lib/model.js');
+  const originalFetch = globalThis.fetch;
+
+  // Case 1: Upstream returns 503 when `{ type: 'file' }` is present, then 200 once downgraded to text.
+  const seenBodies = [];
+  globalThis.fetch = async (_url, init) => {
+    const parsed = JSON.parse(init.body);
+    seenBodies.push(parsed);
+    const hasFileBlock = parsed.messages.some(
+      (m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'file')
+    );
+    if (hasFileBlock) return new Response('upstream 503 on binary block', { status: 503 });
+    return new Response(
+      JSON.stringify({ model: parsed.model, choices: [{ message: { role: 'assistant', content: 'recovered-from-file' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  try {
+    const res1 = await callModel(
+      { MODEL_API_KEY: 'tc_test_1234567890123456' },
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'check' },
+              { type: 'file', file: { filename: 'a.bin', file_data: 'data:application/octet-stream;base64,AP8=' } }
+            ]
+          }
+        ]
+      }
+    );
+    assert.equal(res1.message.content, 'recovered-from-file');
+    assert.equal(seenBodies.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // Case 2: On live Cloudflare Pages (`CF_PAGES: '1'`), if selected model channel returns 503, fail over to backup model.
+  const modelsTried = [];
+  globalThis.fetch = async (_url, init) => {
+    const parsed = JSON.parse(init.body);
+    modelsTried.push(parsed.model);
+    if (parsed.model === 'claude-opus-5-5') {
+      return new Response('channel overloaded', { status: 503, headers: { 'Retry-After': '0.01' } });
+    }
+    return new Response(
+      JSON.stringify({ model: parsed.model, choices: [{ message: { role: 'assistant', content: 'failover-ok' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  try {
+    const res2 = await callModel(
+      { MODEL_API_KEY: 'tc_test_1234567890123456', CF_PAGES: '1' },
+      { model: 'claude-opus-5-5', messages: [{ role: 'user', content: 'سلام' }] }
+    );
+    assert.equal(res2.message.content, 'failover-ok');
+    assert.equal(res2.model, 'claude-sonnet-5-5');
+    assert.deepEqual(modelsTried, ['claude-opus-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

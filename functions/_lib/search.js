@@ -143,6 +143,27 @@ function languageOf(path) {
   return null;
 }
 
+function buildLineStarts(content) {
+  const starts = [0];
+  let idx = content.indexOf('\n');
+  while (idx !== -1) {
+    starts.push(idx + 1);
+    idx = content.indexOf('\n', idx + 1);
+  }
+  return starts;
+}
+
+function lineNumberAt(starts, offset) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] <= offset) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return hi + 1;
+}
+
 /** Extract top-level-ish symbols with line numbers, grouped by file. */
 export function listSymbols(files, { query = '', maxPerFile = 60 } = {}) {
   const needle = String(query || '').toLowerCase();
@@ -154,6 +175,7 @@ export function listSymbols(files, { query = '', maxPerFile = 60 } = {}) {
     if (!content || content.length > MAX_FILE_CHARS) continue;
     const seen = new Set();
     const entries = [];
+    let lineStarts = null;
     for (const pattern of SYMBOL_PATTERNS[language]) {
       pattern.lastIndex = 0;
       let match;
@@ -161,11 +183,13 @@ export function listSymbols(files, { query = '', maxPerFile = 60 } = {}) {
         const name = match[1];
         if (!name || seen.has(name)) continue;
         if (needle && !name.toLowerCase().includes(needle) && !path.toLowerCase().includes(needle)) continue;
-        const line = content.slice(0, match.index).split('\n').length;
+        if (!lineStarts) lineStarts = buildLineStarts(content);
+        const line = lineNumberAt(lineStarts, match.index + (content[match.index] === '\n' ? 1 : 0));
         seen.add(name);
         entries.push({ name, line, kind: language === 'html' ? 'anchor' : 'symbol' });
         if (entries.length >= maxPerFile) break;
       }
+      if (entries.length >= maxPerFile) break;
     }
     if (entries.length) out.push({ path, symbols: entries.sort((a, b) => a.line - b.line) });
   }

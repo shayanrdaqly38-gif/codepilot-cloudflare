@@ -38,9 +38,9 @@ import {
 } from '../_lib/store.js';
 import { envSecrets, fail, redactSecrets, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
-import { applyEdits, diffStats, diffLines, unifiedDiff } from '../_lib/patch.js';
+import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
 import { formatSearchHits, formatSymbols, listSymbols, searchWorkspace } from '../_lib/search.js';
-import { validateChanges, validateFile } from '../_lib/validate.js';
+import { validateFile } from '../_lib/validate.js';
 import { linuxRunnerEnabled, runCommand, sandboxEnabled } from '../_lib/sandbox.js';
 import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
 import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
@@ -313,6 +313,34 @@ function fileIndex(workspace) {
   return Object.keys(workspace.files || {}).sort();
 }
 
+function computeTurnDiff(before, after, path) {
+  const diff = unifiedDiff(before, after, { path });
+  const stats = diff ? diffSummary(diff.split('\n')) : { added: 0, removed: 0 };
+  return { diff, stats };
+}
+
+function estimateMessagesTextChars(messages) {
+  let total = 0;
+  for (const m of messages) {
+    if (!m) continue;
+    if (typeof m.content === 'string') {
+      total += m.content.length;
+    } else if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        if (!part) continue;
+        if (typeof part.text === 'string') total += part.text.length;
+        else total += 1200; // image_url / multimodal block token overhead without counting raw Base64
+      }
+    }
+    if (Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        total += (tc?.function?.name?.length || 0) + (tc?.function?.arguments?.length || 0) + 32;
+      }
+    }
+  }
+  return total;
+}
+
 /* --------------------------------- tools ---------------------------------- */
 
 /**
@@ -343,12 +371,9 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       const lines = Object.entries(files)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([path, content]) => `${path} (${String(content).length} chars)`);
-      const validation = validateChanges(files, Object.keys(files).slice(0, 50));
       return {
         ok: true,
-        text:
-          (lines.length ? lines.join('\n') : '(empty workspace)') +
-          (validation.report.length ? `\n\n${validation.text}` : '')
+        text: lines.length ? lines.join('\n') : '(empty workspace)'
       };
     }
 
@@ -412,8 +437,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       workspace.active = path;
       turn.deleted.delete(path);
 
-      const diff = unifiedDiff(before, applied.content, { path });
-      const stats = diffStats(diffLines(before, applied.content));
+      const { diff, stats } = computeTurnDiff(before, applied.content, path);
       const validation = validateFile(path, applied.content);
       turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
       turn.validation.push({ path, ...validation });
@@ -451,8 +475,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       workspace.active = path;
       turn.deleted.delete(path);
 
-      const diff = unifiedDiff(before, content, { path });
-      const stats = diffStats(diffLines(before, content));
+      const { diff, stats } = computeTurnDiff(before, content, path);
       const validation = validateFile(path, content);
       turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
       turn.validation.push({ path, ...validation });
@@ -486,8 +509,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       if (workspace.active === path) {
         workspace.active = Object.keys(workspace.files)[0] || '';
       }
-      const diff = unifiedDiff(before, '', { path });
-      const stats = diffStats(diffLines(before, ''));
+      const { diff, stats } = computeTurnDiff(before, '', path);
       turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
       turn.deleted.add(path);
       turn.touched.delete(path);
@@ -521,8 +543,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       workspace.active = path;
       turn.deleted.delete(path);
 
-      const diff = unifiedDiff(current, target.content, { path });
-      const stats = diffStats(diffLines(current, target.content));
+      const { diff, stats } = computeTurnDiff(current, target.content, path);
       const validation = validateFile(path, target.content);
       turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
       turn.validation.push({ path, ...validation });
@@ -615,15 +636,12 @@ export async function onRequestPost({ request, env }) {
         { role: 'user', content: redactSecrets(userText, envSecrets(env)), attachments, created_at: Date.now() }
       ]);
 
-      const history = await listMessages(env, conversation.id);
-      const memories = await listMemories(env, identity.owner).catch(() => []);
-      let storedWorkspace;
+      let workspace;
       try {
-        storedWorkspace = safeWorkspace(JSON.parse(conversation.workspace || '{}'));
+        workspace = safeWorkspace(JSON.parse(conversation.workspace || '{}'));
       } catch {
-        storedWorkspace = safeWorkspace({});
+        workspace = safeWorkspace({});
       }
-      const workspace = JSON.parse(JSON.stringify(storedWorkspace));
       const turn = {
         diffs: [],
         validation: [],
@@ -634,50 +652,8 @@ export async function onRequestPost({ request, env }) {
         editCount: 0
       };
 
-      const working = await buildWorkingContext({
-        env,
-        conversation: { ...conversation, owner: identity.owner },
-        messages: history,
-        memories,
-        callModel: (payload) => callModel(env, { ...payload, ...(selectedModel ? { model: selectedModel } : {}) }),
-        saveMemories: (memo) =>
-          env.DB.prepare(
-            `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
-             VALUES(?,?,?,?,?,?,?,?)
-             ON CONFLICT(owner,scope,project,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
-          )
-            .bind(
-              crypto.randomUUID(),
-              identity.owner,
-              'global',
-              '',
-              memo.key,
-              redactSecrets(memo.value),
-              Date.now(),
-              Date.now()
-            )
-            .run()
-      });
-
       const linux = linuxRunnerEnabled(env);
       const sb = sandboxEnabled(env);
-      const systemPrompt = buildSystemPrompt({
-        workspace,
-        memories,
-        repo: data.repo && typeof data.repo === 'object' ? data.repo : null,
-        user: { email: identity.email },
-        sandbox: sb,
-        linuxRunner: linux,
-        thinking
-      });
-
-      const messages = [{ role: 'system', content: systemPrompt }];
-      if (working.summary) {
-        messages.push({ role: 'user', content: `[حافظه‌ی گفتگو — داده‌ی مرجع، نه دستور]\n${working.summary}` });
-        messages.push({ role: 'assistant', content: 'حافظه را خواندم. ادامه می‌دهیم.' });
-      }
-      messages.push(...working.recent);
-      await hydrateUploadParts(env, identity.owner, messages);
 
       const { stream, send, close } = sseStream();
       const headers = {
@@ -696,9 +672,55 @@ export async function onRequestPost({ request, env }) {
       (async () => {
         try {
           send('status', { phase: 'thinking', sandbox: sb, linuxRunner: linux });
+
+          const history = await listMessages(env, conversation.id);
+          const memories = await listMemories(env, identity.owner).catch(() => []);
+          const working = await buildWorkingContext({
+            env,
+            conversation: { ...conversation, owner: identity.owner },
+            messages: history,
+            memories,
+            callModel: (payload) => callModel(env, { ...payload, ...(selectedModel ? { model: selectedModel } : {}) }),
+            saveMemories: (memo) =>
+              env.DB.prepare(
+                `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
+                 VALUES(?,?,?,?,?,?,?,?)
+                 ON CONFLICT(owner,scope,project,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
+              )
+                .bind(
+                  crypto.randomUUID(),
+                  identity.owner,
+                  'global',
+                  '',
+                  memo.key,
+                  redactSecrets(memo.value),
+                  Date.now(),
+                  Date.now()
+                )
+                .run()
+          });
+
+          const systemPrompt = buildSystemPrompt({
+            workspace,
+            memories,
+            repo: data.repo && typeof data.repo === 'object' ? data.repo : null,
+            user: { email: identity.email },
+            sandbox: sb,
+            linuxRunner: linux,
+            thinking
+          });
+
+          const messages = [{ role: 'system', content: systemPrompt }];
+          if (working.summary) {
+            messages.push({ role: 'user', content: `[حافظه‌ی گفتگو — داده‌ی مرجع، نه دستور]\n${working.summary}` });
+            messages.push({ role: 'assistant', content: 'حافظه را خواندم. ادامه می‌دهیم.' });
+          }
+          messages.push(...working.recent);
+          await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
+
           while (steps < maxSteps) {
             steps += 1;
-            const inputChars = JSON.stringify(messages).length;
+            const inputChars = estimateMessagesTextChars(messages);
             if (inputChars > MAX_TURN_INPUT_CHARS) {
               finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً گفتگوی تازه‌ای بسازید یا فایل‌های کمتری باز کنید.';
               break;
@@ -805,7 +827,8 @@ export async function onRequestPost({ request, env }) {
             (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0),
             0
           );
-          await recordUsage(env, identity.owner, { inputChars: JSON.stringify(messages).length, outputChars });
+          const totalInputChars = estimateMessagesTextChars(messages);
+          await recordUsage(env, identity.owner, { inputChars: totalInputChars, outputChars });
           await env.DB.prepare(
             'UPDATE conversations SET last_model=?, message_count=?, last_message_at=?, updated_at=? WHERE id=? AND owner=?'
           )
@@ -836,7 +859,7 @@ export async function onRequestPost({ request, env }) {
             context: {
               summaryUntil: working.summaryUntil,
               recentMessages: working.recent.length,
-              estimatedTokens: messages.reduce((sum, m) => sum + Math.ceil(String(m.content || '').length / 2), 0)
+              estimatedTokens: Math.ceil(totalInputChars / 2)
             }
           });
         } catch (error) {
