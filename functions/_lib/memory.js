@@ -78,8 +78,22 @@ export function repairToolGroups(messages) {
 
 /* ------------------------------- token budget ----------------------------- */
 
+function messageTokenCost(m) {
+  if (!m) return 4;
+  let tokens = 6 + estimateTokens(typeof m.content === 'string' ? m.content : '');
+  if (Array.isArray(m.tool_calls)) {
+    for (const call of m.tool_calls) {
+      tokens += 12 + estimateTokens(call?.function?.name || '') + estimateTokens(call?.function?.arguments || '');
+    }
+  }
+  if (Array.isArray(m.attachments) && m.attachments.length) {
+    tokens += m.attachments.length * 400;
+  }
+  return tokens;
+}
+
 function tokensOf(messages) {
-  return messages.reduce((sum, m) => sum + estimateTokens(JSON.stringify(toWire(m))) + 4, 0);
+  return messages.reduce((sum, m) => sum + messageTokenCost(m), 0);
 }
 
 /**
@@ -92,7 +106,7 @@ export function selectWindow(messages, budgetTokens) {
   let used = 0;
   while (start > 0) {
     const candidate = messages[start - 1];
-    const cost = estimateTokens(JSON.stringify(toWire(candidate))) + 4;
+    const cost = messageTokenCost(candidate);
     if (used + cost > budget && start < messages.length) break;
     used += cost;
     start -= 1;
@@ -297,7 +311,9 @@ export async function buildWorkingContext({
               role: 'user',
               content: JSON.stringify({
                 previous_memory: summary,
-                transcript: older.map(toWire)
+                transcript: older.map((m) =>
+                  m.attachments?.length ? { ...m, attachments: m.attachments.map((a) => ({ name: a.name, type: a.type })) } : toWire(m)
+                )
               })
             }
           ]
@@ -323,15 +339,45 @@ export async function buildWorkingContext({
     }
   }
 
-  let recent = pending.slice(window.start).map(toWire);
-  if (!recent.length && repaired.length) recent = repaired.slice(-12).map(toWire);
+  let recentSlice = pending.slice(window.start);
+  if (!recentSlice.length && repaired.length) recentSlice = repaired.slice(-12);
 
-  // Hard guard: never send an unbounded payload even if the budget is misconfigured.
-  const serialized = JSON.stringify(recent);
-  if (serialized.length > 400_000) {
+  // Strip heavy inline Base64 data from older historical turns (keep full inline data only on the latest user turn).
+  let lastAttachmentIdx = -1;
+  for (let i = recentSlice.length - 1; i >= 0; i -= 1) {
+    if (recentSlice[i]?.role === 'user' && recentSlice[i]?.attachments?.length) {
+      lastAttachmentIdx = i;
+      break;
+    }
+  }
+  const toRecentWire = (msg, idx) => {
+    if (idx !== lastAttachmentIdx && msg?.attachments?.some((a) => a && a.data)) {
+      const lite = msg.attachments.map((a) => `[پیوست قبلی: ${a.name || 'file'}]`).join(' ');
+      return toWire({ ...msg, content: `${msg.content || ''}\n${lite}`.trim(), attachments: undefined });
+    }
+    return toWire(msg);
+  };
+
+  let recent = recentSlice.map(toRecentWire);
+
+  // Hard guard on non-binary text size so a misconfigured budget cannot overflow context,
+  // without penalizing legitimate image_url Base64 blocks on the latest turn.
+  const textCharsOf = (items) =>
+    items.reduce((sum, m) => {
+      if (typeof m.content === 'string') return sum + m.content.length;
+      if (Array.isArray(m.content)) {
+        return sum + m.content.reduce((s, p) => s + (typeof p?.text === 'string' ? p.text.length : 1000), 0);
+      }
+      return sum;
+    }, 0);
+
+  if (textCharsOf(recent) > 400_000) {
     const trimmed = selectWindow(pending, Math.min(budget, 8_000));
-    recent = pending.slice(trimmed.start).map(toWire);
-    if (JSON.stringify(recent).length > 400_000) {
+    const trimmedSlice = pending.slice(trimmed.start);
+    recent = trimmedSlice.map((m, idx) =>
+      idx === trimmedSlice.length - 1 ? toWire(m) : toRecentWire(m, -1)
+    );
+    if (textCharsOf(recent) > 400_000) {
       fail('تاریخچه‌ی ابزار بیش از حد بزرگ است؛ گفتگوی جدید بسازید.', 413, 'context_too_large');
     }
   }

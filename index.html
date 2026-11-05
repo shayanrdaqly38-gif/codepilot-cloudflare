@@ -626,15 +626,27 @@ async function api(path, options = {}) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
   if (init.body && !init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
   let res;
-  try {
-    res = await fetch(path, init);
-  } catch {
-    throw new Error('ارتباط با سرور برقرار نشد.');
-  }
   let data = null;
-  const type = res.headers.get('Content-Type') || '';
-  if (type.includes('application/json')) {
-    try { data = await res.json(); } catch { data = null; }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      res = await fetch(path, init);
+    } catch {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      throw new Error('ارتباط با سرور برقرار نشد.');
+    }
+    data = null;
+    const type = res.headers.get('Content-Type') || '';
+    if (type.includes('application/json')) {
+      try { data = await res.json(); } catch { data = null; }
+    }
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt === 0) {
+      await new Promise((r) => setTimeout(r, 600));
+      continue;
+    }
+    break;
   }
   if (!res.ok) {
     const error = new Error((data && data.error) || `خطای سرور (${res.status})`);
@@ -944,18 +956,28 @@ async function runDiagnostics(boxId = 'diagBox') {
 
 function showSignedOut(error) {
   const chat = $('chat');
+  const hostParts = String(location.hostname || '').split('.');
+  const isPreviewPages = hostParts.length > 3 && location.hostname.endsWith('.pages.dev');
+  const prodUrl = isPreviewPages ? `https://${hostParts.slice(-3).join('.')}` : '';
+  const is503 = Number(error?.status) === 503;
   chat.innerHTML = `
     <div class="welcome">
-      <h2>ورود امن لازم است</h2>
+      <h2>${is503 ? 'پیکربندی یا سرویس موقتاً آماده نیست (503)' : 'ورود امن لازم است'}</h2>
       <p>${esc(error.message || '')}</p>
+      ${isPreviewPages ? `<div class="notice warn" style="margin-top:12px;direction:rtl">
+        شما روی <b>آدرس پیش‌نمایش (Preview)</b> هستید و متغیرهای Production در این زیرشاخه فعال نیستند.
+        برای کار با نسخه‌ی اصلی روی <a href="${esc(prodUrl)}" style="color:var(--accent);font-weight:700">${esc(prodUrl)}</a> کلیک کنید.
+      </div>` : ''}
       <div class="notice bad" style="margin-top:12px;direction:rtl">
-        این نسخه با <b>Cloudflare Access</b> محافظت می‌شود. اگر صفحه‌ی ورود نیامده، پروژه‌ی Pages را به Access وصل کنید
-        (تنظیمات لازم در فایل SETUP.md آمده است). پس از تنظیم، همین صفحه را دوباره بارگذاری کنید.
+        ${is503
+          ? 'سرور کد ۵۰۳ برگرداند. دکمه‌ی «🔍 عیب‌یابی تنظیمات» در پایین را بزنید تا علت دقیق نمایش داده شود.'
+          : 'این نسخه با <b>Cloudflare Access</b> محافظت می‌شود. اگر صفحه‌ی ورود نیامده، پروژه‌ی Pages را به Access وصل کنید (تنظیمات لازم در فایل SETUP.md آمده است). پس از تنظیم، همین صفحه را دوباره بارگذاری کنید.'}
         <br><br>کد خطا: <span style="direction:ltr;display:inline-block">${esc(error.code || error.status || '')}</span>
       </div>
       <div class="suggestions">
         <button onclick="location.reload()">↻ تلاش دوباره</button>
         <button onclick="runDiagnostics()">🔍 عیب‌یابی تنظیمات</button>
+        ${prodUrl ? `<button onclick="location.href='${esc(prodUrl)}'">🚀 رفتن به آدرس اصلی</button>` : ''}
       </div>
       <div id="diagBox" style="margin-top:12px;direction:rtl"></div>
       <div class="suggestions" style="margin-top:8px"><button onclick="probeModel()">⚡ تست اتصال مدل</button></div>
@@ -1624,7 +1646,7 @@ function renderAttachments() {
     card.appendChild(remove); list.appendChild(card);
   }
 }
-function uploadRequest(body, item, onProgress) {
+function uploadRequestOnce(body, item, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     if (item) item.xhr = xhr;
@@ -1645,17 +1667,41 @@ function uploadRequest(body, item, onProgress) {
         if (status === 401 || status === 403) return reject(new Error(`دسترسی آپلود رد شد (HTTP ${status})؛ دوباره وارد شوید`));
         if (status === 413) return reject(new Error('حجم درخواست از سقف سرور بیشتر است (HTTP 413)'));
         if (status === 404 || (status >= 200 && status < 300)) return reject(new Error(`مسیر /api/uploads پاسخ API ندارد (HTTP ${status})؛ نسخهٔ سرور آپلود مستقر نشده است`));
-        return reject(new Error(`سرور آپلود پاسخ JSON نداد (HTTP ${status})؛ خطای استقرار یا سرور`));
+        const err = new Error(`سرور آپلود موقتاً پاسخ نداد (HTTP ${status})`);
+        err.retryable = status === 429 || status >= 500;
+        return reject(err);
       }
-      if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(data.error || `خطای آپلود (HTTP ${xhr.status})`));
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const err = new Error(data.error || `خطای آپلود (HTTP ${xhr.status})`);
+        err.retryable = xhr.status === 429 || xhr.status >= 500;
+        return reject(err);
+      }
       if (!data || typeof data !== 'object') return reject(new Error('پاسخ API آپلود معتبر نیست'));
       resolve(data);
     };
-    xhr.onerror = () => reject(new Error('ارتباط با سرور آپلود برقرار نشد؛ اتصال یا نشست ورود را بررسی کنید'));
-    xhr.ontimeout = () => reject(new Error('مهلت آپلود تمام شد؛ دوباره تلاش کنید'));
+    xhr.onerror = () => {
+      const err = new Error('ارتباط با سرور آپلود برقرار نشد؛ اتصال یا نشست ورود را بررسی کنید');
+      err.retryable = true;
+      reject(err);
+    };
+    xhr.ontimeout = () => {
+      const err = new Error('مهلت آپلود تمام شد؛ دوباره تلاش کنید');
+      err.retryable = true;
+      reject(err);
+    };
     xhr.onabort = () => reject(new Error('آپلود لغو شد'));
     xhr.send(JSON.stringify(body));
   });
+}
+async function uploadRequest(body, item, onProgress) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await uploadRequestOnce(body, item, onProgress);
+    } catch (err) {
+      if (!err?.retryable || item?.cancelled || attempt === 2) throw err;
+      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
 }
 function readUploadChunk(blob) {
   return new Promise((resolve, reject) => {
@@ -1746,19 +1792,31 @@ async function sendMessage() {
   $('chat').scrollTop = $('chat').scrollHeight;
 
   try {
-    const response = await fetch(API.chat, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: state.conversationId,
-        message: text,
-        attachments,
-        model: state.selectedModel || undefined,
-        thinking: state.thinking,
-        repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
-      })
+    const reqBody = JSON.stringify({
+      conversationId: state.conversationId,
+      message: text,
+      attachments,
+      model: state.selectedModel || undefined,
+      thinking: state.thinking,
+      repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
+    let response;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      response = await fetch(API.chat, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: reqBody
+      });
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt === 0) {
+        const ct = response.headers.get('Content-Type') || '';
+        if (!ct.includes('application/json')) {
+          await new Promise((r) => setTimeout(r, 700));
+          continue;
+        }
+      }
+      break;
+    }
 
     if (!response.ok) {
       let data = null;
