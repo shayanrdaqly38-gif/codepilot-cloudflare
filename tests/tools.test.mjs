@@ -541,3 +541,25 @@ test('model base URL is normalized and 4xx failures are explained', async () => 
     }
   }
 });
+
+test('file_history reports saved versions and refuses unknown files', async () => {
+  const { makeEnv } = await import('./harness.mjs');
+  const env = makeEnv(keys);
+  const owner = 'owner@example.com';
+  const lib = await import(`${root}/_lib/versions.js`);
+  const conv = { id: 'conv-h', workspace: '{}' };
+
+  await lib.recordVersion(env, owner, conv, { path: 'a.js', content: 'one', reason: 'created' });
+  await lib.recordVersion(env, owner, conv, { path: 'a.js', content: 'two', reason: 'before-write' });
+
+  const rows = await lib.listVersions(env, owner, 'a.js', { project: null, limit: 10 });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].reason, 'before-write', 'newest first');
+  assert.equal(rows[1].reason, 'created');
+  assert.ok(rows.every((r) => typeof r.size === 'number'));
+
+  // Path traversal is rejected by the shared guard before touching the database.
+  const store = await import(`${root}/_lib/store.js`);
+  assert.equal(store.isSafePath('../../etc/passwd'), false);
+  assert.equal(store.isSafePath('a.js'), true);
+});

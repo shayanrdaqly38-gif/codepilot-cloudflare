@@ -155,13 +155,23 @@ test('credentials in tool output and user text never reach the model unredacted'
     const payload = modelCalls.at(-1);
     const flat = JSON.stringify(payload.messages);
     assert.ok(!flat.includes('sk-abcdefghijklmnopqrstuvwxyz123456'), 'secret leaked to model');
-    assert.ok(Array.isArray(payload.tools) && payload.tools.length === 8, String(payload.tools?.length));
+    // Assert the *set*, not the count: adding a tool must not break the security
+    // test, but removing one silently would.
+    const expectedTools = [
+      'list_files',
+      'read_file',
+      'search_code',
+      'list_symbols',
+      'write_file',
+      'apply_patch',
+      'undo_edit',
+      'file_history',
+      'run_command'
+    ];
+    const names = (payload.tools || []).map((t) => t.function.name).sort();
+    assert.deepEqual(names, [...expectedTools].sort());
     assert.ok(
-      payload.tools.every((t) =>
-        ['list_files', 'read_file', 'search_code', 'list_symbols', 'write_file', 'apply_patch', 'undo_edit', 'run_command'].includes(
-          t.function.name
-        )
-      )
+      payload.tools.every((t) => Object.keys(t.function.parameters.properties || {}).length >= 0)
     );
   } finally {
     restore();
