@@ -550,6 +550,7 @@ test('file_history reports saved versions and refuses unknown files', async () =
   const conv = { id: 'conv-h', workspace: '{}' };
 
   await lib.recordVersion(env, owner, conv, { path: 'a.js', content: 'one', reason: 'created' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
   await lib.recordVersion(env, owner, conv, { path: 'a.js', content: 'two', reason: 'before-write' });
 
   const rows = await lib.listVersions(env, owner, 'a.js', { project: null, limit: 10 });
@@ -562,4 +563,28 @@ test('file_history reports saved versions and refuses unknown files', async () =
   const store = await import(`${root}/_lib/store.js`);
   assert.equal(store.isSafePath('../../etc/passwd'), false);
   assert.equal(store.isSafePath('a.js'), true);
+});
+
+test('every tool the agent advertises is allowed through by the model layer', async () => {
+  // Regression: a tool declared in TOOLS but missing from ALLOWED_TOOLS was
+  // silently dropped by normalizeToolCalls, so the model called it and the
+  // server answered with an empty turn ("انجام شد.") instead of running it.
+  const model = await import(`${root}/_lib/model.js`);
+  for (const tool of chat.TOOLS) {
+    assert.ok(
+      model.ALLOWED_TOOLS.has(tool.function.name),
+      `${tool.function.name} is advertised but not allowed`
+    );
+  }
+  // ...and the reverse: no allow-listed name is missing from TOOLS.
+  const declared = new Set(chat.TOOLS.map((t) => t.function.name));
+  for (const name of model.ALLOWED_TOOLS) {
+    assert.ok(declared.has(name), `${name} is allowed but never offered to the model`);
+  }
+
+  // A call to a tool that is genuinely not on the list is still stripped.
+  const payload = model.normalizeToolCalls([
+    { id: 'x', type: 'function', function: { name: 'curl_secrets', arguments: '{}' } }
+  ]);
+  assert.deepEqual(payload, []);
 });
