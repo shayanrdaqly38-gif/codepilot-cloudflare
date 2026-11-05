@@ -11,6 +11,7 @@ export const ALLOWED_TOOLS = new Set([
   'write_file',
   'apply_patch',
   'undo_edit',
+  'file_history',
   'run_command'
 ]);
 const DEFAULT_TIMEOUT_MS = 90_000;
