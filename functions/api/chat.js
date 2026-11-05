@@ -15,7 +15,7 @@
 //   5. Persist the whole assistant/tool group before streaming `done`.
 
 import { route } from '../_lib/api.js';
-import { validateAttachments } from '../_lib/attachments.js';
+import { resolveUploadRefs, hydrateUploadParts } from '../_lib/uploads.js';
 import { callModel, sanitizeModelId, sanitizeTools } from '../_lib/model.js';
 import {
   buildSystemPrompt,
@@ -592,7 +592,7 @@ export async function onRequestPost({ request, env }) {
       await enforceChatLimits(env, identity.owner);
 
       const conversationId = String(data?.conversationId || '');
-      const attachments = validateAttachments(data?.attachments);
+      const attachments = await resolveUploadRefs(env, identity.owner, data?.attachments);
       const userText = (typeof data?.message === 'string' ? data.message.trim() : '') || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
@@ -677,6 +677,7 @@ export async function onRequestPost({ request, env }) {
         messages.push({ role: 'assistant', content: 'حافظه را خواندم. ادامه می‌دهیم.' });
       }
       messages.push(...working.recent);
+      await hydrateUploadParts(env, identity.owner, messages);
 
       const { stream, send, close } = sseStream();
       const headers = {

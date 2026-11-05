@@ -1512,7 +1512,7 @@ function appendMessageElement(message) {
       const label = document.createElement('div');
       label.textContent = `📎 ${file.name}`;
       div.appendChild(label);
-      if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+      if (file.data && /^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
         const image = document.createElement('img');
         image.src = `data:${file.type};base64,${file.data}`;
         image.alt = file.name;
@@ -1578,32 +1578,132 @@ let readingAttachments = false;
 function renderAttachments() {
   const list = $('attachmentList');
   list.replaceChildren();
-  pendingAttachments.forEach((file, index) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = `📄 ${file.name} ×`;
-    button.title = 'حذف پیوست';
-    button.onclick = () => { if (!state.busy) { pendingAttachments.splice(index, 1); renderAttachments(); } };
-    list.appendChild(button);
+  readingAttachments = pendingAttachments.some(file => file.status === 'uploading');
+  $('sendBtn').disabled = state.busy || pendingAttachments.some(file => file.status !== 'ready');
+  for (const file of pendingAttachments) {
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid #3c4652;border-radius:12px;padding:10px;min-width:180px;max-width:100%;flex:1 1 180px;background:#20252b';
+    if (file.preview) {
+      const image = document.createElement('img');
+      image.src = file.preview; image.alt = file.name;
+      image.style.cssText = 'width:44px;height:44px;object-fit:cover;border-radius:8px;float:right;margin-left:8px';
+      card.appendChild(image);
+    }
+    const name = document.createElement('div');
+    name.textContent = '📎 ' + file.name;
+    name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    card.appendChild(name);
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:12px;margin:6px 0;color:#b8c7c0;overflow-wrap:anywhere';
+    label.textContent = file.status === 'ready' ? '✓ آپلود کامل · آمادهٔ ارسال' : file.status === 'error' ? 'آپلود ناموفق · ' + file.error : `در حال آپلود · ${file.percent}٪`;
+    label.setAttribute('role', 'status');
+    card.appendChild(label);
+    const progress = document.createElement('progress');
+    progress.max = 100; progress.value = file.percent;
+    progress.setAttribute('aria-label', 'درصد آپلود ' + file.name);
+    progress.style.cssText = 'width:100%;height:6px;accent-color:#58c99b';
+    card.appendChild(progress);
+    if (file.status === 'error') {
+      const retry = document.createElement('button');
+      retry.type = 'button'; retry.textContent = 'تلاش مجدد';
+      retry.onclick = () => { if (!state.busy) uploadAttachment(file); };
+      card.appendChild(retry);
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.textContent = file.status === 'uploading' ? 'لغو' : 'حذف';
+    remove.setAttribute('aria-label', 'حذف ' + file.name);
+    remove.onclick = () => {
+      if (state.busy) return;
+      file.cancelled = true;
+      file.xhr?.abort();
+      if (file.id) uploadRequest({action:'delete',id:file.id}).catch(() => {});
+      if (file.preview) URL.revokeObjectURL(file.preview);
+      pendingAttachments = pendingAttachments.filter(item => item !== file);
+      renderAttachments();
+    };
+    card.appendChild(remove); list.appendChild(card);
+  }
+}
+function uploadRequest(body, item, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    if (item) item.xhr = xhr;
+    xhr.open('POST', '/api/uploads');
+    xhr.withCredentials = true;
+    xhr.timeout = 120000;
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Accept', 'application/json');
+    if (onProgress) xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+    xhr.onload = () => {
+      const responseUrl = new URL(xhr.responseURL || '/api/uploads', location.href);
+      if (responseUrl.origin !== location.origin || responseUrl.pathname.includes('/cdn-cgi/access/')) {
+        return reject(new Error('نشست ورود منقضی شده است؛ صفحه را دوباره باز کنید'));
+      }
+      let data;
+      try { data = JSON.parse(xhr.responseText); } catch {
+        const status = xhr.status;
+        if (status === 401 || status === 403) return reject(new Error(`دسترسی آپلود رد شد (HTTP ${status})؛ دوباره وارد شوید`));
+        if (status === 413) return reject(new Error('حجم درخواست از سقف سرور بیشتر است (HTTP 413)'));
+        if (status === 404 || (status >= 200 && status < 300)) return reject(new Error(`مسیر /api/uploads پاسخ API ندارد (HTTP ${status})؛ نسخهٔ سرور آپلود مستقر نشده است`));
+        return reject(new Error(`سرور آپلود پاسخ JSON نداد (HTTP ${status})؛ خطای استقرار یا سرور`));
+      }
+      if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(data.error || `خطای آپلود (HTTP ${xhr.status})`));
+      if (!data || typeof data !== 'object') return reject(new Error('پاسخ API آپلود معتبر نیست'));
+      resolve(data);
+    };
+    xhr.onerror = () => reject(new Error('ارتباط با سرور آپلود برقرار نشد؛ اتصال یا نشست ورود را بررسی کنید'));
+    xhr.ontimeout = () => reject(new Error('مهلت آپلود تمام شد؛ دوباره تلاش کنید'));
+    xhr.onabort = () => reject(new Error('آپلود لغو شد'));
+    xhr.send(JSON.stringify(body));
   });
 }
+function readUploadChunk(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('خواندن فایل ناموفق بود'));
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.readAsDataURL(blob);
+  });
+}
+async function uploadAttachment(item) {
+  item.status = 'uploading'; item.percent = 0; item.cancelled = false;
+  renderAttachments();
+  try {
+    if (item.id) {
+      await uploadRequest({action:'delete',id:item.id});
+      item.id = null;
+    }
+    if (item.cancelled) return;
+    const started = await uploadRequest({action:'start',name:item.name,type:item.type,size:item.size}, item);
+    if (typeof started.id !== 'string' || !Number.isInteger(started.chunks) || started.chunkBytes !== 192000) throw new Error('نسخهٔ API آپلود با رابط هماهنگ نیست؛ صفحه را تازه‌سازی کنید');
+    item.id = started.id;
+    if (item.cancelled) { await uploadRequest({action:'delete',id:item.id}); return; }
+    for (let part = 0; part < started.chunks; part++) {
+      const data = await readUploadChunk(item.file.slice(part * started.chunkBytes, (part + 1) * started.chunkBytes));
+      if (item.cancelled) return;
+      const result = await uploadRequest({action:'chunk',id:item.id,part,data}, item, fraction => {
+        item.percent = Math.min(99, Math.floor((part + fraction) / started.chunks * 100));
+        renderAttachments();
+      });
+      if (part === started.chunks - 1 && !result.ready) throw new Error('تأیید نهایی فایل دریافت نشد');
+    }
+    if (!item.cancelled) { item.status = 'ready'; item.percent = 100; }
+  } catch (error) {
+    if (!item.cancelled) { item.status = 'error'; item.error = error.message; }
+  } finally { renderAttachments(); }
+}
 async function queueAttachments(files) {
-  if (state.busy || readingAttachments) return toast('لطفاً صبر کنید');
+  if (state.busy) return toast('لطفاً تا پایان پاسخ صبر کنید');
   const selected = Array.from(files);
   if (selected.length + pendingAttachments.length > 5) return toast('حداکثر ۵ فایل مجاز است');
   if (selected.reduce((n, f) => n + f.size, 0) + pendingAttachments.reduce((n, f) => n + f.size, 0) > 20000000) return toast('مجموع حجم فایل‌ها حداکثر ۲۰ مگابایت است');
-  readingAttachments = true;
-  try {
-    const loaded = await Promise.all(selected.map(file => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('خواندن فایل ناموفق بود'));
-      reader.onload = () => resolve({ name: file.name, type: file.type || 'application/octet-stream', size: file.size, data: String(reader.result).split(',')[1] || '' });
-      reader.readAsDataURL(file);
-    })));
-    pendingAttachments.push(...loaded);
-    renderAttachments();
-  } catch (error) { toast(error.message); }
-  finally { readingAttachments = false; }
+  for (const file of selected) {
+    const item = {file,name:file.name,type:file.type || 'application/octet-stream',size:file.size,status:'uploading',percent:0};
+    if (/^image\/(png|jpeg|webp|gif)$/.test(item.type)) item.preview = URL.createObjectURL(file);
+    pendingAttachments.push(item);
+    uploadAttachment(item);
+  }
+  renderAttachments();
 }
 $('prompt').addEventListener('paste', event => {
   const files = event.clipboardData?.files;
@@ -1611,9 +1711,10 @@ $('prompt').addEventListener('paste', event => {
 });
 
 async function sendMessage() {
-  if (state.busy || readingAttachments) return;
+  if (state.busy) return;
+  if (pendingAttachments.some(file => file.status !== 'ready')) return toast('ابتدا آپلود همهٔ فایل‌ها باید کامل شود');
   const input = $('prompt');
-  const attachments = pendingAttachments.slice();
+  const attachments = pendingAttachments.map(({id,name,type,size}) => ({id,name,type,size}));
   const text = input.value.trim() || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
   if (!text) return;
   if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
@@ -1669,6 +1770,7 @@ async function sendMessage() {
       throw new Error(data.error || 'پاسخ سرور قابل خواندن نیست');
     }
 
+    pendingAttachments.forEach(file => { if (file.preview) URL.revokeObjectURL(file.preview); });
     pendingAttachments = [];
     renderAttachments();
     const result = await consumeStream(response, bubble);
@@ -1686,7 +1788,7 @@ async function sendMessage() {
     state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
   } finally {
     state.busy = false;
-    $('sendBtn').disabled = false;
+    renderAttachments();
     $('sendBtn').textContent = 'ارسال ↑';
     $('composerHint').textContent = 'Enter ارسال · Shift+Enter خط جدید';
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
