@@ -62,7 +62,15 @@ tests/                                  تست‌های Node (SQLite واقعی 
 
 ## «Access is not configured» — چه کنم؟
 
-این پیام یعنی سرور `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` را ندارد (یا کد قدیمی روی سایت است). چهار گام:
+**اگر جمله انگلیسی است `Access is not configured.`** → کد قدیمی روی سایت است، یعنی
+آخرین deploy شکست خورده (گام ۰).
+**اگر فارسی است `access_unconfigured`** → کد جدید هست ولی تنظیمات ورود کامل نیست (گام ۱).
+
+0. **اول مطمئن شوید کد جدید روی سایت است:**
+   ```bash
+   ./scripts/check-deploy.sh https://<سایت-شما>
+   ```
+   اگر گفت `STILL OLD CODE`، مشکل تنظیمات نیست — deploy شکست خورده است.
 
 1. **دقیقاً ببینید چه کم است:**
    ```bash
