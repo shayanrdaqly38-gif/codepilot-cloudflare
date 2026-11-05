@@ -505,3 +505,39 @@ test('creating a file records a base version and produces a real diff', async ()
   assert.match(diff, /^--- a\/new\.js/m);
   assert.match(diff, /^\+b$/m);
 });
+
+test('model base URL is normalized and 4xx failures are explained', async () => {
+  const model = await import(`${root}/_lib/model.js`);
+  const suffix = '/chat/completions';
+  for (const base of [
+    'https://tooken.club/v1',
+    'https://tooken.club/v1/',
+    'https://tooken.club/v1/chat/completions',
+    ' https://tooken.club/v1/// '
+  ]) {
+    assert.equal(model.modelEndpoint({ MODEL_BASE_URL: base }), 'https://tooken.club/v1' + suffix);
+  }
+  // The provider the user actually has must stay the default.
+  assert.equal(model.modelEndpoint({}), 'https://tooken.club/v1' + suffix);
+
+  // A wrong path or model must not surface as "unexpected server error".
+  const cases = [
+    [404, 'model_not_found'],
+    [400, 'model_rejected'],
+    [401, 'model_auth'],
+    [429, 'model_rate_limited']
+  ];
+  for (const [status, code] of cases) {
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response('nope', { status });
+    try {
+      await assert.rejects(
+        () => model.callModel({ MODEL_API_KEY: 'key-123456789012', MODEL_NAME: 'm' }, { messages: [{ role: 'user', content: 'hi' }] }),
+        (error) => error.code === code,
+        `status ${status} should map to ${code}`
+      );
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+});
