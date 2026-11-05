@@ -364,7 +364,8 @@ const API = {
   conversations: '/api/state/conversations',
   versions: '/api/state/versions',
   search: '/api/state/search',
-  chat: '/api/chat'
+  chat: '/api/chat',
+  health: '/api/health'
 };
 
 const state = {
@@ -515,6 +516,36 @@ async function boot() {
   setSync('on', 'همگام با ابر · ' + (state.auth.user.email || ''));
 }
 
+async function runDiagnostics() {
+  const box = $('diagBox');
+  if (!box) return;
+  box.innerHTML = '<div class="tiny">در حال بررسی…</div>';
+  let data;
+  try {
+    const res = await fetch(API.health, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+    data = await res.json();
+  } catch (error) {
+    box.innerHTML = '<div class="notice bad">سرویس عیب‌یابی در دسترس نیست. ممکن است این استقرار هنوز کد قدیمی را اجرا کند — پروژه را از شاخه‌ی جدید دوباره Deploy کنید.</div>';
+    return;
+  }
+  const rows = Object.entries(data.checks || {}).filter(([, v]) => v && v.ok === false);
+  const okRows = Object.entries(data.checks || {}).filter(([, v]) => v && v.ok === true);
+  if (!rows.length) {
+    box.innerHTML = `<div class="notice ok">همه‌ی تنظیمات لازم موجود است (${esc(data.authMode || '')}). اگر باز هم خطا می‌گیرید، کلید مدل یا بایندینگ D1 را بررسی کنید.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="notice bad">
+      <b>${esc(faNum(rows.length))} مورد ناقص است:</b>
+      <ul style="margin:8px 0 8px 18px;padding:0">
+        ${rows.map(([k, v]) => `<li><code style="direction:ltr;display:inline-block">${esc(k)}</code> — ${esc(v.hint || '')}</li>`).join('')}
+      </ul>
+      ${data.modeWarning ? `<div style="margin-top:6px">${esc(data.modeWarning)}</div>` : ''}
+      ${(data.nextSteps || []).length ? `<div style="margin-top:8px"><b>قدم بعدی:</b><br>${data.nextSteps.map((s) => esc(s)).join('<br>')}</div>` : ''}
+      ${okRows.length ? `<div class="tiny" style="margin-top:8px">درست: ${okRows.map(([k]) => esc(k)).join(' · ')}</div>` : ''}
+    </div>`;
+}
+
 function showSignedOut(error) {
   const chat = $('chat');
   chat.innerHTML = `
@@ -526,7 +557,11 @@ function showSignedOut(error) {
         (تنظیمات لازم در فایل SETUP.md آمده است). پس از تنظیم، همین صفحه را دوباره بارگذاری کنید.
         <br><br>کد خطا: <span style="direction:ltr;display:inline-block">${esc(error.code || error.status || '')}</span>
       </div>
-      <div class="suggestions"><button onclick="location.reload()">↻ تلاش دوباره</button></div>
+      <div class="suggestions">
+        <button onclick="location.reload()">↻ تلاش دوباره</button>
+        <button onclick="runDiagnostics()">🔍 عیب‌یابی تنظیمات</button>
+      </div>
+      <div id="diagBox" style="margin-top:12px;direction:rtl"></div>
     </div>`;
   $('sendBtn').disabled = true;
   $('prompt').disabled = true;
