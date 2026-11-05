@@ -123,3 +123,53 @@ test('the shipped code can never emit the old hard-coded Access error', async ()
   assert.match(auth, /access_required/);
   assert.match(auth, /DEV_ACCESS_EMAIL|devFallback/);
 });
+
+test('check-deploy.sh distinguishes a live build from a stale one', async () => {
+  // The script is the user's only way to tell "my code is wrong" apart from
+  // "Cloudflare never deployed it" without dashboard access.
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+  const script = `${repo}scripts/check-deploy.sh`;
+
+  const http = await import('node:http');
+  const server = http.createServer((request, response) => {
+    if (request.url === '/api/health') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      return response.end(JSON.stringify({ ok: true, authMode: 'dev-fallback', missing: [] }));
+    }
+    response.writeHead(404);
+    response.end('Access is not configured.');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  try {
+    const live = await run('bash', [script, `http://127.0.0.1:${port}`]);
+    assert.equal(live.code ?? 0, 0);
+    assert.match(live.stdout, /new code is live/);
+  } finally {
+    server.close();
+  }
+
+  // A server without the health endpoint must be reported as stale, not as
+  // "unexpected response" — that was the exact situation the user was in.
+  const stale = http.createServer((request, response) => {
+    response.writeHead(404);
+    response.end('Access is not configured.');
+  });
+  await new Promise((resolve) => stale.listen(0, '127.0.0.1', resolve));
+  const stalePort = stale.address().port;
+  try {
+    await assert.rejects(
+      () => run('bash', [script, `http://127.0.0.1:${stalePort}`]),
+      (error) => {
+        assert.equal(error.code, 2);
+        assert.match(error.stdout, /STALE BUILD/);
+        return true;
+      }
+    );
+  } finally {
+    stale.close();
+  }
+});
