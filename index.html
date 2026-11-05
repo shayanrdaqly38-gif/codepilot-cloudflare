@@ -496,7 +496,12 @@ async function boot() {
     renderConversations();
     renderMemory();
   } catch (error) {
-    toast('بارگذاری گفتگوها ناموفق بود: ' + error.message, 4200);
+    // Without D1 nothing can be saved, so the honest move is to stop here and
+    // say exactly why instead of letting the user type into a dead composer.
+    setStoragePill(false, 'بدون پایگاه‌داده');
+    setSync('', 'ذخیره‌سازی D1 در دسترس نیست');
+    showStorageFailure(error);
+    return;
   }
 
   restoreGitHub();
@@ -627,6 +632,30 @@ function renderConversations() {
     };
     list.appendChild(row);
   }
+}
+
+function showStorageFailure(error) {
+  $('chat').innerHTML = `
+    <div class="welcome">
+      <h2>ذخیره‌سازی در دسترس نیست</h2>
+      <p>ورود انجام شد، اما سرور نتوانست گفتگوها را از پایگاه‌داده‌ی D1 بخواند.</p>
+      <div class="notice bad" style="margin-top:12px;direction:rtl">
+        <b>پیام سرور:</b> ${esc(error.message || '')}
+        ${error.code ? `<br><b>کد:</b> <code style="direction:ltr;display:inline-block">${esc(error.code)}</code>` : ''}
+        <br><br>
+        اگر کد <code style="direction:ltr;display:inline-block">db_missing</code> است، در
+        Pages → Settings → Functions → D1 database bindings بایندینگ
+        <code style="direction:ltr;display:inline-block">DB</code> را اضافه کنید.
+      </div>
+      <div class="suggestions">
+        <button onclick="location.reload()">↻ تلاش دوباره</button>
+        <button onclick="runDiagnostics()">🔍 عیب‌یابی تنظیمات</button>
+      </div>
+      <div id="diagBox" style="margin-top:12px;direction:rtl"></div>
+      <div id="probeBox" style="margin-top:8px;direction:rtl"></div>
+    </div>`;
+  $('sendBtn').disabled = true;
+  $('prompt').disabled = true;
 }
 
 async function newConversation(open = true) {

@@ -291,3 +291,24 @@ test('health.ok is true for a working single-tenant deployment', async () => {
   assert.equal(body.ok, true, JSON.stringify(body.missing));
   assert.match(body.modeWarning, /تک‌کاربره/);
 });
+
+test('health.ok is false when D1 is missing (nothing can be saved)', async () => {
+  const health = await import(`${root}/api/health.js`);
+  const res = await health.onRequestGet({
+    request: new Request('https://x/api/health'),
+    env: { DEV_ACCESS_EMAIL: 'me@example.com', SESSION_SECRET: 'x'.repeat(40), MODEL_API_KEY: 'k' }
+  });
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.deepEqual(body.missing, ['DB']);
+  assert.match(body.checks.DB.hint, /DB/);
+});
+
+test('the UI stops the composer when storage is unreachable', async () => {
+  const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(html, /function showStorageFailure/);
+  assert.match(html, /db_missing/);
+  // It must not fall through to "ready" after a storage failure.
+  assert.match(html, /showStorageFailure\(error\);\s*return;/);
+});

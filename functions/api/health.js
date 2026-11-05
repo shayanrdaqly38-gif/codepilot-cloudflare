@@ -119,7 +119,10 @@ export async function onRequestGet({ request, env }) {
       {
         // `ok` means "this deployment can serve requests". Single-tenant mode is
         // a valid state (it only downgrades login), so it must not flip ok=false.
-        ok: (authMode === 'dev-fallback' || missing.length === 0) && (!probe || probe.ok),
+        ok:
+          Boolean(checks.DB?.ok) &&
+          (authMode === 'dev-fallback' || missing.length === 0) &&
+          (!probe || probe.ok),
         authMode,
         sandbox: sandboxEnabled(env),
         model: String(env.MODEL_NAME || 'gpt-4o-mini'),
@@ -133,7 +136,11 @@ export async function onRequestGet({ request, env }) {
         nextSteps: buildSteps(checks, authMode),
         ...(probe ? { probe } : {})
       },
-      authMode === 'unconfigured' || (authMode === 'cloudflare-access' && missing.length) ? 503 : 200
+      // 503 means "this deployment cannot serve": no DB, no auth mode, or a
+      // broken setting in Access mode. Single-tenant mode alone stays 200.
+      !checks.DB?.ok || authMode === 'unconfigured' || (authMode === 'cloudflare-access' && missing.length)
+        ? 503
+        : 200
     );
   } catch (error) {
     return errorResponse(error);
