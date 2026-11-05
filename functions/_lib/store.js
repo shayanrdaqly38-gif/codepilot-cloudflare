@@ -178,6 +178,17 @@ export function sanitizeStoredMessage(message) {
   if (role === 'user' && Array.isArray(message?.attachments) && message.attachments.length) {
     out.attachments = validateAttachments(message.attachments);
   }
+  if (role === 'assistant') {
+    if (typeof message?.reasoning === 'string' && message.reasoning.trim()) {
+      out.reasoning = redactSecrets(message.reasoning).slice(0, 10_000);
+    }
+    if (typeof message?.reasoning_effort === 'string' && /^(off|low|medium|high|max)$/.test(message.reasoning_effort)) {
+      out.reasoning_effort = message.reasoning_effort;
+    }
+    if (Number.isInteger(message?.reasoning_tokens) && message.reasoning_tokens > 0) {
+      out.reasoning_tokens = message.reasoning_tokens;
+    }
+  }
   if (role === 'assistant' && Array.isArray(message?.tool_calls) && message.tool_calls.length) {
     out.tool_calls = message.tool_calls
       .filter((call) => call && /^[\w-]{1,128}$/.test(String(call.id || '')) && typeof call.function?.name === 'string')

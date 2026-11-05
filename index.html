@@ -190,6 +190,23 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .think-toggle{background:#131c29;border:1px solid #2f3e53;color:#93a1b7;border-radius:999px;padding:3px 9px;font-size:11px;cursor:pointer;transition:all .15s ease}
 .think-toggle:hover{border-color:#80a7e8;color:#dbe7f8}
 .think-toggle.on{background:#1b3531;border-color:#3d8469;color:#a5f0c5}
+.think-toggle.max{background:#2d2314;border-color:#b88736;color:#ffdca1}
+.think-toggle.disabled{opacity:.55;cursor:not-allowed;background:#141820;border-color:#282f3c;color:#768195}
+.effort-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:6px 8px;margin-top:4px;border-radius:10px;background:#161b24;border:1px solid #2b3342;direction:ltr;font-size:11.5px}
+.effort-title{display:inline-flex;align-items:center;gap:6px;color:#9fb0c9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;font-weight:600;white-space:nowrap}
+.effort-title .claude-dot{color:#d97757;font-size:12px}
+.effort-seg{display:inline-flex;align-items:center;gap:3px;background:#0e1219;padding:2px;border-radius:8px;border:1px solid #252d3b;flex-wrap:wrap}
+.effort-opt{min-height:25px!important;padding:2px 8px;border:1px solid transparent;border-radius:6px!important;background:transparent;color:#8e9cb2;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all .14s ease}
+.effort-opt:hover{color:#e6eefb;background:#1a2332}
+.effort-opt.active{background:#1c362e;border-color:#44896c;color:#b4f4cf;font-weight:700}
+.effort-opt.active[data-effort="max"]{background:#332512;border-color:#c89137;color:#ffe0a6}
+.effort-opt.active[data-effort="off"]{background:#222733;border-color:#495368;color:#d0d8e6}
+.effort-bars{letter-spacing:-1px;font-size:10px;opacity:.9}
+.effort-na{color:#7f8ba0;font-size:11px;direction:rtl;font-family:inherit}
+.effort-panel{margin:10px 0;padding:10px 12px;border-radius:11px;background:#121926;border:1px solid #2c3b52}
+.effort-wire{margin-top:7px;padding:5px 8px;border-radius:7px;background:#0b1018;border:1px solid #202b3d;color:#9ec5ff;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;direction:ltr;text-align:left;overflow-x:auto;white-space:nowrap}
+.m-cap{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;padding:1px 6px;border-radius:999px;background:#162925;color:#9be6bc;border:1px solid #2b5446}
+.m-cap.off{background:#1c222d;color:#808ea3;border-color:#2b3342}
 .think-box{margin:0 0 8px;border:1px solid #2b3b52;background:#101826;border-radius:9px;padding:6px 10px;font-size:11.5px;color:#a5b6cf}
 .think-box summary{cursor:pointer;color:#9ec5ff;font-weight:600;user-select:none;list-style:none}
 .think-box summary::-webkit-details-marker{display:none}
@@ -354,6 +371,7 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
       <input id="attachmentInput" type="file" multiple hidden onchange="queueAttachments(this.files);this.value=''">
       <div id="attachmentList" style="display:flex;gap:6px;flex-wrap:wrap" aria-live="polite"></div>
       <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+      <div class="effort-bar" id="composerEffortBar" aria-label="Reasoning effort"></div>
       <div class="sendrow">
         <button type="button" onclick="document.getElementById('attachmentInput').click()" title="تا ۵ فایل، مجموعاً ۲۰ مگابایت؛ خواندن فایل باینری به مدل بستگی دارد" aria-label="افزودن عکس یا فایل">📎 پیوست</button>
         <span class="hint" id="composerHint">Enter ارسال · Shift+Enter خط جدید</span>
@@ -463,7 +481,8 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
       <h2 style="margin:0">انتخاب مدل هوش مصنوعی</h2>
       <button class="icon-btn" onclick="refreshLiveModels()" id="refreshModelsBtn" title="استعلام مستقیم لیست مدل‌ها از سرویس‌دهنده">↻ بروزرسانی لیست زنده</button>
     </div>
-    <p style="margin-top:6px">مدل دلخواه را برای کدنویسی، معماری، یا تحلیل عمیق انتخاب کنید. انتخاب شما ذخیره می‌شود و فوراً در پیام بعدی اعمال خواهد شد.</p>
+    <p style="margin-top:6px">مدل دلخواه و سطح <b>Reasoning effort</b> واقعی آن را انتخاب کنید. پارامترهای استدلال مستقیماً به موتور اصلی مدل ارسال می‌شوند (میان‌بر تغییر سریع: <code>Alt+R</code>).</p>
+    <div id="modalEffortPanel" class="effort-panel"></div>
     <div id="modelGrid" class="model-grid"></div>
     <label class="field-label" for="customModelInput">یا شناسه‌ی دقیق هر مدل دلخواه دیگر:</label>
     <div style="display:flex;gap:8px;align-items:center">
@@ -551,6 +570,7 @@ function openApiConnection() {
 
 const MODEL_STORE = 'cp-model';
 const THINK_STORE = 'cp-thinking';
+const EFFORT_MAP_STORE = 'cp-effort-map';
 
 const state = {
   ready: false,
@@ -570,6 +590,8 @@ const state = {
   availableModels: [],
   modelLabel: '—',
   thinking: true,
+  reasoningEffort: 'medium',
+  effortByModel: {},
   contextTokens: 0,
   contextBudget: 24000,
   busy: false,
@@ -671,7 +693,7 @@ const TIER_LABELS = {
 function inferProvider(id) {
   const s = String(id || '').toLowerCase();
   if (s.startsWith('claude')) return 'Anthropic';
-  if (s.startsWith('gpt')) return 'OpenAI';
+  if (s.startsWith('gpt') || /^o[134]/.test(s)) return 'OpenAI';
   if (s.startsWith('deepseek')) return 'DeepSeek';
   if (s.startsWith('gemini')) return 'Google';
   if (s.startsWith('grok')) return 'xAI';
@@ -680,15 +702,227 @@ function inferProvider(id) {
   return 'Provider';
 }
 
+const EFFORT_META = {
+  off: { label: 'Off', fa: 'خاموش', bars: '○', budget: 0 },
+  low: { label: 'Low', fa: 'کم', bars: '▰▱▱▱', budget: 2048 },
+  medium: { label: 'Medium', fa: 'متوسط', bars: '▰▰▱▱', budget: 8192 },
+  high: { label: 'High', fa: 'زیاد', bars: '▰▰▰▱', budget: 16384 },
+  max: { label: 'Max', fa: 'حداکثر', bars: '▰▰▰▰', budget: 31999 }
+};
+
+function inferClientReasoningSpec(modelId) {
+  const raw = String(modelId || '').trim();
+  if (!raw || raw === '—') {
+    return { supported: true, family: 'anthropic', levels: ['off', 'low', 'medium', 'high'], defaultEffort: 'medium' };
+  }
+  const found = state.availableModels.find((m) => m.id === raw);
+  if (found && found.reasoning && typeof found.reasoning.supported === 'boolean') {
+    return found.reasoning;
+  }
+  const s = raw.toLowerCase();
+  const family = s.includes('claude')
+    ? 'anthropic'
+    : /^(gpt|o1|o3|o4|chatgpt)/.test(s)
+      ? 'openai'
+      : s.includes('deepseek')
+        ? 'deepseek'
+        : s.includes('gemini')
+          ? 'gemini'
+          : s.includes('grok')
+            ? 'xai'
+            : s.includes('kimi') || s.includes('moonshot')
+              ? 'kimi'
+              : s.includes('glm')
+                ? 'glm'
+                : 'other';
+  if (
+    /(?:^|[-_/:])(flash|mini|lite|nano|haiku|luna|astra|instant|turbo)(?:$|[-_/:0-9])/.test(s) ||
+    /^(gpt-3\.5|gpt-4o|claude-3-(?:haiku|sonnet|opus)|claude-2)/.test(s)
+  ) {
+    return { supported: false, family, levels: [], defaultEffort: 'off' };
+  }
+  const unlocksMax =
+    /(?:opus|gpt-6\.1-sol|o1|o3|o4|deepseek-.*(?:pro|r1|reasoner)|kimi-.*(?:pro|thinking)|gemini-4-argon|gemini-.*pro|grok-4|qwq)/.test(
+      s
+    );
+  const defaultEffort = /(?:deepseek-.*(?:pro|r1|reasoner)|kimi-.*(?:pro|thinking)|^o[134]|opus-5)/.test(s)
+    ? 'high'
+    : 'medium';
+  return {
+    supported: true,
+    family,
+    levels: unlocksMax ? ['off', 'low', 'medium', 'high', 'max'] : ['off', 'low', 'medium', 'high'],
+    defaultEffort
+  };
+}
+
+function activeModelId() {
+  const id = state.selectedModel || state.defaultModel;
+  return id && id !== '—' ? id : 'claude-sonnet-5-5';
+}
+
+function resolveEffortForModel(modelId) {
+  const spec = inferClientReasoningSpec(modelId);
+  if (!spec.supported) return 'off';
+  const saved = state.effortByModel[modelId];
+  if (saved && spec.levels.includes(saved)) return saved;
+  if (saved === 'max' && spec.levels.includes('high')) return 'high';
+  if (!state.thinking) return 'off';
+  return spec.defaultEffort || 'medium';
+}
+
+function formatWirePreview(modelId, effort) {
+  const spec = inferClientReasoningSpec(modelId);
+  if (!spec.supported) {
+    return 'بدون پارامتر استدلال (این مدل سریع فاقد Reasoning effort بومی است)';
+  }
+  if (effort === 'off') {
+    return ['anthropic', 'deepseek', 'glm', 'kimi'].includes(spec.family)
+      ? 'API payload → thinking: { type: "disabled" }'
+      : 'API payload → reasoning_effort: (omitted / off)';
+  }
+  const budget = EFFORT_META[effort]?.budget || 8192;
+  const std = effort === 'max' ? 'high' : effort;
+  if (spec.family === 'anthropic') {
+    return `API payload → reasoning_effort: "${std}", thinking: { type: "enabled", budget_tokens: ${budget} }`;
+  }
+  if (spec.family === 'openai') {
+    return `API payload → reasoning_effort: "${effort === 'max' ? 'xhigh' : effort}"`;
+  }
+  if (['deepseek', 'glm', 'kimi'].includes(spec.family)) {
+    return `API payload → reasoning_effort: "${std}", thinking: { type: "enabled", budget_tokens: ${budget} }`;
+  }
+  return `API payload → reasoning_effort: "${std}"`;
+}
+
+function renderEffortControls() {
+  const modelId = activeModelId();
+  const spec = inferClientReasoningSpec(modelId);
+  const current = state.reasoningEffort;
+
+  const buildButtons = (levels) =>
+    `<div class="effort-seg" role="radiogroup" aria-label="Reasoning effort">` +
+    levels
+      .map((lvl) => {
+        const meta = EFFORT_META[lvl] || EFFORT_META.medium;
+        const isAct = lvl === current;
+        const tip =
+          lvl === 'off'
+            ? 'خاموش — پاسخ مستقیم بدون بودجه‌ی استدلال اضافه'
+            : `${meta.label} (${meta.fa}) — بودجه استدلال واقعی: ~${meta.budget.toLocaleString('en-US')} توکن`;
+        return `<button type="button" class="effort-opt${isAct ? ' active' : ''}" data-effort="${esc(lvl)}" role="radio" aria-checked="${isAct}" title="${esc(tip)}" onclick="setReasoningEffort('${esc(lvl)}')"><span class="effort-bars">${meta.bars}</span><span>${meta.label}</span></button>`;
+      })
+      .join('') +
+    `</div>`;
+
+  const composerBar = $('composerEffortBar');
+  if (composerBar) {
+    if (!spec.supported) {
+      composerBar.innerHTML =
+        `<span class="effort-title"><span class="claude-dot">✻</span>Reasoning effort:</span>` +
+        `<span class="effort-na">غیرفعال در <code>${esc(modelId)}</code> (مدل سریع بدون استدلال بومی)</span>`;
+    } else {
+      composerBar.innerHTML =
+        `<span class="effort-title" title="تنظیم واقعی سطح استدلال مدل در API (میان‌بر: Alt+R)"><span class="claude-dot">✻</span>Reasoning effort:</span>` +
+        buildButtons(spec.levels);
+    }
+  }
+
+  const modalPanel = $('modalEffortPanel');
+  if (modalPanel) {
+    if (!spec.supported) {
+      modalPanel.innerHTML =
+        `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;direction:ltr">` +
+        `<span class="effort-title"><span class="claude-dot">✻</span>Reasoning effort (${esc(modelId)}):</span>` +
+        `<span class="effort-na">این مدل سریع فاقد پارامتر Reasoning effort است</span></div>` +
+        `<div class="effort-wire">${esc(formatWirePreview(modelId, 'off'))}</div>`;
+    } else {
+      modalPanel.innerHTML =
+        `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;direction:ltr">` +
+        `<span class="effort-title"><span class="claude-dot">✻</span>Reasoning effort (${esc(modelId)}):</span>` +
+        buildButtons(spec.levels) +
+        `</div>` +
+        `<div class="effort-wire">${esc(formatWirePreview(modelId, current))}</div>`;
+    }
+  }
+}
+
 function syncModelState() {
   state.modelLabel = state.selectedModel || state.defaultModel || '—';
+  const modelId = activeModelId();
+  const spec = inferClientReasoningSpec(modelId);
+  state.reasoningEffort = resolveEffortForModel(modelId);
+  state.thinking = spec.supported && state.reasoningEffort !== 'off';
+
   const badge = $('modelBadge');
   if (badge) badge.textContent = state.modelLabel;
+
   const btn = $('thinkBtn');
   if (btn) {
-    btn.className = 'think-toggle' + (state.thinking ? ' on' : '');
-    btn.textContent = state.thinking ? '🧠 تفکر روشن' : '🧠 تفکر';
+    if (!spec.supported) {
+      btn.className = 'think-toggle disabled';
+      btn.textContent = '🧠 تفکر · ناموجود';
+      btn.title = `مدل ${modelId} از Reasoning effort بومی پشتیبانی نمی‌کند`;
+    } else {
+      const meta = EFFORT_META[state.reasoningEffort] || EFFORT_META.medium;
+      const cls =
+        state.reasoningEffort === 'off'
+          ? 'think-toggle'
+          : state.reasoningEffort === 'max'
+            ? 'think-toggle on max'
+            : 'think-toggle on';
+      btn.className = cls;
+      btn.textContent =
+        state.reasoningEffort === 'off'
+          ? '🧠 تفکر · Off'
+          : `🧠 تفکر · ${meta.label} ${meta.bars}`;
+      btn.title = `Reasoning effort: ${meta.label} — کلیک برای تغییر سطح (Alt+R)`;
+    }
   }
+  renderEffortControls();
+}
+
+function setReasoningEffort(level, silent = false) {
+  const modelId = activeModelId();
+  const spec = inferClientReasoningSpec(modelId);
+  if (!spec.supported) {
+    if (!silent) toast(`مدل ${modelId} از Reasoning effort بومی پشتیبانی نمی‌کند`);
+    return;
+  }
+  const clean = String(level || '').toLowerCase();
+  const resolved = spec.levels.includes(clean)
+    ? clean
+    : clean === 'max' && spec.levels.includes('high')
+      ? 'high'
+      : spec.defaultEffort;
+  state.effortByModel[modelId] = resolved;
+  state.reasoningEffort = resolved;
+  state.thinking = resolved !== 'off';
+  try {
+    localStorage.setItem(EFFORT_MAP_STORE, JSON.stringify(state.effortByModel));
+    localStorage.setItem(THINK_STORE, state.thinking ? '1' : '0');
+  } catch { /* ignore */ }
+  syncModelState();
+  if (!silent) {
+    const meta = EFFORT_META[resolved] || EFFORT_META.medium;
+    toast(
+      resolved === 'off'
+        ? `Reasoning effort: Off (${modelId})`
+        : `Reasoning effort: ${meta.label} · بودجه واقعی ~${faNum(meta.budget)} توکن`
+    );
+  }
+}
+
+function cycleReasoningEffort() {
+  const modelId = activeModelId();
+  const spec = inferClientReasoningSpec(modelId);
+  if (!spec.supported || !spec.levels.length) {
+    toast(`مدل ${modelId} فاقد Reasoning effort بومی است؛ یک مدل استدلالی (مثل Opus یا Sonnet) انتخاب کنید`);
+    return;
+  }
+  const idx = spec.levels.indexOf(state.reasoningEffort);
+  const next = spec.levels[(idx + 1) % spec.levels.length];
+  setReasoningEffort(next);
 }
 
 function syncShellBadge() {
@@ -707,14 +941,19 @@ function syncShellBadge() {
 }
 
 function toggleThinking() {
-  state.thinking = !state.thinking;
-  try { localStorage.setItem(THINK_STORE, state.thinking ? '1' : '0'); } catch { /* ignore */ }
-  syncModelState();
-  toast(state.thinking ? 'حالت تفکر عمیق روشن شد' : 'حالت تفکر عمیق خاموش شد');
+  cycleReasoningEffort();
 }
+
+document.addEventListener('keydown', (event) => {
+  if (event.altKey && (event.key === 'r' || event.key === 'R' || event.code === 'KeyR')) {
+    event.preventDefault();
+    cycleReasoningEffort();
+  }
+});
 
 function openModelModal() {
   renderModelList();
+  renderEffortControls();
   const input = $('customModelInput');
   if (input) input.value = state.selectedModel || '';
   const note = $('modelModalNote');
@@ -739,22 +978,26 @@ function renderModelList() {
       const tier = TIER_LABELS[m.tier] || 'مدل';
       const provider = m.provider || inferProvider(m.id);
       const subtitle = m.desc || (m.label && m.label !== m.id ? m.label : '');
+      const spec = m.reasoning || inferClientReasoningSpec(m.id);
+      const capBadge = spec.supported
+        ? `<span class="m-cap" title="پشتیبانی بومی از تنظیم Reasoning effort">Effort: ${spec.levels.includes('max') ? 'Low–Max' : 'Low–High'}</span>`
+        : `<span class="m-cap off" title="مدل سریع بدون پارامتر Reasoning effort">No Effort</span>`;
       return `<div class="model-card${isAct ? ' active' : ''}" data-model-id="${esc(m.id)}">
         <div class="m-id">${esc(m.id)}</div>
         <div class="m-meta">
           <span>${esc(provider)}</span>
-          <span class="tier-pill">${esc(tier)}</span>
+          <span style="display:inline-flex;gap:4px;align-items:center">${capBadge}<span class="tier-pill">${esc(tier)}</span></span>
         </div>
         ${subtitle ? `<div class="tiny" style="margin-top:5px;line-height:1.5;color:#9eb0c9">${esc(subtitle)}</div>` : ''}
       </div>`;
     })
     .join('');
   grid.querySelectorAll('.model-card').forEach((card) => {
-    card.onclick = () => selectModel(card.dataset.modelId);
+    card.onclick = () => selectModel(card.dataset.modelId, false);
   });
 }
 
-function selectModel(id) {
+function selectModel(id, closeAfter = true) {
   const clean = String(id || '').trim();
   if (!clean) return;
   state.selectedModel = clean === state.defaultModel ? '' : clean;
@@ -767,9 +1010,9 @@ function selectModel(id) {
   const input = $('customModelInput');
   if (input) input.value = state.selectedModel;
   const note = $('modelModalNote');
-  if (note) note.textContent = `مدل فعال: ${state.modelLabel}`;
+  if (note) note.textContent = `مدل فعال: ${state.modelLabel} · Reasoning effort: ${(EFFORT_META[state.reasoningEffort] || EFFORT_META.off).label}`;
   toast('مدل فعال شد: ' + state.modelLabel);
-  closeModal('modelModal');
+  if (closeAfter) closeModal('modelModal');
 }
 
 function applyCustomModel() {
@@ -821,6 +1064,11 @@ async function boot() {
     state.selectedModel = localStorage.getItem(MODEL_STORE) || '';
     const savedThink = localStorage.getItem(THINK_STORE);
     state.thinking = savedThink === null ? true : savedThink === '1';
+    const savedMap = localStorage.getItem(EFFORT_MAP_STORE);
+    if (savedMap) {
+      const parsed = JSON.parse(savedMap);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) state.effortByModel = parsed;
+    }
   } catch { /* ignore */ }
   syncModelState();
   renderTerminalIntro();
@@ -1503,12 +1751,19 @@ function quickPrompt(text) {
   $('prompt').focus();
 }
 
-function renderThinkHtml(thought, plan, open = false) {
+function renderThinkHtml(thought, plan, open = false, meta = {}) {
+  const effortLabel = meta.effort ? (EFFORT_META[meta.effort]?.label || meta.effort) : '';
+  const tokLabel = meta.reasoningTokens ? ` · ${faNum(meta.reasoningTokens)} توکن استدلال` : '';
+  const badge = effortLabel ? ` · ${effortLabel}` : '';
+  if (meta.encrypted && !String(thought || '').trim()) {
+    return `<div class="think-box"><span>⚡ استدلال درونی واقعی مدل اجرا شد${esc(badge)}${esc(tokLabel)}</span></div>`;
+  }
   const body = [String(thought || '').trim(), plan ? `\n── برنامه‌ی اجرا ──\n${String(plan).trim()}` : '']
     .filter(Boolean)
     .join('\n');
   if (!body) return '';
-  return `<details class="think-box"${open ? ' open' : ''}><summary>🧠 فرآیند تفکر و برنامه‌ریزی دستیار</summary><pre>${esc(body)}</pre></details>`;
+  const title = meta.native ? `🧠 استدلال بومی مدل${badge}${tokLabel}` : '🧠 فرآیند تفکر و برنامه‌ریزی دستیار';
+  return `<details class="think-box"${open ? ' open' : ''}><summary>${esc(title)}</summary><pre>${esc(body)}</pre></details>`;
 }
 
 function appendMessageElement(message) {
@@ -1544,6 +1799,14 @@ function appendMessageElement(message) {
     }
   } else {
     let thinkBlocks = '';
+    if (message.reasoning || message.reasoning_tokens) {
+      thinkBlocks += renderThinkHtml(message.reasoning || '', '', false, {
+        native: true,
+        encrypted: !message.reasoning && Boolean(message.reasoning_tokens),
+        effort: message.reasoning_effort || '',
+        reasoningTokens: message.reasoning_tokens || 0
+      });
+    }
     const otherCalls = [];
     if (Array.isArray(message.tool_calls)) {
       for (const call of message.tool_calls) {
@@ -1797,6 +2060,7 @@ async function sendMessage() {
       message: text,
       attachments,
       model: state.selectedModel || undefined,
+      reasoningEffort: state.reasoningEffort,
       thinking: state.thinking,
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
@@ -1870,8 +2134,8 @@ async function consumeStream(response, bubble) {
     if (event === 'status') {
       setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
     } else if (event === 'thinking') {
-      if (thinkArea && (data.thought || data.plan)) {
-        thinkArea.insertAdjacentHTML('beforeend', renderThinkHtml(data.thought, data.plan, true));
+      if (thinkArea && (data.thought || data.plan || data.encrypted)) {
+        thinkArea.insertAdjacentHTML('beforeend', renderThinkHtml(data.thought, data.plan, Boolean(data.thought || data.plan), data));
         $('chat').scrollTop = $('chat').scrollHeight;
       }
     } else if (event === 'tool') {
