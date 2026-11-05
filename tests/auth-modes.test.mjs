@@ -154,3 +154,58 @@ test('the signed-out screen can explain itself instead of dead-ending', async ()
   // The banner must not promise real login when the server says it is single-tenant.
   assert.match(html, /حالت تک‌کاربره/);
 });
+
+test('no fetch in functions/ uses a redirect mode the Workers runtime rejects', async () => {
+  // Regression guard: `redirect: 'error'` is not implemented at the edge. It
+  // throws before the request is sent, so the bug shows up as a generic 500 —
+  // exactly how both the model call and the Access JWKS fetch were broken.
+  const { readdir } = await import('node:fs/promises');
+  const files = [];
+  async function walk(dir) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.name.endsWith('.js')) files.push(full);
+    }
+  }
+  await walk(new URL('../functions/', import.meta.url).pathname);
+  assert.ok(files.length > 5, 'expected to scan the function sources');
+
+  const offenders = [];
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    // Ignore prose in comments: only executable code should be judged.
+    const code = source
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    if (/redirect:\s*['"]error['"]/.test(code)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test('an unreachable Access certs endpoint is a clear 503, not a 500', async () => {
+  // The JWKS fetch is the first thing a real Access login does. If the network
+  // or DNS fails there, the user must see "temporarily unavailable", not an
+  // opaque internal error.
+  const env = makeEnv(keys);
+  env.ACCESS_TEAM_DOMAIN = 'nonexistent-team.cloudflareaccess.com';
+  env.ACCESS_AUD = 'aud';
+  delete env.DEV_ACCESS_EMAIL;
+
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new TypeError('network down');
+  };
+  try {
+    const res = await auth.onRequestGet(
+      ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys) } }), env)
+    );
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.code, 'jwks_unreachable');
+    assert.match(body.error, /Access|کلید/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

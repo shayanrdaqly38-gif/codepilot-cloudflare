@@ -66,11 +66,32 @@ function sessionSecret(env) {
 async function loadJwks(domain, force = false) {
   const fresh = jwksCache && jwksCache.domain === domain && jwksCache.until > Date.now();
   if (fresh && !force) return jwksCache.keys;
-  const response = await fetch(`https://${domain}/cdn-cgi/access/certs`, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(8000),
-    cf: { cacheTtl: 300, cacheEverything: true }
-  });
+  // `redirect: 'error'` is not implemented in the Workers runtime — it throws
+  // before the request leaves the isolate, which turned every real Access login
+  // into a 500. Use 'manual' and treat a 3xx as a misconfigured team domain.
+  let response;
+  try {
+    response = await fetch(`https://${domain}/cdn-cgi/access/certs`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8000),
+      cf: { cacheTtl: 300, cacheEverything: true }
+    });
+  } catch (error) {
+    // A network/DNS/TLS failure here used to escape as a generic 500. It is a
+    // temporary upstream problem, and the message must say so.
+    fail(
+      `کلیدهای Cloudflare Access در دسترس نیستند (${domain}). اتصال شبکه یا صحت ACCESS_TEAM_DOMAIN را بررسی کنید.`,
+      503,
+      error?.name === 'TimeoutError' ? 'jwks_timeout' : 'jwks_unreachable'
+    );
+  }
+  if (response.status >= 300 && response.status < 400) {
+    fail(
+      'آدرس تیم Access ریدایرکت می‌شود؛ ACCESS_TEAM_DOMAIN باید دقیقاً <team>.cloudflareaccess.com باشد.',
+      503,
+      'jwks_redirect'
+    );
+  }
   if (!response.ok) fail('دریافت کلیدهای Cloudflare Access ناموفق بود.', 503, 'jwks_unavailable');
   const data = await response.json();
   const keys = Array.isArray(data.keys) ? data.keys : [];
