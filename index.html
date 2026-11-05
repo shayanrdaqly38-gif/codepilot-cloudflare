@@ -2,7 +2,7 @@
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>CodePilot — محیط توسعه هوشمند</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2374d9a1'/><text x='16' y='22' font-size='18' text-anchor='middle' fill='%2310151d'>✳</text></svg>">
@@ -206,22 +206,60 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .deploy-badge.warn{border-color:#6d5830;background:#241e12;color:#f1d48b}
 .deploy-badge button{padding:3px 9px;font-size:11px;border-radius:6px;background:#80d6a4;color:#0b1b13;border:0;cursor:pointer;font-weight:600}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-.mobile-tabs,.mobile-files{display:none}
+/* Independent RTL workspace: history → conversation → code, with compact task views. */
+:root{--bg:#101216;--panel:#17191e;--panel2:#202329;--line:#2b2e36;--text:#eceef3;--muted:#a1a7b4;--green:#92d4b1}
+body{height:100vh;height:100dvh;display:flex;flex-direction:column;font-size:13px}
+button{transition:background .15s,border-color .15s;min-height:34px;border-radius:9px}
+button:focus-visible,[role=button]:focus-visible,a:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
+.top{height:auto;min-height:64px;flex:none;padding:10px 20px;background:#14161b;flex-wrap:wrap}
+.brand{letter-spacing:.02em}.logo{background:#a6dfbe;border-radius:10px;width:32px;height:32px}
+.top-actions{gap:6px;flex-wrap:wrap}.status{margin-inline-end:auto}
+.layout{height:auto!important;flex:1;min-height:0;grid-template-columns:248px minmax(320px,1fr) minmax(340px,44%);direction:rtl;gap:0}
+.sidebar,.center,.right{min-width:0}.sidebar{grid-column:1;grid-row:1;border-right:0;border-left:1px solid var(--line);background:#14161b}
+.center{grid-column:3;grid-row:1;background:#101216}.right{grid-column:2;grid-row:1;border-left:1px solid var(--line);background:#191b20}
+.sidebar-head,.pane-head{height:52px;padding:0 16px}.sidebar-head .tiny{background:#252830;border-radius:6px;padding:3px 7px}
+.new-conversation{margin:12px 12px 4px;text-align:right;background:#24372e;border:1px solid #3e6350;color:#c5f0d7;font-weight:650;min-height:42px}
+.conv-list{padding:8px}.conv{padding:11px 10px;margin-bottom:3px;border-radius:9px}.conv.active{background:#292e35;border-color:#424d51;border-right:3px solid var(--green)}
+.conv .title{font-size:12px}.conv .meta{color:#a1a7b4}.conv:focus-within .acts{opacity:1}
+.section-title{font-size:11px;padding:16px 16px 8px;color:#a1a7b4}.project{padding:10px 16px;overflow-wrap:anywhere}.tree-row{min-height:36px}.sidebar-foot{padding:12px;grid-template-columns:1fr 1fr}.sidebar-foot button{font-size:11px}
+.tabs{height:auto;min-height:52px;flex-wrap:wrap;gap:4px;padding:6px}.tab{padding:0 8px;border:0;min-height:30px}.tab-actions{padding:0;gap:4px;flex-wrap:wrap}
+.right-head{height:auto;min-height:52px;flex-wrap:wrap;padding:10px 16px}.right-head strong{font-size:13px}.model-badge{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 8px}
+.chat{padding:24px clamp(14px,3vw,36px);gap:18px;scroll-behavior:smooth;overscroll-behavior:contain}.welcome{padding:22px;background:#202329;border-color:#33373f;border-radius:16px}.welcome h2{font-size:20px;line-height:1.7}.welcome p{font-size:13px}.suggestions{gap:8px}.suggestions button{padding:10px 12px;background:#191c22;border-radius:10px;font-size:12px}
+.msg{font-size:13px;line-height:1.95;padding:14px;border-radius:13px}.msg.user{background:#263c32;border-color:#3a5748;max-width:94%}.msg.assistant{background:transparent;border-color:transparent;padding-inline:0}.msg.error{background:#2a1616;border-color:#623737}
+.chatbox{margin:0 16px 16px;padding:12px;background:#23262d;border:1px solid #3b414c;border-radius:16px;box-shadow:0 6px 24px #0002}.chat-input{height:80px;min-height:60px;background:transparent;border:0;padding:4px;resize:vertical;font-size:14px}.sendrow{border-top:1px solid #343943;margin-top:6px;padding-top:10px}.primary{background:#a6dfbe}.hint{color:#abb2bf}
+.bottom{height:210px;background:#111318}.bottom-head{gap:12px;flex-wrap:wrap;height:auto;min-height:40px;padding:5px 12px}.editor,.code{background:#101216}.code{min-width:0}.nums{background:#13151a}.terminal{overflow-wrap:anywhere}
+.modal-card{background:#1b1e24;border-radius:16px;max-height:90dvh}.field{min-height:42px}.toast{max-width:calc(100vw - 24px);z-index:40}.warnbar{flex:none;max-height:25dvh;overflow:auto}
+.mobile-tabs,.mobile-files,.workspace-nav,.drawer-backdrop,.drawer-close{display:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-@media(max-width:1080px){.layout{grid-template-columns:200px minmax(300px,1fr)}.right{display:none}.right.show{display:flex;position:fixed;inset:52px 0 0 auto;width:min(420px,100%);z-index:6;box-shadow:-15px 0 50px #0008}.mobile-tabs{display:block}}
-@media(max-width:640px){.layout{grid-template-columns:1fr}.sidebar{display:none}.sidebar.show{display:flex;position:fixed;inset:52px 0 0 0;width:min(300px,88vw);z-index:7;box-shadow:15px 0 50px #0009}.mobile-files{display:inline-flex}.top .status span.txt{display:none}.top-actions button{padding:6px;font-size:10px}.gh-top{font-size:0!important}.gh-top:before{content:"↗";font-size:13px}.bottom{height:150px}.brand .pill{display:none}}
+@media(max-width:1200px){
+ .layout{grid-template-columns:230px minmax(0,1fr)}.center,.right{grid-column:2;grid-row:1}.center{display:none}.right,.right.show{display:flex;position:static;width:auto;box-shadow:none}
+ .workspace-nav{display:flex;flex:none;gap:6px;padding:8px 12px;background:#14161b;border-bottom:1px solid var(--line);overflow-x:auto}.workspace-nav button{flex:1;white-space:nowrap;background:transparent;min-height:40px}.workspace-nav button[aria-pressed=true]{background:#293b32;border-color:#527360;color:#cbf2dc}
+ body[data-view=editor] .center,body[data-view=terminal] .center{display:flex}body[data-view=editor] .right,body[data-view=terminal] .right{display:none}
+ body[data-view=terminal] .editor-area,body[data-view=terminal] .tabs{display:none}body[data-view=terminal] .bottom{flex:1;height:auto}
+ body[data-view=editor] .bottom{display:none}
+ .top{padding:10px 14px}.status{order:3;flex-basis:100%;font-size:11px}
+}
+@media(max-width:760px){
+ .layout{grid-template-columns:minmax(0,1fr);position:relative}.center,.right{grid-column:1;border:0}.sidebar{display:none}.sidebar.show{display:flex;position:fixed;inset:0 0 0 auto;width:min(340px,88vw);z-index:12;box-shadow:-20px 0 60px #0008;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+ .drawer-backdrop.open{display:block;position:fixed;inset:0;border:0;border-radius:0;background:#0009;z-index:11;backdrop-filter:blur(3px)}.drawer-close,.mobile-files{display:inline-flex;align-items:center;justify-content:center}.mobile-files{flex:none!important}
+ .top{padding:8px 12px;gap:8px}.brand{font-size:14px}.brand .pill{display:none}.top-actions{gap:4px;margin-inline-start:auto}.top-actions button{font-size:11px;padding:6px 8px}.top-actions .utility{display:none}.status{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.status .txt{overflow:hidden;text-overflow:ellipsis}
+ .workspace-nav{padding:6px 8px;gap:4px}.workspace-nav button{font-size:12px;padding:6px 8px;min-height:42px}
+ .chat{padding:18px 14px}.chatbox{margin:0 10px max(10px,env(safe-area-inset-bottom));padding:10px}.chat-input,.field,.cmd{font-size:16px}.chat-input{height:68px;max-height:26dvh}.hint{font-size:9px}.welcome{padding:18px}.welcome h2{font-size:18px}
+ .conv .acts{opacity:1}.conv .acts button{min-height:32px}.sidebar-foot button{min-height:40px}.tab{max-width:100%}.tab-actions{width:100%}.tab-actions button{flex:1;min-height:38px}.code{font-size:13px}.bottom-head{gap:8px}.model-badge{max-width:160px}.modal{padding:10px}.modal-card{padding:16px}.msg .msg-actions{opacity:1}
+}
+@media(prefers-reduced-motion:reduce){.chat{scroll-behavior:auto}}
 </style>
 </head>
-<body>
+<body data-view="chat">
 <header class="top">
   <div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill" id="storagePill">اتصال…</span></div>
   <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
   <div class="top-actions">
-    <button class="mobile-files" onclick="document.querySelector('.sidebar').classList.toggle('show')">☰ فایل‌ها</button>
-    <button class="mobile-tabs" onclick="document.querySelector('.right').classList.toggle('show')">چت</button>
+    <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
     <button onclick="openModelModal()" title="انتخاب مدل هوش مصنوعی">✦ مدل</button>
-    <button onclick="openSettings()" title="تنظیمات و حافظه">⚙</button>
-    <button onclick="toggleMemoryPanel()" title="حافظه‌ی بلندمدت">🧠</button>
+    <button class="utility" onclick="openSettings()" title="تنظیمات و حافظه" aria-label="تنظیمات و حافظه">⚙</button>
+    <button class="utility" onclick="toggleMemoryPanel()" title="حافظه‌ی بلندمدت" aria-label="حافظه‌ی بلندمدت">🧠</button>
     <button class="gh-top" onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
     <button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button>
   </div>
@@ -233,9 +271,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
   <button onclick="document.getElementById('warnBar').style.display='none'">فهمیدم</button>
 </div>
 
+<nav class="workspace-nav" aria-label="بخش‌های محیط کار">
+  <button class="mobile-files" id="sidebarToggle" aria-controls="workspaceSidebar" aria-expanded="false" onclick="toggleSidebar()">☰ تاریخچه و فایل‌ها</button>
+  <button data-workspace-view="chat" aria-pressed="true" onclick="setWorkspaceView('chat')">گفتگو</button>
+  <button data-workspace-view="editor" aria-pressed="false" onclick="setWorkspaceView('editor')">ویرایشگر</button>
+  <button data-workspace-view="terminal" aria-pressed="false" onclick="setWorkspaceView('terminal')">ترمینال</button>
+</nav>
+<button class="drawer-backdrop" id="drawerBackdrop" aria-label="بستن نوار کناری" onclick="toggleSidebar(false)"></button>
 <main class="layout">
-  <aside class="sidebar">
-    <div class="sidebar-head"><span>گفتگوها</span><span class="tiny" id="convCount">۰</span></div>
+  <aside class="sidebar" id="workspaceSidebar" aria-label="تاریخچه گفتگوها و فایل‌های پروژه">
+    <div class="sidebar-head"><span>تاریخچه گفتگوها</span><span class="tiny" id="convCount">۰</span><button class="drawer-close ghost" onclick="toggleSidebar(false)" aria-label="بستن نوار کناری">×</button></div>
+    <button class="new-conversation" onclick="newConversation()">＋ گفتگوی جدید</button>
     <div class="scroll">
       <div id="convList" class="conv-list"></div>
       <div class="progress" title="حجم تقریبی زمینه‌ی ارسالی به مدل">
@@ -247,8 +293,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
       <div id="tree" class="tree"></div>
     </div>
     <div class="sidebar-foot">
-      <button onclick="newConversation()">＋ گفتگوی جدید</button>
       <button onclick="newFile()">＋ فایل جدید</button>
+      <button onclick="openSettings()">⚙ تنظیمات و حافظه</button>
       <button onclick="downloadProject()">⇩ دانلود پروژه</button>
       <button onclick="showTerminalHelp()">⌘ راهنمای شل</button>
     </div>
@@ -304,7 +350,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
     </div>
     <div class="chat" id="chat"></div>
     <div class="chatbox">
-      <textarea class="chat-input" id="prompt" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+      <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
       <div class="sendrow">
         <span class="hint" id="composerHint">Enter ارسال · Shift+Enter خط جدید</span>
         <button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
@@ -345,6 +391,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
     <p>حساب، ذخیره‌سازی پایدار و حافظه‌ی بلندمدت دستیار.</p>
 
     <div class="kv" id="accountInfo"></div>
+    <section aria-label="اتصال API" style="margin-top:16px">
+      <strong>اتصال API و مدل</strong>
+      <p id="apiConnectionStatus">اتصال مدل از تنظیمات امن سرور مدیریت می‌شود؛ کلیدها را در گفتگو وارد نکنید.</p>
+      <div class="modal-actions"><button onclick="runDiagnostics('settingsDiagBox')">بررسی اتصال</button><button onclick="probeModel('settingsProbeBox')">تست مدل</button></div>
+      <div id="settingsDiagBox"></div><div id="settingsProbeBox"></div>
+    </section>
 
     <div class="section-title" style="padding-right:0;margin-top:14px">افزودن حافظه</div>
     <label class="field-label" for="memKey">کلید (مثلاً stack)</label>
@@ -446,6 +498,33 @@ const API = {
   chat: '/api/chat',
   health: '/api/health'
 };
+
+function setWorkspaceView(view) {
+  if (!['chat', 'editor', 'terminal'].includes(view)) return;
+  document.body.dataset.view = view;
+  document.querySelectorAll('[data-workspace-view]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.workspaceView === view));
+  });
+}
+
+function toggleSidebar(open) {
+  const sidebar = document.querySelector('.sidebar');
+  const visible = typeof open === 'boolean' ? open : !sidebar.classList.contains('show');
+  sidebar.classList.toggle('show', visible);
+  $('drawerBackdrop').classList.toggle('open', visible);
+  $('sidebarToggle').setAttribute('aria-expanded', String(visible));
+  if (visible) sidebar.querySelector('.new-conversation').focus();
+  else if (sidebar.contains(document.activeElement)) $('sidebarToggle').focus();
+}
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.querySelector('.sidebar.show')) toggleSidebar(false);
+});
+
+function openApiConnection() {
+  openSettings();
+  runDiagnostics('settingsDiagBox');
+}
 
 const MODEL_STORE = 'cp-model';
 const THINK_STORE = 'cp-thinking';
@@ -780,8 +859,8 @@ async function boot() {
   setSync('on', 'همگام با ابر · ' + (state.auth.user.email || ''));
 }
 
-async function probeModel() {
-  const box = $('probeBox');
+async function probeModel(boxId = 'probeBox') {
+  const box = $(boxId);
   if (!box) return;
   box.innerHTML = '<div class="tiny">در حال فرستادن یک درخواست کوچک به مدل…</div>';
   try {
@@ -807,8 +886,8 @@ async function probeModel() {
   }
 }
 
-async function runDiagnostics() {
-  const box = $('diagBox');
+async function runDiagnostics(boxId = 'diagBox') {
+  const box = $(boxId);
   if (!box) return;
   box.innerHTML = '<div class="tiny">در حال بررسی…</div>';
   let data;
@@ -966,7 +1045,8 @@ async function openConversation(id, { fresh = false } = {}) {
     state.turnNotices = null;
     updateContextMeter(data.conversation || {});
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
-    document.querySelector('.right').classList.add('show');
+    setWorkspaceView('chat');
+    toggleSidebar(false);
   } catch (error) {
     toast('بازکردن گفتگو ناموفق بود: ' + error.message, 4000);
     setSync('', 'خطا در بارگذاری');
@@ -1044,6 +1124,12 @@ function renderTree() {
     const icon = name.endsWith('.html') ? '◇' : name.endsWith('.css') ? '▧' : name.endsWith('.json') ? '{}' : name.endsWith('.md') ? '¶' : 'JS';
     const dirty = state.dirtyFiles.has(name) ? '<span class="badge">●</span>' : '';
     row.innerHTML = `<span class="ico">${icon}</span><span class="name">${esc(name)}</span>${dirty}`;
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-label', 'بازکردن فایل ' + name);
+    row.onkeydown = event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openFile(name); }
+    };
     row.onclick = () => openFile(name);
     tree.appendChild(row);
   }
@@ -1054,6 +1140,8 @@ function openFile(name) {
   state.workspace.active = name;
   renderTree();
   renderEditor();
+  setWorkspaceView('editor');
+  toggleSidebar(false);
 }
 
 function renderEditor() {

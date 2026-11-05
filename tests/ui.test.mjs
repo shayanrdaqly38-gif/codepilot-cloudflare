@@ -199,6 +199,41 @@ assert.ok($('tree').textContent.includes('index.html'));
 assert.equal($('editor').value, '<h1>hi</h1>');
 assert.ok($('chat').textContent.includes('چه بسازیم؟'));
 
+// --- compact workspace navigation preserves real DOM and conversation state
+assert.equal(window.document.documentElement.dir, 'rtl');
+assert.equal(window.document.body.dataset.view, 'chat');
+const originalEditor = $('editor');
+const originalChat = $('chat');
+window.setWorkspaceView('editor');
+assert.equal(window.document.body.dataset.view, 'editor');
+assert.equal(window.document.querySelector('[data-workspace-view="editor"]').getAttribute('aria-pressed'), 'true');
+window.setWorkspaceView('terminal');
+assert.equal(window.document.body.dataset.view, 'terminal');
+window.setWorkspaceView('invalid');
+assert.equal(window.document.body.dataset.view, 'terminal');
+window.toggleSidebar(true);
+assert.equal($('sidebarToggle').getAttribute('aria-expanded'), 'true');
+assert.ok($('drawerBackdrop').classList.contains('open'));
+window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+assert.equal($('sidebarToggle').getAttribute('aria-expanded'), 'false');
+window.toggleSidebar(true);
+window.openFile('style.css');
+assert.equal(window.document.body.dataset.view, 'editor');
+assert.equal($('sidebarToggle').getAttribute('aria-expanded'), 'false');
+assert.equal($('editor').value, 'body{}');
+window.toggleSidebar(true);
+await window.openConversation('c-1', { fresh: true });
+assert.equal(window.document.body.dataset.view, 'chat');
+assert.equal($('sidebarToggle').getAttribute('aria-expanded'), 'false');
+assert.ok($('chat').textContent.includes('چه بسازیم؟'));
+assert.strictEqual($('editor'), originalEditor, 'view switches must not replace editor');
+assert.strictEqual($('chat'), originalChat, 'view switches must not replace chat');
+assert.ok(window.document.querySelector('.new-conversation').compareDocumentPosition($('convList')) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+for (const action of ['openGitHub()', 'openApiConnection()', 'runPreview()', 'saveEditor(true)']) {
+  assert.ok(window.document.querySelector(`button[onclick="${action}"]`), 'missing retained action: ' + action);
+}
+assert.equal(new Set([...window.document.querySelectorAll('[id]')].map(el => el.id)).size, window.document.querySelectorAll('[id]').length, 'duplicate HTML ids');
+
 // --- send a message, consume SSE
 $('prompt').value = 'یک app.js بساز';
 window.sendMessage();
