@@ -303,14 +303,29 @@ await window.newConversation(true);
 assert.equal(window.state?.conversationId ?? null, null, 'new conversation should not reuse old id (state is module-scoped)');
 assert.ok($('convList').textContent.includes('گفتگوی جدید'));
 
-// --- model selector modal + thinking toggle
+// --- model selector modal + Claude Code Reasoning effort controls
 window.openModelModal();
 assert.ok($('modelModal').classList.contains('open'));
 $('customModelInput').value = 'claude-opus-5-5';
 window.applyCustomModel();
 assert.equal($('modelBadge').textContent, 'claude-opus-5-5');
+assert.ok($('composerEffortBar').querySelector('[data-effort="max"]'), 'Opus should unlock Max reasoning effort');
+window.setReasoningEffort('max');
+assert.ok($('thinkBtn').textContent.includes('Max'), 'thinkBtn should reflect Max effort');
+assert.ok($('modalEffortPanel').textContent.includes('budget_tokens: 31999'), 'native wire preview should show 31999 budget');
 window.toggleThinking();
 assert.ok($('thinkBtn').textContent.includes('تفکر'));
+
+// Switching to Sonnet clamps Max -> High and hides Max
+window.selectModel('claude-sonnet-5-5', false);
+assert.equal($('composerEffortBar').querySelector('[data-effort="max"]'), null, 'Sonnet should only show Off..High');
+window.setReasoningEffort('high');
+assert.ok($('thinkBtn').textContent.includes('High'));
+
+// Switching to a fast flash model disables Reasoning effort honestly
+window.selectModel('gemini-3-8-flash', true);
+assert.ok($('composerEffortBar').textContent.includes('غیرفعال'), 'Flash model should show Reasoning effort unsupported');
+assert.ok($('thinkBtn').classList.contains('disabled'));
 
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));

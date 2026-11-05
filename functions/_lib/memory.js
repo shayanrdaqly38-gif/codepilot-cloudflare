@@ -183,9 +183,7 @@ export function buildSystemPrompt({
     execRule,
     '6. If `apply_patch` is rejected, re-read the relevant lines with `read_file` (`startLine`/`endLine`) and send a clean, unique search block.',
     '7. After editing, state clearly which files changed, whether validation/tests passed, and note that when GitHub is connected, the browser commits all touched/deleted files atomically in a single commit and tracks Cloudflare Pages deployment automatically.',
-    thinking
-      ? '8. Deep Thinking Mode is ON: Before multi-file edits, architectural changes, or tricky debugging, call `think` to reason through requirements, edge cases, and a concrete plan, then execute and verify systematically.'
-      : '8. You may call `think` whenever structured planning helps avoid mistakes on multi-step tasks.',
+    '8. For complex multi-file edits, inspect dependencies first and verify changes systematically.',
     '',
     '## Safety',
     '- Never ask for, repeat, store, or echo API keys, tokens, cookies or passwords. If a secret appears in the conversation, suggest rotating it.',

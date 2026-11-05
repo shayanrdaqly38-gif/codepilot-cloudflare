@@ -792,3 +792,95 @@ test('chat supports dynamic [id].js paths, delete_file + undo_edit restoration, 
     model3.restore();
   }
 });
+
+test('native Reasoning effort sends genuine per-model wire parameters, negotiates schema, and streams reasoning tokens', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+
+  // 1. Per-model capability profiles match Claude Code behavior
+  const opusSpec = modelLib.getModelReasoningSpec('claude-opus-5-5');
+  assert.equal(opusSpec.supported, true);
+  assert.deepEqual(opusSpec.levels, ['off', 'low', 'medium', 'high', 'max']);
+
+  const sonnetSpec = modelLib.getModelReasoningSpec('claude-sonnet-5-5');
+  assert.equal(sonnetSpec.supported, true);
+  assert.deepEqual(sonnetSpec.levels, ['off', 'low', 'medium', 'high']);
+  assert.equal(modelLib.normalizeReasoningEffort('max', 'claude-sonnet-5-5'), 'high');
+
+  const flashSpec = modelLib.getModelReasoningSpec('gemini-3-8-flash');
+  assert.equal(flashSpec.supported, false);
+  assert.deepEqual(flashSpec.levels, []);
+  assert.equal(modelLib.normalizeReasoningEffort('high', 'gemini-3-8-flash'), 'off');
+
+  // 2. Wire payload verification for Anthropic extended thinking (max -> budget_tokens=31999, no non-1 temperature)
+  const originalFetch = globalThis.fetch;
+  const capturedBodies = [];
+  globalThis.fetch = async (_url, init) => {
+    capturedBodies.push(JSON.parse(init.body));
+    return new Response(
+      JSON.stringify({
+        model: 'claude-opus-5-5',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: [
+                { type: 'thinking', thinking: 'تحلیل عمیق ساختار ماژول‌ها و وابستگی‌ها' },
+                { type: 'text', text: 'پاسخ نهایی پس از استدلال واقعی.' }
+              ]
+            }
+          }
+        ],
+        usage: { prompt_tokens: 120, completion_tokens: 940, completion_tokens_details: { reasoning_tokens: 810 } }
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  try {
+    const res = await modelLib.callModel(
+      { MODEL_API_KEY: 'tc_test_1234567890123456' },
+      { model: 'claude-opus-5-5', reasoningEffort: 'max', temperature: 0.25, messages: [{ role: 'user', content: 'تحلیل کن' }] }
+    );
+    assert.equal(capturedBodies.length, 1);
+    assert.equal(capturedBodies[0].reasoning_effort, 'high');
+    assert.deepEqual(capturedBodies[0].thinking, { type: 'enabled', budget_tokens: 31_999 });
+    assert.equal(capturedBodies[0].temperature, undefined, 'custom temperature != 1 must be omitted when Claude thinking is enabled');
+    assert.ok(capturedBodies[0].max_tokens > 31_999);
+    assert.equal(res.reasoningEffort, 'max');
+    assert.equal(res.usage.reasoning_tokens, 810);
+    assert.match(res.reasoning, /تحلیل عمیق ساختار ماژول‌ها/);
+    assert.equal(res.message.content, 'پاسخ نهایی پس از استدلال واقعی.');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // 3. OpenAI `gpt-6.1-sol` at `max` tries `xhigh`, and seamlessly steps down to `high` if gateway validates 3-level enum
+  const openAiBodies = [];
+  globalThis.fetch = async (_url, init) => {
+    const parsed = JSON.parse(init.body);
+    openAiBodies.push(parsed);
+    if (parsed.reasoning_effort === 'xhigh') {
+      return new Response(JSON.stringify({ error: 'invalid reasoning_effort xhigh' }), { status: 400 });
+    }
+    return new Response(
+      JSON.stringify({
+        model: 'gpt-6.1-sol',
+        choices: [{ message: { role: 'assistant', content: 'ok-high' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 600, completion_tokens_details: { reasoning_tokens: 520 } }
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  try {
+    const res2 = await modelLib.callModel(
+      { MODEL_API_KEY: 'tc_test_1234567890123456' },
+      { model: 'gpt-6.1-sol', reasoningEffort: 'max', messages: [{ role: 'user', content: 'solve' }] }
+    );
+    assert.equal(openAiBodies.length, 2);
+    assert.equal(openAiBodies[0].reasoning_effort, 'xhigh');
+    assert.equal(openAiBodies[1].reasoning_effort, 'high');
+    assert.equal(res2.reasoningEffort, 'high');
+    assert.equal(res2.usage.reasoning_tokens, 520);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

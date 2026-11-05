@@ -19,6 +19,16 @@ export const ALLOWED_TOOLS = new Set([
   'fetch_url'
 ]);
 
+export const EFFORT_LEVELS = ['off', 'low', 'medium', 'high', 'max'];
+
+export const EFFORT_BUDGET_TOKENS = {
+  off: 0,
+  low: 2_048,
+  medium: 8_192,
+  high: 16_384,
+  max: 31_999
+};
+
 export const MODEL_CATALOG = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — قوی‌ترین استدلال و معماری کد', tier: 'flagship' },
   { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — سریع، دقیق و متعادل (پیش‌فرض)', tier: 'balanced' },
@@ -42,6 +52,206 @@ export const MODEL_CATALOG = [
 const MODEL_ID_RE = /^[a-zA-Z0-9._:/-]{1,120}$/;
 const DEFAULT_TIMEOUT_MS = 95_000;
 
+function detectModelFamily(id) {
+  const s = String(id || '').toLowerCase();
+  if (s.includes('claude')) return 'anthropic';
+  if (/^(gpt|o1|o3|o4|chatgpt)/.test(s) || s.includes('/gpt') || s.includes('/o3') || s.includes('/o4')) return 'openai';
+  if (s.includes('deepseek')) return 'deepseek';
+  if (s.includes('gemini')) return 'gemini';
+  if (s.includes('grok')) return 'xai';
+  if (s.includes('kimi') || s.includes('moonshot')) return 'kimi';
+  if (s.includes('glm')) return 'glm';
+  return 'other';
+}
+
+/**
+ * Return the model's genuine native Reasoning Effort capability profile
+ * (Claude Code–style levels: off / low / medium / high / max).
+ */
+export function getModelReasoningSpec(modelId) {
+  const id = String(modelId || '').trim().toLowerCase();
+  const family = detectModelFamily(id);
+
+  // Fast / lightweight non-reasoning models: do NOT pretend they have Reasoning Effort.
+  if (
+    !id ||
+    /(?:^|[-_/:])(flash|mini|lite|nano|haiku|luna|astra|instant|turbo)(?:$|[-_/:0-9])/.test(id) ||
+    /^(gpt-3\.5|gpt-4o|claude-3-(?:haiku|sonnet|opus)|claude-2)/.test(id)
+  ) {
+    return {
+      supported: false,
+      family,
+      levels: [],
+      defaultEffort: 'off',
+      budgets: EFFORT_BUDGET_TOKENS
+    };
+  }
+
+  // Flagship & dedicated reasoning models unlock `max` (32k thinking budget / xhigh), just like Opus in Claude Code.
+  const unlocksMax =
+    /(?:opus|gpt-6\.1-sol|o1|o3|o4|deepseek-.*(?:pro|r1|reasoner)|kimi-.*(?:pro|thinking)|gemini-4-argon|gemini-.*pro|grok-4|qwq)/.test(
+      id
+    );
+
+  const defaultEffort = /(?:deepseek-.*(?:pro|r1|reasoner)|kimi-.*(?:pro|thinking)|^o[134]|opus-5)/.test(id)
+    ? 'high'
+    : 'medium';
+
+  return {
+    supported: true,
+    family,
+    levels: unlocksMax ? ['off', 'low', 'medium', 'high', 'max'] : ['off', 'low', 'medium', 'high'],
+    defaultEffort,
+    budgets: EFFORT_BUDGET_TOKENS
+  };
+}
+
+/**
+ * Sanitize a requested reasoning effort against what `modelId` actually supports.
+ * Returns `'off' | 'low' | 'medium' | 'high' | 'max'`, or `null` when no effort control was requested.
+ */
+export function normalizeReasoningEffort(value, modelId, legacyThinking = undefined) {
+  const spec = getModelReasoningSpec(modelId);
+  if (value === undefined || value === null || value === '') {
+    if (legacyThinking === undefined) return null;
+    if (!legacyThinking || !spec.supported) return 'off';
+    return spec.defaultEffort;
+  }
+  const clean = String(value).trim().toLowerCase();
+  if (!EFFORT_LEVELS.includes(clean)) return spec.supported ? spec.defaultEffort : 'off';
+  if (!spec.supported) return 'off';
+  if (clean === 'max' && !spec.levels.includes('max')) return 'high';
+  return clean;
+}
+
+/**
+ * Build ordered native wire-parameter variants for `/v1/chat/completions`.
+ * Variant 0 sends the richest model-native parameters (`reasoning_effort` + `thinking.budget_tokens`
+ * with Anthropic/OpenAI temperature rules respected); if a strict proxy schema rejects Variant 0
+ * with 400/422, `callModel` seamlessly steps down to Variant 1 (standard `reasoning_effort`) and Variant 2.
+ */
+export function buildReasoningWireVariants(modelId, effort, payload = {}) {
+  const baseTemp = payload.temperature ?? 0.3;
+  const explicitMaxTokens = Number(payload.max_tokens) || 0;
+  const spec = getModelReasoningSpec(modelId);
+
+  if (!effort || !spec.supported) {
+    return [
+      {
+        effort: null,
+        params: {
+          temperature: baseTemp,
+          ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+        }
+      }
+    ];
+  }
+
+  if (effort === 'off') {
+    const plain = {
+      effort: 'off',
+      params: {
+        temperature: baseTemp,
+        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+      }
+    };
+    if (['anthropic', 'deepseek', 'glm', 'kimi'].includes(spec.family)) {
+      return [
+        {
+          effort: 'off',
+          params: {
+            temperature: baseTemp,
+            thinking: { type: 'disabled' },
+            ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+          }
+        },
+        plain
+      ];
+    }
+    return [plain];
+  }
+
+  const budget = EFFORT_BUDGET_TOKENS[effort] || EFFORT_BUDGET_TOKENS.medium;
+  const standardEffort = effort === 'max' ? 'high' : effort;
+  const variants = [];
+
+  if (spec.family === 'anthropic') {
+    // Anthropic native rule: when extended thinking is enabled, custom temperature != 1 is invalid,
+    // and max_tokens must exceed budget_tokens.
+    const minMaxTokens = Math.max(explicitMaxTokens, budget + 8_192);
+    variants.push({
+      effort,
+      params: {
+        reasoning_effort: standardEffort,
+        thinking: { type: 'enabled', budget_tokens: budget },
+        max_tokens: minMaxTokens
+      }
+    });
+    variants.push({
+      effort,
+      params: {
+        reasoning_effort: standardEffort,
+        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+      }
+    });
+  } else if (spec.family === 'openai') {
+    // OpenAI o-series / GPT-6.1 reasoning models reject non-1 temperature; `max` maps to native `xhigh` then `high`.
+    const openAiEffort = effort === 'max' ? 'xhigh' : effort;
+    variants.push({
+      effort,
+      params: {
+        reasoning_effort: openAiEffort,
+        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+      }
+    });
+    if (openAiEffort !== standardEffort) {
+      variants.push({
+        effort: 'high',
+        params: {
+          reasoning_effort: standardEffort,
+          ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+        }
+      });
+    }
+  } else if (['deepseek', 'glm', 'kimi'].includes(spec.family)) {
+    variants.push({
+      effort,
+      params: {
+        reasoning_effort: standardEffort,
+        thinking: { type: 'enabled', budget_tokens: budget },
+        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+      }
+    });
+    variants.push({
+      effort,
+      params: {
+        reasoning_effort: standardEffort,
+        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+      }
+    });
+  } else {
+    // Gemini, xAI Grok, and OpenAI-compatible reasoning endpoints
+    variants.push({
+      effort,
+      params: {
+        reasoning_effort: standardEffort,
+        ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+      }
+    });
+  }
+
+  // Final safety fallback if a specific upstream channel does not accept reasoning params at all.
+  variants.push({
+    effort: null,
+    params: {
+      temperature: baseTemp,
+      ...(explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {})
+    }
+  });
+
+  return variants;
+}
+
 export function sanitizeModelId(value, env) {
   const candidate = String(value || '').trim();
   if (candidate && MODEL_ID_RE.test(candidate)) return candidate;
@@ -49,9 +259,6 @@ export function sanitizeModelId(value, env) {
 }
 
 export function modelEndpoint(env) {
-  // Accept the URL exactly as a human copies it from a provider dashboard:
-  // trailing slashes and a pasted `/chat/completions` suffix are both common and
-  // both used to produce a 404 that looked like a broken key.
   const base = String(env.MODEL_BASE_URL || 'https://tooken.club/v1')
     .trim()
     .replace(/\/+$/, '')
@@ -158,11 +365,49 @@ function downgradeUnsupportedFileParts(messages) {
   return changed ? next : null;
 }
 
+function extractReasoningAndText(message) {
+  const reasoningParts = [];
+  if (typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
+    reasoningParts.push(message.reasoning_content.trim());
+  } else if (typeof message.reasoning === 'string' && message.reasoning.trim()) {
+    reasoningParts.push(message.reasoning.trim());
+  }
+
+  if (typeof message.thinking === 'string' && message.thinking.trim()) {
+    reasoningParts.push(message.thinking.trim());
+  } else if (Array.isArray(message.thinking)) {
+    for (const item of message.thinking) {
+      if (typeof item?.thinking === 'string' && item.thinking.trim()) reasoningParts.push(item.thinking.trim());
+    }
+  } else if (typeof message.thinking?.thinking === 'string' && message.thinking.thinking.trim()) {
+    reasoningParts.push(message.thinking.thinking.trim());
+  }
+
+  let contentText = '';
+  if (typeof message.content === 'string') {
+    contentText = message.content;
+  } else if (Array.isArray(message.content)) {
+    const textChunks = [];
+    for (const block of message.content) {
+      if (!block) continue;
+      if ((block.type === 'thinking' || block.type === 'reasoning') && typeof (block.thinking || block.text) === 'string') {
+        reasoningParts.push(String(block.thinking || block.text).trim());
+      } else if (typeof block.text === 'string') {
+        textChunks.push(block.text);
+      }
+    }
+    contentText = textChunks.join('');
+  }
+
+  return {
+    rawReasoning: [...new Set(reasoningParts)].join('\n\n'),
+    rawContent: contentText
+  };
+}
+
 /**
- * POST a Chat Completions request.
- * Retries on 429/5xx/timeout, downgrades unsupported binary `file` content parts,
- * and on live Cloudflare Pages automatically fails over to a healthy backup model
- * if the selected upstream model channel returns 502/503/504.
+ * POST a Chat Completions request with genuine native model `reasoning_effort` / `thinking.budget_tokens`,
+ * automatic proxy schema negotiation, binary part downgrade, and CF_PAGES 5xx model failover.
  */
 export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
@@ -170,7 +415,9 @@ export async function callModel(env, payload) {
   }
   const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
   const requestedModel = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
-  const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS, 120_000);
+  const requestedEffort = normalizeReasoningEffort(payload.reasoningEffort, requestedModel, payload.thinking);
+  const deepTimeout = requestedEffort === 'high' || requestedEffort === 'max' ? 145_000 : DEFAULT_TIMEOUT_MS;
+  const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || deepTimeout, 150_000);
   const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off';
   const candidates = [requestedModel];
   if (allowFailover) {
@@ -186,14 +433,20 @@ export async function callModel(env, payload) {
 
   for (let cIndex = 0; cIndex < candidates.length; cIndex += 1) {
     const model = candidates[cIndex];
+    const modelEffort =
+      payload.reasoningEffort !== undefined || payload.thinking !== undefined
+        ? normalizeReasoningEffort(payload.reasoningEffort, model, payload.thinking)
+        : null;
+    const wireVariants = buildReasoningWireVariants(model, modelEffort, payload);
+    let variantIdx = 0;
     const maxAttempts = cIndex === 0 ? 2 : 1;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const currentVariant = wireVariants[variantIdx];
       const body = JSON.stringify({
         model,
         stream: false,
-        temperature: payload.temperature ?? 0.3,
-        ...(payload.max_tokens ? { max_tokens: payload.max_tokens } : {}),
+        ...currentVariant.params,
         messages: activeMessages,
         ...(payload.tools && payload.tools.length
           ? { tools: payload.tools, tool_choice: payload.tool_choice || 'auto' }
@@ -204,9 +457,6 @@ export async function callModel(env, payload) {
       try {
         response = await fetch(modelEndpoint(env), {
           method: 'POST',
-          // Cloudflare Workers rejects redirect:'error' outright (the fetch call
-          // throws before leaving the isolate), so follow the edge-compatible
-          // contract: manual, then treat any 3xx as a failure below.
           redirect: 'manual',
           signal: AbortSignal.timeout(timeout),
           headers: {
@@ -252,23 +502,27 @@ export async function callModel(env, payload) {
           fail('ساختار پاسخ مدل با Chat Completions سازگار نیست.', 502, 'model_bad_response');
         }
         const secrets = envSecrets(env);
-        const rawReasoning =
-          typeof message.reasoning_content === 'string'
-            ? message.reasoning_content
-            : typeof message.thinking === 'string'
-              ? message.thinking
-              : '';
+        const { rawReasoning, rawContent } = extractReasoningAndText(message);
+        const reasoningTokens =
+          Number(
+            data?.usage?.completion_tokens_details?.reasoning_tokens ??
+              data?.usage?.reasoning_tokens ??
+              data?.usage?.thinking_tokens
+          ) || 0;
+
         return {
           model: String(data.model || model),
           reasoning: rawReasoning ? stripSecrets(rawReasoning, secrets) : '',
+          reasoningEffort: currentVariant.effort,
           message: {
             role: 'assistant',
-            content: typeof message.content === 'string' ? stripSecrets(message.content, secrets) : '',
+            content: rawContent ? stripSecrets(rawContent, secrets) : '',
             tool_calls: normalizeToolCalls(message.tool_calls)
           },
           usage: {
             prompt_tokens: Number(data?.usage?.prompt_tokens) || 0,
-            completion_tokens: Number(data?.usage?.completion_tokens) || 0
+            completion_tokens: Number(data?.usage?.completion_tokens) || 0,
+            reasoning_tokens: reasoningTokens
           }
         };
       }
@@ -284,6 +538,14 @@ export async function callModel(env, payload) {
           attempt -= 1;
           continue;
         }
+      }
+
+      // If the upstream gateway rejected a richer native reasoning schema (400/422),
+      // immediately step down to the next standard reasoning parameter variant without delay.
+      if ((response.status === 400 || response.status === 422) && variantIdx + 1 < wireVariants.length) {
+        variantIdx += 1;
+        attempt -= 1;
+        continue;
       }
 
       if ((response.status === 429 || response.status >= 500) && attempt === 0) {

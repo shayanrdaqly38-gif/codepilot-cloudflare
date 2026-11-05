@@ -3,20 +3,22 @@
 
 import { route, methodNotAllowed } from '../_lib/api.js';
 import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
-import { MODEL_CATALOG } from '../_lib/model.js';
+import { MODEL_CATALOG, getModelReasoningSpec } from '../_lib/model.js';
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
     const linux = linuxRunnerEnabled(env);
     const sb = sandboxEnabled(env);
+    const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
     return {
       ok: true,
       auth: identity.via === 'dev-fallback' ? 'dev-fallback' : 'cloudflare-access',
       singleTenant: identity.via === 'dev-fallback',
       storage: 'd1',
       user: { email: identity.email, name: identity.name },
-      model: String(env.MODEL_NAME || 'claude-sonnet-5-5'),
-      models: MODEL_CATALOG,
+      model: defaultModel,
+      modelReasoning: getModelReasoningSpec(defaultModel),
+      models: MODEL_CATALOG.map((item) => ({ ...item, reasoning: getModelReasoningSpec(item.id) })),
       contextBudgetTokens: Number(env.CONTEXT_BUDGET_TOKENS) || 24000,
       sandbox: sb,
       linuxRunner: linux,
@@ -35,6 +37,7 @@ export async function onRequestGet({ request, env }) {
         webSearch: true,
         urlFetch: true,
         deepThinking: true,
+        reasoningEffort: true,
         modelPicker: true,
         realLogin: identity.via !== 'dev-fallback'
       }

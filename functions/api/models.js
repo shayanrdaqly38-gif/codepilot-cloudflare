@@ -1,15 +1,23 @@
 // GET /api/models — returns available models for the picker UI, combining any
-// live `/v1/models` response from the provider with the curated catalog.
+// live `/v1/models` response from the provider with the curated catalog and
+// attaching each model's genuine native Reasoning Effort specification.
 
 import { route, methodNotAllowed } from '../_lib/api.js';
-import { MODEL_CATALOG, listModels } from '../_lib/model.js';
+import { MODEL_CATALOG, getModelReasoningSpec, listModels } from '../_lib/model.js';
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async () => {
     const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
-    const byId = new Map(MODEL_CATALOG.map((item) => [item.id, { ...item }]));
+    const byId = new Map(
+      MODEL_CATALOG.map((item) => [item.id, { ...item, reasoning: getModelReasoningSpec(item.id) }])
+    );
     if (!byId.has(defaultModel)) {
-      byId.set(defaultModel, { id: defaultModel, label: `${defaultModel} (تنظیم سرور)`, tier: 'custom' });
+      byId.set(defaultModel, {
+        id: defaultModel,
+        label: `${defaultModel} (تنظیم سرور)`,
+        tier: 'custom',
+        reasoning: getModelReasoningSpec(defaultModel)
+      });
     }
 
     let source = 'catalog';
@@ -19,7 +27,7 @@ export async function onRequestGet({ request, env }) {
         source = 'live';
         for (const id of liveIds) {
           if (!byId.has(id)) {
-            byId.set(id, { id, label: id, tier: 'live' });
+            byId.set(id, { id, label: id, tier: 'live', reasoning: getModelReasoningSpec(id) });
           }
         }
       }
