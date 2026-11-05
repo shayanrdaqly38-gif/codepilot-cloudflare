@@ -2,6 +2,7 @@
 // The fallback must work without Access but stay loud and mutually exclusive.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { accessToken, fakeJwks, makeEnv, req, ctx, rsaKeys } from './harness.mjs';
 
 const root = new URL('../functions/', import.meta.url).pathname.replace(/\/$/, '');
@@ -142,4 +143,14 @@ test('health endpoint reports exactly which setting is missing', async () => {
   assert.equal(res.status, 503);
   assert.equal(body.checks.SESSION_SECRET.ok, false);
   assert.match(body.checks.SESSION_SECRET.hint, /۳۲|32/);
+});
+
+test('the signed-out screen can explain itself instead of dead-ending', async () => {
+  // A user who cannot sign in must be able to find out *why* without shell access.
+  const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(html, /runDiagnostics/);
+  assert.match(html, /health: '\/api\/health'/);
+  assert.match(html, /عیب‌یابی تنظیمات/);
+  // The banner must not promise real login when the server says it is single-tenant.
+  assert.match(html, /حالت تک‌کاربره/);
 });
