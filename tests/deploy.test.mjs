@@ -173,3 +173,30 @@ test('check-deploy.sh distinguishes a live build from a stale one', async () => 
     stale.close();
   }
 });
+
+test('wrangler.toml declares no [vars], so the dashboard stays editable', async () => {
+  // Cloudflare locks any variable name declared in [vars]: the dashboard then
+  // rejects edits for it and only allows Secrets. That turned "change the model
+  // name" into a code change plus a redeploy, and left non-technical users stuck
+  // with a row they could see but not edit.
+  const toml = await readFile(`${repo}wrangler.toml`, 'utf8');
+  const active = toml
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+
+  assert.ok(!/^\s*\[vars\]/m.test(active), 'wrangler.toml must not declare [vars]');
+
+  // Every optional setting must still have a safe default in code, otherwise
+  // removing [vars] would break a fresh deploy.
+  const model = await readFile(`${repo}functions/_lib/model.js`, 'utf8');
+  assert.match(model, /MODEL_NAME\s*\|\|\s*'/, 'MODEL_NAME needs a code default');
+  assert.match(model, /MODEL_BASE_URL\s*\|\|\s*'https:\/\/tooken\.club\/v1'/, 'base URL needs a default');
+
+  const auth = await readFile(`${repo}functions/_lib/auth.js`, 'utf8');
+  assert.match(auth, /DEV_ACCESS_EMAIL\s*\|\|\s*''/, 'DEV_ACCESS_EMAIL needs a default');
+  assert.match(auth, /ACCESS_ALLOWED_EMAILS\s*\|\|\s*''/, 'ACCESS_ALLOWED_EMAILS needs a default');
+
+  const memory = await readFile(`${repo}functions/_lib/memory.js`, 'utf8');
+  assert.match(memory, /CONTEXT_BUDGET_TOKENS\)\s*\|\|\s*/, 'budget needs a default');
+});
