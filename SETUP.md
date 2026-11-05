@@ -42,9 +42,12 @@ DEV_ACCESS_EMAIL = your-email@example.com
 ```bash
 npx wrangler login
 npx wrangler d1 create codepilot-db
-# database_id خروجی را در wrangler.toml بگذارید
 npx wrangler d1 execute codepilot-db --remote --file=./schema.sql   # اختیاری
 ```
+
+> ⚠️ `database_id` را در `wrangler.toml` **نگذارید**. مقدار placeholder باعث شکست
+> deploy می‌شود و در آن حالت Cloudflare بی‌صدا همان نسخه‌ی قدیمی را سرو می‌کند.
+> اتصال را در گام بعد از داشبورد بزنید.
 
 داشبورد: **Workers & Pages → پروژه‌ی CodePilot → Settings → Functions → D1 database
 bindings → Add** → Variable name: `DB` → Database: `codepilot-db`.

@@ -9,7 +9,7 @@
     "deploy": "wrangler pages deploy .",
     "db:create": "wrangler d1 create codepilot-db",
     "db:schema": "wrangler d1 execute codepilot-db --remote --file=./schema.sql",
-    "test": "node --test tests/state.test.mjs tests/chat.test.mjs tests/sync.test.mjs tests/tools.test.mjs tests/auth-modes.test.mjs",
+    "test": "node --test tests/state.test.mjs tests/chat.test.mjs tests/sync.test.mjs tests/tools.test.mjs tests/auth-modes.test.mjs tests/deploy.test.mjs",
     "test:ui": "node tests/ui.test.mjs",
     "test:all": "npm test && npm run test:ui"
   },
