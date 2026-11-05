@@ -16,7 +16,13 @@
 
 import { route } from '../_lib/api.js';
 import { resolveUploadRefs, hydrateUploadParts } from '../_lib/uploads.js';
-import { callModel, sanitizeModelId, sanitizeTools } from '../_lib/model.js';
+import {
+  callModel,
+  getModelReasoningSpec,
+  normalizeReasoningEffort,
+  sanitizeModelId,
+  sanitizeTools
+} from '../_lib/model.js';
 import {
   buildSystemPrompt,
   buildWorkingContext,
@@ -619,8 +625,18 @@ export async function onRequestPost({ request, env }) {
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
       const selectedModel = data?.model ? sanitizeModelId(data.model, env) : undefined;
-      const thinking = Boolean(data?.thinking);
-      const maxSteps = thinking ? MAX_THINKING_LOOP_STEPS : MAX_LOOP_STEPS;
+      const effectiveModelId = selectedModel || String(env.MODEL_NAME || 'claude-sonnet-5-5');
+      const reasoningSpec = getModelReasoningSpec(effectiveModelId);
+      const reasoningEffort = normalizeReasoningEffort(data?.reasoningEffort, effectiveModelId, data?.thinking);
+      const thinking = Boolean(reasoningEffort && reasoningEffort !== 'off');
+      const maxSteps =
+        reasoningEffort === 'max'
+          ? 28
+          : reasoningEffort === 'high'
+            ? MAX_THINKING_LOOP_STEPS
+            : reasoningEffort === 'medium'
+              ? 20
+              : MAX_LOOP_STEPS;
       const tools = data.tools === undefined ? TOOLS : sanitizeTools(data.tools);
 
       const conversation = await getConversation(env, identity.owner, conversationId);
@@ -667,11 +683,19 @@ export async function onRequestPost({ request, env }) {
       const newMessages = [];
       let finalText = '';
       let usedModel = '';
+      let appliedEffort = reasoningEffort;
+      let totalReasoningTokens = 0;
       let steps = 0;
 
       (async () => {
         try {
-          send('status', { phase: 'thinking', sandbox: sb, linuxRunner: linux });
+          send('status', {
+            phase: 'thinking',
+            sandbox: sb,
+            linuxRunner: linux,
+            reasoningEffort,
+            reasoningSupported: reasoningSpec.supported
+          });
 
           const history = await listMessages(env, conversation.id);
           const memories = await listMemories(env, identity.owner).catch(() => []);
@@ -728,13 +752,25 @@ export async function onRequestPost({ request, env }) {
 
             const result = await callModel(env, {
               ...(selectedModel ? { model: selectedModel } : {}),
+              ...(reasoningEffort !== null ? { reasoningEffort } : {}),
               temperature: 0.25,
               messages,
               tools
             });
             usedModel = result.model;
-            if (result.reasoning) {
-              send('thinking', { thought: result.reasoning.slice(0, 6000), plan: '' });
+            if (result.reasoningEffort !== undefined) appliedEffort = result.reasoningEffort;
+            const stepReasoningTokens = Number(result.usage?.reasoning_tokens) || 0;
+            totalReasoningTokens += stepReasoningTokens;
+
+            if (result.reasoning || stepReasoningTokens > 0) {
+              send('thinking', {
+                thought: result.reasoning ? result.reasoning.slice(0, 10_000) : '',
+                plan: '',
+                native: true,
+                encrypted: !result.reasoning && stepReasoningTokens > 0,
+                effort: appliedEffort || reasoningEffort || 'medium',
+                reasoningTokens: stepReasoningTokens
+              });
             }
             const assistant = result.message;
 
@@ -742,6 +778,9 @@ export async function onRequestPost({ request, env }) {
               const stored = {
                 role: 'assistant',
                 content: assistant.content || '',
+                ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
+                ...(appliedEffort && appliedEffort !== 'off' ? { reasoning_effort: appliedEffort } : {}),
+                ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
                 tool_calls: assistant.tool_calls,
                 created_at: Date.now()
               };
@@ -796,7 +835,14 @@ export async function onRequestPost({ request, env }) {
             }
 
             finalText = String(assistant.content || '').trim() || 'انجام شد.';
-            newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
+            newMessages.push({
+              role: 'assistant',
+              content: finalText,
+              ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
+              ...(appliedEffort && appliedEffort !== 'off' ? { reasoning_effort: appliedEffort } : {}),
+              ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
+              created_at: Date.now()
+            });
             messages.push({ role: 'assistant', content: finalText });
             send('assistant', { content: finalText });
             break;
@@ -840,6 +886,8 @@ export async function onRequestPost({ request, env }) {
           send('done', {
             content: finalText,
             model: usedModel,
+            reasoningEffort: appliedEffort,
+            reasoningTokens: totalReasoningTokens,
             conversation: conversationView(latest),
             touchedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
             deletedFiles: [...turn.deleted],
