@@ -125,7 +125,7 @@ export async function onRequestGet({ request, env }) {
           (!probe || probe.ok),
         authMode,
         sandbox: sandboxEnabled(env),
-        model: String(env.MODEL_NAME || 'gpt-4o-mini'),
+        model: String(env.MODEL_NAME || 'claude-sonnet-5-5'),
         checks,
         // In single-tenant mode, missing Access vars are expected, not failures.
         missing: authMode === 'dev-fallback' ? missing.filter((key) => !key.startsWith('ACCESS_')) : missing,
