@@ -39,12 +39,21 @@ pages_build_output_dir = "."
 # tag = "v1"
 # new_sqlite_classes = ["Sandbox"]
 
-[vars]
-# Non-secret defaults only. Never put API keys or tokens here.
-MODEL_NAME = "gpt-4o-mini"
-CONTEXT_BUDGET_TOKENS = "24000"
-ACCESS_ALLOWED_EMAILS = ""
-# Emergency single-tenant mode. Set an email here ONLY if Cloudflare Access is not
-# configured yet. It disables real login and shows a warning banner in the UI.
-# Leave empty together with ACCESS_TEAM_DOMAIN/ACCESS_AUD set in Secrets.
-DEV_ACCESS_EMAIL = ""
+# No [vars] block on purpose.
+#
+# Cloudflare treats a `[vars]` entry as owned by this file: once a name is
+# declared here, the dashboard shows it locked and only Secrets remain editable
+# ("Environment variables for this project are being managed through
+# wrangler.toml. Only Secrets can be managed via the Dashboard."). That forced a
+# code edit and a redeploy just to change a model name or an email.
+#
+# Everything is therefore dashboard-managed:
+#   MODEL_API_KEY      Secret     provider key            (required)
+#   SESSION_SECRET     Secret     32+ random chars        (required)
+#   MODEL_NAME         Text       default: gpt-4o-mini
+#   DEV_ACCESS_EMAIL   Text       single-tenant login email
+#   CONTEXT_BUDGET_TOKENS Text    default: 24000
+#   ACCESS_ALLOWED_EMAILS Text    comma-separated allow-list
+#
+# The code has safe defaults for every optional name, so an empty configuration
+# still answers /api/health and explains what is missing.
