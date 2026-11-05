@@ -1,13 +1,62 @@
 # راه‌اندازی Cloudflare — چک‌لیست کوتاه
 
-> **خطای «Access is not configured» چه معنایی دارد؟**
-> سرور `ACCESS_TEAM_DOMAIN` و/یا `ACCESS_AUD` را پیدا نکرده است. دو راه دارید:
-> **الف) فعال‌سازی فوری (تک‌کاربره)** — فقط یک متغیر اضافه کنید (بخش ۰).
-> **ب) راه‌اندازی کامل Access** — بخش‌های ۱ تا ۴.
+> **خطای `Access is not configured.` (به انگلیسی)**
+> این پیام **کد قدیمی** است. یعنی آخرین deploy شما شکست خورده و Cloudflare همان
+> بیلد موفق قبلی را سرو می‌کند. نسخه‌ی فعلی هرگز این جمله را نمی‌گوید.
+> ۱. در GitHub، وضعیت `Cloudflare Pages` روی آخرین کامیت `main` را چک کنید.
+> ۲. اگر قرمز بود: Deployments → آخرین بیلد → ⋯ → **Retry deployment**.
 >
-> برای دیدن دقیقاً چه چیزی کم است: `curl -s https://<سایت>/api/health | jq`
+> **خطای فارسی `access_unconfigured`** یعنی کد جدید هست ولی `ACCESS_TEAM_DOMAIN` /
+> `ACCESS_AUD` ست نشده — چک‌لیست زیر را ببینید.
 
-## ۰. فعال‌سازی فوری بدون Cloudflare Access (تک‌کاربره)
+## ⚡ چهار کار در داشبورد (به همین ترتیب)
+
+کد الان درست deploy می‌شود. ولی تا این چهار مورد ست نشوند، سایت خطا می‌دهد.
+همه در **Workers & Pages → پروژه → Settings** انجام می‌شود.
+
+### ۱) D1 — بدون این، هیچ چیز ذخیره نمی‌شود
+
+**Functions → D1 database bindings → Add**
+| فیلد | مقدار |
+|---|---|
+| Variable name | `DB` (دقیقاً همین) |
+| D1 database | دیتابیسی که با `wrangler d1 create codepilot-db` ساختید |
+
+اگر هنوز نساخته‌اید، از داشبورد **Storage & Databases → D1 → Create** بزنید.
+
+> جدول‌ها را لازم نیست دستی بسازید؛ برنامه در اولین درخواست خودش می‌سازد.
+
+### ۲) SESSION_SECRET — بدون این، ورود کار نمی‌کند
+
+**Variables and Secrets → Add** → نوع **Secret**:
+```
+SESSION_SECRET = <خروجی openssl rand -base64 32>
+```
+
+### ۳) MODEL_API_KEY — بدون این، چت جواب نمی‌دهد
+
+نوع **Secret**:
+```
+MODEL_API_KEY = <کلید tooken.club>
+```
+آدرس سرویس به‌صورت پیش‌فرض `https://tooken.club/v1` است؛ نیازی به ست کردن `MODEL_BASE_URL` نیست.
+
+### ۴) ورود را انتخاب کنید (یکی از دو راه)
+
+**الف) سریع (تک‌کاربره):** نوع **Variable** → `DEV_ACCESS_EMAIL = your@email.com`
+**ب) امن (چندکاربره):** `ACCESS_TEAM_DOMAIN` و `ACCESS_AUD` را تنظیم کنید — بخش ۳.
+
+---
+
+**بعد از هر تغییر، پروژه را Redeploy کنید** (Deployments → آخرین بیلد → ⋯ → Retry
+deployment) چون متغیرها در بیلد بعدی اعمال می‌شوند.
+
+سپس این آدرس را باز کنید — باید همه‌چیز سبز باشد:
+```
+https://<سایت>/api/health
+```
+
+## ۰. جزئیات حالت تک‌کاربره (بدون Cloudflare Access)
 
 اگر الان فقط می‌خواهید کار کنید و Access را بعداً تنظیم کنید:
 
