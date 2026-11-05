@@ -483,3 +483,25 @@ test('version restore rejects a version from another file and another owner', as
   );
   assert.ok([403, 404].includes(denied.status), String(denied.status));
 });
+
+test('creating a file records a base version and produces a real diff', async () => {
+  // Regression: write_file on a *new* path used to skip recordVersion and emit an
+  // empty diff, so the UI showed no changes and creating a file was not undoable.
+  const lib = await import(`${root}/_lib/versions.js`);
+  const env = makeEnv(keys);
+  const owner = 'owner@example.com';
+  const conv = { id: 'conv-1', workspace: '{}' };
+
+  const id = await lib.recordVersion(env, owner, conv, { path: 'new.js', content: '', reason: 'created' });
+  assert.ok(id, 'a base version id must be returned');
+
+  const list = await lib.listVersions(env, owner, 'new.js', { project: '' });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].reason, 'created');
+  assert.equal(list[0].size, 0);
+
+  // And a diff against an empty original is a real, non-empty patch.
+  const diff = patch.unifiedDiff('', 'a\nb\n', { path: 'new.js' });
+  assert.match(diff, /^--- a\/new\.js/m);
+  assert.match(diff, /^\+b$/m);
+});

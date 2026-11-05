@@ -18,7 +18,11 @@ export async function onRequestGet({ request, env }) {
           name: identity.name || user?.display_name || '',
           since: user?.created_at || null
         },
-        auth: 'cloudflare-access',
+        auth: identity.via === 'dev-fallback' ? 'dev-fallback' : 'cloudflare-access',
+        warning:
+          identity.via === 'dev-fallback'
+            ? 'حالت بدون Cloudflare Access فعال است (DEV_ACCESS_EMAIL). این محیط تک‌کاربره و بدون ورود واقعی است؛ هر کسی که آدرس را بداند می‌تواند وارد شود.'
+            : null,
         storage: 'd1'
       },
       200,

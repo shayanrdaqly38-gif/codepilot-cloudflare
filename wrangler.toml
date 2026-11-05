@@ -29,3 +29,7 @@ database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 MODEL_NAME = "gpt-4o-mini"
 CONTEXT_BUDGET_TOKENS = "24000"
 ACCESS_ALLOWED_EMAILS = ""
+# Emergency single-tenant mode. Set an email here ONLY if Cloudflare Access is not
+# configured yet. It disables real login and shows a warning banner in the UI.
+# Leave empty together with ACCESS_TEAM_DOMAIN/ACCESS_AUD set in Secrets.
+DEV_ACCESS_EMAIL = ""
