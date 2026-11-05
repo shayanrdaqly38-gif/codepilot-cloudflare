@@ -10,11 +10,14 @@
 import { json, errorResponse } from '../_lib/util.js';
 import { ensureSchema } from '../_lib/schema.js';
 import { sandboxEnabled } from '../_lib/sandbox.js';
+import { authenticate } from '../_lib/auth.js';
+import { callModel, modelEndpoint } from '../_lib/model.js';
 
 const TEAM_DOMAIN = /^[a-z0-9-]+\.cloudflareaccess\.com$/;
 
 export async function onRequestGet({ request, env }) {
   try {
+    const url = new URL(request.url);
     const checks = {};
 
     const rawDomain = String(env.ACCESS_TEAM_DOMAIN || '').trim();
@@ -70,9 +73,51 @@ export async function onRequestGet({ request, env }) {
 
     const missing = Object.keys(checks).filter((key) => checks[key].ok === false);
 
+    // `?probe=1` performs one tiny real completion so the operator can tell a
+    // configuration problem from a provider problem. It requires a session, so
+    // it cannot be used to burn someone's quota anonymously.
+    let probe = null;
+    if (url.searchParams.get('probe') === '1') {
+      let identity = null;
+      try {
+        identity = await authenticate(request, env);
+      } catch {
+        identity = null;
+      }
+      if (!identity) {
+        probe = { ok: false, error: 'برای تست مدل باید وارد شده باشید.' };
+      } else if (!env.MODEL_API_KEY) {
+        probe = { ok: false, error: 'MODEL_API_KEY تنظیم نشده است.' };
+      } else {
+        const started = Date.now();
+        try {
+          const reply = await callModel(env, {
+            messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+            max_tokens: 8,
+            temperature: 0
+          });
+          probe = {
+            ok: true,
+            endpoint: modelEndpoint(env),
+            model: reply.model,
+            latencyMs: Date.now() - started,
+            sample: String(reply.message?.content || '').slice(0, 40)
+          };
+        } catch (error) {
+          probe = {
+            ok: false,
+            endpoint: modelEndpoint(env),
+            code: error?.code || 'probe_failed',
+            error: error?.message || 'تست مدل شکست خورد.',
+            latencyMs: Date.now() - started
+          };
+        }
+      }
+    }
+
     return json(
       {
-        ok: missing.length === 0,
+        ok: missing.length === 0 && (!probe || probe.ok),
         authMode,
         sandbox: sandboxEnabled(env),
         model: String(env.MODEL_NAME || 'gpt-4o-mini'),
@@ -83,7 +128,8 @@ export async function onRequestGet({ request, env }) {
           authMode === 'dev-fallback'
             ? 'حالت تک‌کاربره: بدون ورود واقعی. هر کسی که آدرس سایت را بداند به گفتگوها دسترسی دارد.'
             : null,
-        nextSteps: buildSteps(checks, authMode)
+        nextSteps: buildSteps(checks, authMode),
+        ...(probe ? { probe } : {})
       },
       authMode === 'unconfigured' || (authMode === 'cloudflare-access' && missing.length) ? 503 : 200
     );
