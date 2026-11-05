@@ -182,7 +182,10 @@ export function sanitizeStoredMessage(message) {
     if (typeof message?.reasoning === 'string' && message.reasoning.trim()) {
       out.reasoning = redactSecrets(message.reasoning).slice(0, 10_000);
     }
-    if (typeof message?.reasoning_effort === 'string' && /^(off|low|medium|high|max)$/.test(message.reasoning_effort)) {
+    if (
+      typeof message?.reasoning_effort === 'string' &&
+      /^(none|minimal|low|medium|high|xhigh|max)$/.test(message.reasoning_effort)
+    ) {
       out.reasoning_effort = message.reasoning_effort;
     }
     if (Number.isInteger(message?.reasoning_tokens) && message.reasoning_tokens > 0) {

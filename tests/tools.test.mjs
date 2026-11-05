@@ -793,25 +793,57 @@ test('chat supports dynamic [id].js paths, delete_file + undo_edit restoration, 
   }
 });
 
-test('native Reasoning effort sends genuine per-model wire parameters, negotiates schema, and streams reasoning tokens', async () => {
+test('tooken.club native Effort capabilities, live /v1/models parsing, and pure reasoning_effort wire payloads', async () => {
   const modelLib = await import(`${root}/_lib/model.js`);
 
-  // 1. Per-model capability profiles match Claude Code behavior
+  // 1. Exact per-model capabilities matching tooken.club/v1
   const opusSpec = modelLib.getModelReasoningSpec('claude-opus-5-5');
   assert.equal(opusSpec.supported, true);
-  assert.deepEqual(opusSpec.levels, ['off', 'low', 'medium', 'high', 'max']);
+  assert.deepEqual(opusSpec.levels, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
-  const sonnetSpec = modelLib.getModelReasoningSpec('claude-sonnet-5-5');
-  assert.equal(sonnetSpec.supported, true);
-  assert.deepEqual(sonnetSpec.levels, ['off', 'low', 'medium', 'high']);
-  assert.equal(modelLib.normalizeReasoningEffort('max', 'claude-sonnet-5-5'), 'high');
+  const deepseekFlashSpec = modelLib.getModelReasoningSpec('deepseek-v4.1-flash-1017');
+  assert.equal(deepseekFlashSpec.supported, true);
+  assert.deepEqual(deepseekFlashSpec.levels, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
-  const flashSpec = modelLib.getModelReasoningSpec('gemini-3-8-flash');
-  assert.equal(flashSpec.supported, false);
-  assert.deepEqual(flashSpec.levels, []);
-  assert.equal(modelLib.normalizeReasoningEffort('high', 'gemini-3-8-flash'), 'off');
+  const lunaSpec = modelLib.getModelReasoningSpec('gpt-6-luna');
+  assert.equal(lunaSpec.supported, true);
+  assert.deepEqual(lunaSpec.levels, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
-  // 2. Wire payload verification for Anthropic extended thinking (max -> budget_tokens=31999, no non-1 temperature)
+  const argonSpec = modelLib.getModelReasoningSpec('gemini-4-argon');
+  assert.equal(argonSpec.supported, true);
+  assert.deepEqual(argonSpec.levels, ['low', 'medium', 'high']);
+  assert.equal(argonSpec.unconfirmed, true);
+  assert.equal(modelLib.normalizeReasoningEffort('max', 'gemini-4-argon'), 'high');
+  assert.equal(modelLib.normalizeReasoningEffort('none', 'gemini-4-argon'), 'low');
+  assert.equal(modelLib.normalizeReasoningEffort('extra', 'claude-sonnet-5-5'), 'xhigh');
+
+  // 2. Live /v1/models parser extracts genuine reasoning levels, vision, tools, and token limits
+  const parsedLive = modelLib.parseProviderModelItem({
+    id: 'gemini-4-argon',
+    name: 'Gemini 4 Argon',
+    max_input_tokens: 1_000_000,
+    max_output_tokens: 32_768,
+    vision: false,
+    tools: true,
+    reasoning_efforts: ['low', 'medium', 'high'],
+    reasoning_unconfirmed: true
+  });
+  assert.deepEqual(parsedLive.reasoning.levels, ['low', 'medium', 'high']);
+  assert.equal(parsedLive.reasoning.unconfirmed, true);
+  assert.equal(parsedLive.vision, false);
+  assert.equal(parsedLive.maxOutputTokens, 32_768);
+
+  const parsedNoReasoning = modelLib.parseProviderModelItem({
+    id: 'custom-non-reasoning-v1',
+    reasoning: false,
+    vision: true,
+    tools: false
+  });
+  assert.equal(parsedNoReasoning.reasoning.supported, false);
+  assert.deepEqual(parsedNoReasoning.reasoning.levels, []);
+  assert.equal(parsedNoReasoning.tools, false);
+
+  // 3. Pure wire payload: sends ONLY native reasoning_effort (no synthetic budget_tokens or inflated max_tokens)
   const originalFetch = globalThis.fetch;
   const capturedBodies = [];
   globalThis.fetch = async (_url, init) => {
@@ -823,14 +855,12 @@ test('native Reasoning effort sends genuine per-model wire parameters, negotiate
           {
             message: {
               role: 'assistant',
-              content: [
-                { type: 'thinking', thinking: 'تحلیل عمیق ساختار ماژول‌ها و وابستگی‌ها' },
-                { type: 'text', text: 'پاسخ نهایی پس از استدلال واقعی.' }
-              ]
+              reasoning_content: 'تحلیل مستقل در استخر توکن استدلال خود مدل',
+              content: 'پاسخ نهایی.'
             }
           }
         ],
-        usage: { prompt_tokens: 120, completion_tokens: 940, completion_tokens_details: { reasoning_tokens: 810 } }
+        usage: { prompt_tokens: 120, completion_tokens: 210, completion_tokens_details: { reasoning_tokens: 810 } }
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
@@ -838,34 +868,33 @@ test('native Reasoning effort sends genuine per-model wire parameters, negotiate
   try {
     const res = await modelLib.callModel(
       { MODEL_API_KEY: 'tc_test_1234567890123456' },
-      { model: 'claude-opus-5-5', reasoningEffort: 'max', temperature: 0.25, messages: [{ role: 'user', content: 'تحلیل کن' }] }
+      { model: 'claude-opus-5-5', reasoningEffort: 'max', maxTokens: 4096, messages: [{ role: 'user', content: 'تحلیل کن' }] }
     );
     assert.equal(capturedBodies.length, 1);
-    assert.equal(capturedBodies[0].reasoning_effort, 'high');
-    assert.deepEqual(capturedBodies[0].thinking, { type: 'enabled', budget_tokens: 31_999 });
-    assert.equal(capturedBodies[0].temperature, undefined, 'custom temperature != 1 must be omitted when Claude thinking is enabled');
-    assert.ok(capturedBodies[0].max_tokens > 31_999);
+    assert.equal(capturedBodies[0].reasoning_effort, 'max');
+    assert.equal(capturedBodies[0].thinking, undefined, 'must NOT inject custom thinking.budget_tokens');
+    assert.equal(capturedBodies[0].max_tokens, 4096, 'must NOT inflate output max_tokens because reasoning pool is separate');
     assert.equal(res.reasoningEffort, 'max');
     assert.equal(res.usage.reasoning_tokens, 810);
-    assert.match(res.reasoning, /تحلیل عمیق ساختار ماژول‌ها/);
-    assert.equal(res.message.content, 'پاسخ نهایی پس از استدلال واقعی.');
+    assert.match(res.reasoning, /تحلیل مستقل/);
+    assert.equal(res.message.content, 'پاسخ نهایی.');
   } finally {
     globalThis.fetch = originalFetch;
   }
 
-  // 3. OpenAI `gpt-6.1-sol` at `max` tries `xhigh`, and seamlessly steps down to `high` if gateway validates 3-level enum
-  const openAiBodies = [];
+  // 4. Clean step-down if an upstream model rejects max/xhigh with HTTP 400
+  const retryBodies = [];
   globalThis.fetch = async (_url, init) => {
     const parsed = JSON.parse(init.body);
-    openAiBodies.push(parsed);
+    retryBodies.push(parsed);
     if (parsed.reasoning_effort === 'xhigh') {
-      return new Response(JSON.stringify({ error: 'invalid reasoning_effort xhigh' }), { status: 400 });
+      return new Response(JSON.stringify({ error: 'unsupported reasoning_effort xhigh' }), { status: 400 });
     }
     return new Response(
       JSON.stringify({
-        model: 'gpt-6.1-sol',
+        model: 'claude-sonnet-5-5',
         choices: [{ message: { role: 'assistant', content: 'ok-high' } }],
-        usage: { prompt_tokens: 50, completion_tokens: 600, completion_tokens_details: { reasoning_tokens: 520 } }
+        usage: { prompt_tokens: 50, completion_tokens: 100, completion_tokens_details: { reasoning_tokens: 420 } }
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
@@ -873,13 +902,13 @@ test('native Reasoning effort sends genuine per-model wire parameters, negotiate
   try {
     const res2 = await modelLib.callModel(
       { MODEL_API_KEY: 'tc_test_1234567890123456' },
-      { model: 'gpt-6.1-sol', reasoningEffort: 'max', messages: [{ role: 'user', content: 'solve' }] }
+      { model: 'claude-sonnet-5-5', reasoningEffort: 'extra', messages: [{ role: 'user', content: 'solve' }] }
     );
-    assert.equal(openAiBodies.length, 2);
-    assert.equal(openAiBodies[0].reasoning_effort, 'xhigh');
-    assert.equal(openAiBodies[1].reasoning_effort, 'high');
+    assert.equal(retryBodies.length, 2);
+    assert.equal(retryBodies[0].reasoning_effort, 'xhigh');
+    assert.equal(retryBodies[1].reasoning_effort, 'high');
     assert.equal(res2.reasoningEffort, 'high');
-    assert.equal(res2.usage.reasoning_tokens, 520);
+    assert.equal(res2.usage.reasoning_tokens, 420);
   } finally {
     globalThis.fetch = originalFetch;
   }
