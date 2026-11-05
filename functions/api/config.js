@@ -3,13 +3,30 @@
 
 import { route, methodNotAllowed } from '../_lib/api.js';
 import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
-import { MODEL_CATALOG, getModelReasoningSpec } from '../_lib/model.js';
+import { catalogModelsWithSpecs, fetchProviderModels, getModelReasoningSpec } from '../_lib/model.js';
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
     const linux = linuxRunnerEnabled(env);
     const sb = sandboxEnabled(env);
     const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
+
+    // On live Cloudflare Pages, opportunistically hydrate live `/v1/models` capabilities
+    // (cached for 5 minutes) so the UI immediately gets `tooken.club`'s exact per-model specs.
+    const byId = new Map(catalogModelsWithSpecs().map((m) => [m.id, m]));
+    let modelsSource = 'catalog';
+    if (env.CF_PAGES && env.MODEL_API_KEY) {
+      try {
+        const live = await fetchProviderModels(env);
+        if (live.length) {
+          modelsSource = 'remote';
+          for (const item of live) byId.set(item.id, item);
+        }
+      } catch {
+        // Non-fatal: curated catalog stays ready.
+      }
+    }
+
     return {
       ok: true,
       auth: identity.via === 'dev-fallback' ? 'dev-fallback' : 'cloudflare-access',
@@ -18,7 +35,8 @@ export async function onRequestGet({ request, env }) {
       user: { email: identity.email, name: identity.name },
       model: defaultModel,
       modelReasoning: getModelReasoningSpec(defaultModel),
-      models: MODEL_CATALOG.map((item) => ({ ...item, reasoning: getModelReasoningSpec(item.id) })),
+      modelsSource,
+      models: [...byId.values()],
       contextBudgetTokens: Number(env.CONTEXT_BUDGET_TOKENS) || 24000,
       sandbox: sb,
       linuxRunner: linux,
