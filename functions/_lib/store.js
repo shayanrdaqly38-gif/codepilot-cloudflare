@@ -157,7 +157,10 @@ export async function messageStats(env, conversationId) {
     .prepare('SELECT COUNT(*) AS n, COALESCE(MAX(seq),-1) AS last FROM messages WHERE conversation_id=?')
     .bind(conversationId)
     .first();
-  return { count: row?.n || 0, lastSeq: row?.last ?? -1 };
+  // seq is 1-based, so an empty conversation's last seq is 0, not -1. The old
+  // -1 made the first stored message land on seq=0 and every nextSeq one short.
+  const lastSeq = Math.max(row?.last ?? -1, 0);
+  return { count: row?.n || 0, lastSeq };
 }
 
 /**
@@ -191,6 +194,31 @@ export function sanitizeStoredMessage(message) {
   return out;
 }
 
+/**
+ * Build one multi-row INSERT.
+ *
+ * The previous implementation emitted `INSERT ... SELECT ?,... UNION ALL SELECT
+ * ?,...`, which D1 rejects once a turn stores more than a handful of messages:
+ * "D1_ERROR: too many terms in compound SELECT". A turn with tool calls easily
+ * appends 7+ messages, so a normal agent turn failed at the persist step after
+ * the tools had already run -- the work was done but the reply was an error.
+ *
+ * Row-value syntax keeps the statement count at one regardless of chunk size.
+ * Chunks stay small so the bound-parameter limit is never the next wall we hit.
+ */
+function insertRows(database, table, columns, rows) {
+  const statements = [];
+  const width = columns.length;
+  const perChunk = Math.max(1, Math.floor(90 / width));
+  for (let i = 0; i < rows.length; i += perChunk) {
+    const chunk = rows.slice(i, i + perChunk);
+    const tuple = `(${columns.map(() => '?').join(',')})`;
+    const sql = `INSERT INTO ${table}(${columns.join(',')}) VALUES ${chunk.map(() => tuple).join(',')}`;
+    statements.push(database.prepare(sql).bind(...chunk.flat()));
+  }
+  return statements;
+}
+
 /** Insert messages after `lastSeq`, keeping seq contiguous. */
 export async function appendMessages(env, conversation, messages) {
   const database = await db(env);
@@ -198,27 +226,11 @@ export async function appendMessages(env, conversation, messages) {
   if (count + messages.length > MAX_MESSAGES_PER_CONVERSATION) {
     fail('این گفتگو به سقف پیام رسیده است؛ گفتگوی جدیدی بسازید.', 409, 'quota');
   }
-  const statements = [];
-  const now = Date.now();
-  for (let i = 0; i < messages.length; i += 12) {
-    const chunk = messages.slice(i, i + 12).map((message) => sanitizeStoredMessage(message));
-    const values = [];
-    const selects = chunk.map((message, j) => {
-      values.push(
-        conversation.id,
-        lastSeq + 1 + i + j,
-        message.created_at,
-        message.role || '',
-        JSON.stringify(message)
-      );
-      return 'SELECT ?,?,?,?,?';
-    });
-    statements.push(
-      database
-        .prepare('INSERT INTO messages(conversation_id,seq,created_at,role,body) ' + selects.join(' UNION ALL '))
-        .bind(...values)
-    );
-  }
+  const rows = messages.map((message, index) => {
+    const clean = sanitizeStoredMessage(message);
+    return [conversation.id, lastSeq + 1 + index, clean.created_at, clean.role || '', JSON.stringify(clean)];
+  });
+  const statements = insertRows(database, 'messages', ['conversation_id', 'seq', 'created_at', 'role', 'body'], rows);
   if (statements.length) await database.batch(statements);
   return { nextSeq: lastSeq + messages.length, inserted: messages.length };
 }
@@ -226,21 +238,14 @@ export async function appendMessages(env, conversation, messages) {
 /** Replace the whole history (used by "rewind" / branch a conversation). */
 export async function replaceMessages(env, conversation, messages) {
   const database = await db(env);
-  const statements = [database.prepare('DELETE FROM messages WHERE conversation_id=?').bind(conversation.id)];
-  const now = Date.now();
-  for (let i = 0; i < messages.length; i += 12) {
-    const chunk = messages.slice(i, i + 12).map((message) => sanitizeStoredMessage(message));
-    const values = [];
-    const selects = chunk.map((message, j) => {
-      values.push(conversation.id, i + j, message.created_at, message.role || '', JSON.stringify(message));
-      return 'SELECT ?,?,?,?,?';
-    });
-    statements.push(
-      database
-        .prepare('INSERT INTO messages(conversation_id,seq,created_at,role,body) ' + selects.join(' UNION ALL '))
-        .bind(...values)
-    );
-  }
+  const rows = messages.map((message, index) => {
+    const clean = sanitizeStoredMessage(message);
+    return [conversation.id, index + 1, clean.created_at, clean.role || '', JSON.stringify(clean)];
+  });
+  const statements = [
+    database.prepare('DELETE FROM messages WHERE conversation_id=?').bind(conversation.id),
+    ...insertRows(database, 'messages', ['conversation_id', 'seq', 'created_at', 'role', 'body'], rows)
+  ];
   await database.batch(statements);
   return { count: messages.length };
 }
