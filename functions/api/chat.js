@@ -169,6 +169,23 @@ export const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'file_history',
+      description:
+        'List saved versions of a file (newest first) with reason, author and size. Use it before undoing or when the user asks what changed to a file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          limit: { type: 'number', description: 'Max entries to return (default 10, max 25)' }
+        },
+        required: ['path'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_command',
       description:
         'Run a shell command. If a real sandbox is configured it executes there; otherwise a safe virtual shell handles help/pwd/ls/cat/touch/echo/rm. The result always states which mode ran.',
@@ -392,6 +409,29 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       return {
         ok: true,
         text: `Restored ${path} to version ${target.id} (${new Date(target.created_at).toISOString()}). +${stats.added} −${stats.removed}.`
+      };
+    }
+
+    case 'file_history': {
+      const path = assertSafePath(args.path);
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+      const rows = await listVersions(env, owner, path, { project: null, limit });
+      if (!rows.length) {
+        return {
+          ok: false,
+          text: `No history for ${path}. ${
+            workspace.files[path] === undefined ? 'That file does not exist in the workspace.' : 'It has never been edited.'
+          }`
+        };
+      }
+      const lines = rows.map((row, index) => {
+        const when = new Date(row.created_at).toISOString().replace('T', ' ').slice(0, 19);
+        const size = row.size === undefined ? '?' : `${row.size} chars`;
+        return `${index + 1}. ${row.id} · ${when}Z · ${row.reason} · ${row.created_by} · ${size}`;
+      });
+      return {
+        ok: true,
+        text: `History for ${path} (newest first):\n${lines.join('\n')}\nUse undo_edit with a versionId to restore one.`
       };
     }
 
