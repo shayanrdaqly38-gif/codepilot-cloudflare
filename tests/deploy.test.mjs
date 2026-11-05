@@ -89,3 +89,37 @@ test('package.json build entry point matches what Cloudflare runs', async () => 
   const index = await readFile(`${repo}index.html`, 'utf8');
   assert.match(index, /<html/i);
 });
+
+test('the shipped code can never emit the old hard-coded Access error', async () => {
+  // "Access is not configured." was milestone-1 code that hard-required a
+  // Cloudflare Access setup and dead-ended every user. The current code must
+  // answer with a Persian, actionable error (or fall back to single-tenant),
+  // never that sentence.
+  const files = [];
+  async function walk(dir) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.name.endsWith('.js')) files.push(full);
+    }
+  }
+  await walk(`${repo}functions`);
+
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    // Comments may explain the old bug; only executable strings matter.
+    const code = source
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    assert.ok(
+      !code.includes('Access is not configured'),
+      `${file.replace(repo, '')} still emits the milestone-1 dead-end message`
+    );
+  }
+
+  // The replacement must exist and be actionable.
+  const auth = await readFile(`${repo}functions/_lib/auth.js`, 'utf8');
+  assert.match(auth, /access_required/);
+  assert.match(auth, /DEV_ACCESS_EMAIL|devFallback/);
+});
