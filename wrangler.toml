@@ -1,0 +1,50 @@
+# Cloudflare Pages configuration.
+#
+# Nothing in this file needs to be edited before a deploy works. Secrets and
+# the D1 binding live in the Cloudflare dashboard (see SETUP.md).
+#
+# Commit with a placeholder id in [[d1_databases]] and the deploy step fails,
+# Cloudflare keeps serving the previous successful build, and the site silently
+# stays on old code. That is the failure mode this file is written to avoid.
+
+name = "codepilot-cloudflare"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "."
+
+# The D1 binding is configured in the Cloudflare dashboard, NOT here.
+#
+# Why: a placeholder `database_id` makes `wrangler pages deploy` fail, and a
+# failed deploy leaves the previous build serving production — which is why a
+# site can keep showing an old error message no matter what you push.
+# Binding it in the dashboard (Settings → Functions → D1 database bindings,
+# variable name: DB) also applies to every future deploy, so the repo stays
+# free of one person's database id.
+#
+# If you prefer IaC, uncomment this with your real id — but never commit a
+# placeholder, and never commit a half-filled one:
+#
+# [[d1_databases]]
+# binding = "DB"                    # must stay "DB" — the code reads env.DB
+# database_name = "codepilot-db"
+# database_id = "<your-real-uuid>"
+
+# Optional: real code execution. Uncomment after creating the Sandbox Durable
+# Object (see SETUP.md §7). Without it, run_command is a clearly-labelled
+# virtual shell.
+# [[durable_objects.bindings]]
+# name = "SANDBOX"
+# class_name = "Sandbox"
+#
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["Sandbox"]
+
+[vars]
+# Non-secret defaults only. Never put API keys or tokens here.
+MODEL_NAME = "gpt-4o-mini"
+CONTEXT_BUDGET_TOKENS = "24000"
+ACCESS_ALLOWED_EMAILS = ""
+# Emergency single-tenant mode. Set an email here ONLY if Cloudflare Access is not
+# configured yet. It disables real login and shows a warning banner in the UI.
+# Leave empty together with ACCESS_TEAM_DOMAIN/ACCESS_AUD set in Secrets.
+DEV_ACCESS_EMAIL = ""

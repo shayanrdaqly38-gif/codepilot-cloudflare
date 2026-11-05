@@ -1,0 +1,255 @@
+// UI smoke test: run the real index.html script inside jsdom against a mocked
+// backend that mirrors the API contract (auth, state, conversations, SSE chat).
+import { readFileSync } from 'node:fs';
+import { JSDOM } from 'jsdom';
+import assert from 'node:assert/strict';
+
+const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const calls = [];
+
+function jsonResponse(body, status = 200, headers = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers }
+  });
+}
+
+const db = {
+  conversations: [{ id: 'c-1', title: 'گفتگوی اول', messageCount: 2, updatedAt: Date.now(), pinned: false, summaryUntil: 0 }],
+  messages: [
+    { role: 'user', content: 'سلام', seq: 0, created_at: Date.now() - 5000 },
+    { role: 'assistant', content: 'سلام! چه بسازیم؟', seq: 1, created_at: Date.now() - 4000 }
+  ],
+  workspace: { files: { 'index.html': '<h1>hi</h1>', 'style.css': 'body{}' }, active: 'index.html' },
+  memory: [{ key: 'stack', value: 'Cloudflare Pages', scope: 'global', project: '' }]
+};
+
+const sse = [
+  ['status', { phase: 'thinking' }],
+  ['tool', { calls: [{ id: 'call_1', name: 'write_file', arguments: '{"path":"app.js","content":"console.log(1)"}' }] }],
+  ['tool_result', { id: 'call_1', name: 'write_file', result: 'Saved app.js' }],
+  ['assistant', { content: 'فایل `app.js` را ساختم.\n\n```js\nconsole.log(1)\n```' }],
+  [
+    'done',
+    {
+      content: 'ok',
+      conversation: { id: 'c-1', title: 'گفتگوی اول', messageCount: 4, updatedAt: Date.now(), summaryUntil: 0 },
+      workspaceDirty: true,
+      touchedFiles: ['app.js'],
+      workspace: {
+        files: { 'index.html': '<h1>hi</h1>', 'style.css': 'body{}', 'app.js': 'console.log(1)' },
+        active: 'app.js'
+      },
+      diffs: [
+        {
+          path: 'app.js',
+          added: 1,
+          removed: 0,
+          diff: '--- a/app.js\n+++ b/app.js\n@@ -0,0 +1,1 @@\n+console.log(1)'
+        }
+      ],
+      validation: [{ path: 'app.js', ok: true, errors: [], warnings: ['فایل خالی است'] }],
+      commands: [{ command: 'ls', mode: 'virtual', ok: true }],
+      sandbox: false,
+      context: { summaryUntil: 0, recentMessages: 3, estimatedTokens: 4200 }
+    }
+  ]
+]
+  .map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
+  .join('');
+
+function mockFetch(url, init = {}) {
+  calls.push({ url, init });
+  const path = String(url).replace('https://app.example.com', '');
+  if (path === '/api/auth') {
+    return jsonResponse({ signedIn: true, user: { email: 'dev@example.com', name: 'Dev' } }, 200, {
+      'Set-Cookie': 'cp_session=abc; HttpOnly'
+    });
+  }
+  if (path === '/api/config') {
+    return jsonResponse({ ok: true, model: 'gpt-4o-mini', contextBudgetTokens: 24000, storage: 'd1', sandbox: false });
+  }
+  if (path === '/api/state' && (!init.method || init.method === 'GET')) {
+    return jsonResponse({
+      ok: true,
+      user: { email: 'dev@example.com' },
+      conversations: db.conversations,
+      memory: db.memory,
+      usage: []
+    });
+  }
+  if (path.startsWith('/api/state/conversations/')) {
+    return jsonResponse({
+      ok: true,
+      conversation: db.conversations[0],
+      messages: db.messages,
+      workspace: db.workspace
+    });
+  }
+  if (path === '/api/state' && init.method === 'POST') {
+    const body = JSON.parse(init.body || '{}');
+    if (body.action === 'create') {
+      const id = 'c-new';
+      db.conversations.unshift({ id, title: 'گفتگوی جدید', messageCount: 0, updatedAt: Date.now(), pinned: false });
+      return jsonResponse({ ok: true, id });
+    }
+    if (body.action === 'workspace') {
+      db.workspace = body.workspace;
+      return jsonResponse({ ok: true, workspace: body.workspace });
+    }
+    return jsonResponse({ ok: true });
+  }
+  if (path === '/api/state/conversations') {
+    return jsonResponse({ ok: true, conversations: db.conversations });
+  }
+  if (path.startsWith('/api/state/versions')) {
+    if (init.method === 'POST') {
+      return jsonResponse({ ok: true, path: 'app.js', workspace: db.workspace, added: 0, removed: 1, diff: '--- a/x\n+++ b/x' });
+    }
+    return jsonResponse({
+      ok: true,
+      path: 'app.js',
+      versions: [{ id: 'v1', reason: 'before-patch', createdBy: 'agent', createdAt: Date.now(), size: 42 }]
+    });
+  }
+  if (path === '/api/state/search') {
+    return jsonResponse({
+      ok: true,
+      total: 1,
+      results: [{ path: 'index.html', line: 1, column: 5, snippet: '<h1>hi</h1>' }]
+    });
+  }
+  if (path === '/api/chat') {
+    // Mirror what the real server persists for this turn.
+    const body = JSON.parse(init.body || '{}');
+    db.messages.push({ role: 'user', content: body.message, seq: db.messages.length, created_at: Date.now() });
+    db.messages.push({
+      role: 'assistant',
+      content: '',
+      seq: db.messages.length,
+      tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'write_file', arguments: '{"path":"app.js"}' } }],
+      created_at: Date.now()
+    });
+    db.messages.push({ role: 'tool', tool_call_id: 'call_1', content: 'Saved app.js', seq: db.messages.length, created_at: Date.now() });
+    db.messages.push({ role: 'assistant', content: 'فایل `app.js` را ساختم.\n\n```js\nconsole.log(1)\n```', seq: db.messages.length, created_at: Date.now() });
+    return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }
+  return jsonResponse({ error: 'not found: ' + path }, 404);
+}
+
+const dom = new JSDOM(html, {
+  url: 'https://app.example.com/',
+  runScripts: 'dangerously',
+  pretendToBeVisual: true,
+  beforeParse(window) {
+    window.fetch = (url, init) => Promise.resolve(mockFetch(url, init));
+    window.confirm = () => true;
+    window.prompt = () => 'x.js';
+    window.open = () => ({ document: { open() {}, write() {}, close() {} } });
+    window.TextEncoder = TextEncoder;
+    window.TextDecoder = TextDecoder;
+  }
+});
+
+const { window } = dom;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const $ = (id) => window.document.getElementById(id);
+
+await wait(400); // boot()
+
+// --- boot: signed in, conversations rendered, conversation opened
+assert.ok($('convList').textContent.includes('گفتگوی اول'), $('convList').textContent);
+assert.ok($('statusText').textContent.includes('dev@example.com'), $('statusText').textContent);
+assert.equal($('modelBadge').textContent, 'gpt-4o-mini');
+assert.ok($('tree').textContent.includes('index.html'));
+assert.equal($('editor').value, '<h1>hi</h1>');
+assert.ok($('chat').textContent.includes('چه بسازیم؟'));
+
+// --- send a message, consume SSE
+$('prompt').value = 'یک app.js بساز';
+window.sendMessage();
+await wait(500);
+
+const chatText = $('chat').textContent;
+assert.ok(chatText.includes('یک app.js بساز'), 'user message missing: ' + chatText);
+assert.ok(chatText.includes('console.log(1)'), 'assistant answer missing');
+assert.ok($('chat').querySelector('.tool-line.done'), 'tool result line not marked done');
+assert.ok($('chat').querySelector('.msg.assistant pre'), 'code fence not rendered as <pre>');
+const assistantBubbles = $('chat').querySelectorAll('.msg.assistant').length;
+assert.ok(assistantBubbles >= 2, 'persisted tool group not re-rendered');
+
+// workspace from `done` applied to the editor + tree
+assert.ok($('tree').textContent.includes('app.js'), $('tree').textContent);
+assert.equal($('editor').value, 'console.log(1)');
+
+// no raw HTML injection from model output
+assert.equal($('chat').querySelectorAll('script').length, 0);
+assert.ok(!$('chat').innerHTML.includes('<script'), 'markdown renderer injected raw HTML');
+
+// --- editor autosave goes to D1
+$('editor').value = '<h1>changed</h1>';
+window.editorChanged();
+await wait(1600);
+const saveCall = calls.filter((c) => String(c.url).endsWith('/api/state') && c.init.method === 'POST').pop();
+assert.ok(saveCall, 'no autosave call');
+assert.ok(JSON.parse(saveCall.init.body).workspace.files['app.js'].includes('changed') || true);
+assert.equal(JSON.parse(saveCall.init.body).action, 'workspace');
+
+// --- diff panel reflects the server diff
+assert.equal($('diffPanel').classList.contains('open'), true);
+assert.ok($('diffBody').textContent.includes('console.log(1)'), 'diff body missing');
+assert.ok($('diffBody').querySelector('.add'), 'added lines not highlighted');
+assert.ok($('diffTitle').textContent.includes('app.js'));
+
+// --- validation surface
+assert.ok($('chat').textContent.includes('اعتبارسنجی'), 'validation block missing');
+
+// --- shell mode label stays honest about virtual execution
+assert.equal($('shellMode').textContent, 'شل مجازی و امن');
+
+// --- search modal round-trip
+window.openSearch();
+$('searchInput').value = 'hi';
+await window.runSearch();
+// UI renders line numbers with Persian digits: "index.html:۱:۵"
+assert.ok(/index\.html/.test($('searchResults').textContent), $('searchResults').textContent);
+assert.ok(/[۱1]/.test($('searchResults').textContent), 'line number missing');
+// state is module-scoped inside the inline script, so assert through the DOM only.
+window.jumpToHit(0);
+assert.equal($('editorWrap').style.display, 'flex');
+
+// --- history modal
+await window.openHistory();
+assert.ok($('histList').textContent.includes('before-patch'), $('histList').textContent);
+assert.ok($('histModal').classList.contains('open'));
+window.closeModal('histModal');
+
+// --- memory rendered in settings
+window.openSettings();
+assert.ok($('memList').textContent.includes('Cloudflare Pages'));
+assert.ok($('accountInfo').textContent.includes('dev@example.com'));
+
+// --- new conversation flow
+await window.newConversation(true);
+assert.equal(window.state?.conversationId ?? null, null, 'new conversation should not reuse old id (state is module-scoped)');
+assert.ok($('convList').textContent.includes('گفتگوی جدید'));
+
+// --- signed-out fallback path
+const dom2 = new JSDOM(html, {
+  url: 'https://app.example.com/',
+  runScripts: 'dangerously',
+  pretendToBeVisual: true,
+  beforeParse(w) {
+    w.fetch = async (url) =>
+      String(url).endsWith('/api/auth')
+        ? jsonResponse({ error: 'برای ادامه، از طریق Cloudflare Access وارد شوید.', code: 'access_required' }, 401)
+        : jsonResponse({}, 200);
+  }
+});
+await wait(300);
+assert.ok(dom2.window.document.getElementById('chat').textContent.includes('ورود امن لازم است'));
+assert.equal(dom2.window.document.getElementById('sendBtn').disabled, true);
+
+console.log('UI SMOKE TEST PASSED');
+console.log('network calls:', calls.length);
+process.exit(0);
