@@ -28,6 +28,22 @@ export function modelEndpoint(env) {
   return `${base}/chat/completions`;
 }
 
+export async function listModels(env) {
+  if (!env.MODEL_API_KEY) fail('سرویس مدل پیکربندی نشده است.', 503, 'model_key_missing');
+  let response;
+  try {
+    response = await fetch(modelEndpoint(env).replace(/\/chat\/completions$/, '/models'), {
+      headers: { Authorization: `Bearer ${env.MODEL_API_KEY}`, Accept: 'application/json' },
+      redirect: 'manual', signal: AbortSignal.timeout(15000)
+    });
+  } catch { fail('دریافت فهرست مدل‌ها ممکن نشد.', 502, 'models_unreachable'); }
+  if (!response.ok) fail('سرویس، فهرست مدل‌ها را ارائه نکرد.', 502, 'models_unavailable');
+  let data;
+  try { data = await response.json(); } catch { fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response'); }
+  if (!Array.isArray(data?.data)) fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
+  return [...new Set(data.data.map(item => item?.id).filter(id => typeof id === 'string' && /^[a-zA-Z0-9._:/-]{1,160}$/.test(id)))].sort().slice(0, 1000);
+}
+
 /** Validate and normalize the tool definitions the browser may send. */
 export function sanitizeTools(tools) {
   if (tools === undefined || tools === null) return [];
@@ -81,7 +97,7 @@ export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
     fail('MODEL_API_KEY در Cloudflare Secrets تنظیم نشده است.', 503, 'model_key_missing');
   }
-  const model = String(env.MODEL_NAME || 'claude-sonnet-5-5');
+  const model = String(payload.model || env.MODEL_NAME || 'claude-sonnet-5-5');
   const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS, 120_000);
   const body = JSON.stringify({
     model,
