@@ -15,6 +15,7 @@
 //   5. Persist the whole assistant/tool group before streaming `done`.
 
 import { route } from '../_lib/api.js';
+import { validateAttachments } from '../_lib/attachments.js';
 import { callModel, sanitizeModelId, sanitizeTools } from '../_lib/model.js';
 import {
   buildSystemPrompt,
@@ -591,7 +592,8 @@ export async function onRequestPost({ request, env }) {
       await enforceChatLimits(env, identity.owner);
 
       const conversationId = String(data?.conversationId || '');
-      const userText = typeof data?.message === 'string' ? data.message.trim() : '';
+      const attachments = validateAttachments(data?.attachments);
+      const userText = (typeof data?.message === 'string' ? data.message.trim() : '') || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
@@ -610,7 +612,7 @@ export async function onRequestPost({ request, env }) {
 
       // 1. Persist the user turn first (durability over speed).
       await appendMessages(env, conversation, [
-        { role: 'user', content: redactSecrets(userText, envSecrets(env)), created_at: Date.now() }
+        { role: 'user', content: redactSecrets(userText, envSecrets(env)), attachments, created_at: Date.now() }
       ]);
 
       const history = await listMessages(env, conversation.id);

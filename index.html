@@ -351,8 +351,11 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
     </div>
     <div class="chat" id="chat"></div>
     <div class="chatbox">
+      <input id="attachmentInput" type="file" multiple hidden onchange="queueAttachments(this.files);this.value=''">
+      <div id="attachmentList" style="display:flex;gap:6px;flex-wrap:wrap" aria-live="polite"></div>
       <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
       <div class="sendrow">
+        <button type="button" onclick="document.getElementById('attachmentInput').click()" title="تا ۵ فایل، مجموعاً ۱ مگابایت؛ خواندن فایل باینری به مدل بستگی دارد" aria-label="افزودن عکس یا فایل">📎 پیوست</button>
         <span class="hint" id="composerHint">Enter ارسال · Shift+Enter خط جدید</span>
         <button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
       </div>
@@ -1505,6 +1508,18 @@ function appendMessageElement(message) {
   }
   if (role === 'user') {
     div.textContent = message.content || '';
+    for (const file of message.attachments || []) {
+      const label = document.createElement('div');
+      label.textContent = `📎 ${file.name}`;
+      div.appendChild(label);
+      if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+        const image = document.createElement('img');
+        image.src = `data:${file.type};base64,${file.data}`;
+        image.alt = file.name;
+        image.style.cssText = 'max-width:100%;max-height:220px;border-radius:8px;display:block';
+        div.appendChild(image);
+      }
+    }
   } else {
     let thinkBlocks = '';
     const otherCalls = [];
@@ -1558,10 +1573,48 @@ function renderMarkdownish(text) {
     .join('');
 }
 
+let pendingAttachments = [];
+let readingAttachments = false;
+function renderAttachments() {
+  const list = $('attachmentList');
+  list.replaceChildren();
+  pendingAttachments.forEach((file, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `📄 ${file.name} ×`;
+    button.title = 'حذف پیوست';
+    button.onclick = () => { if (!state.busy) { pendingAttachments.splice(index, 1); renderAttachments(); } };
+    list.appendChild(button);
+  });
+}
+async function queueAttachments(files) {
+  if (state.busy || readingAttachments) return toast('لطفاً صبر کنید');
+  const selected = Array.from(files);
+  if (selected.length + pendingAttachments.length > 5) return toast('حداکثر ۵ فایل مجاز است');
+  if (selected.reduce((n, f) => n + f.size, 0) + pendingAttachments.reduce((n, f) => n + f.size, 0) > 1000000) return toast('مجموع حجم فایل‌ها حداکثر ۱ مگابایت است');
+  readingAttachments = true;
+  try {
+    const loaded = await Promise.all(selected.map(file => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('خواندن فایل ناموفق بود'));
+      reader.onload = () => resolve({ name: file.name, type: file.type || 'application/octet-stream', size: file.size, data: String(reader.result).split(',')[1] || '' });
+      reader.readAsDataURL(file);
+    })));
+    pendingAttachments.push(...loaded);
+    renderAttachments();
+  } catch (error) { toast(error.message); }
+  finally { readingAttachments = false; }
+}
+$('prompt').addEventListener('paste', event => {
+  const files = event.clipboardData?.files;
+  if (files?.length) { event.preventDefault(); queueAttachments(files); }
+});
+
 async function sendMessage() {
-  if (state.busy) return;
+  if (state.busy || readingAttachments) return;
   const input = $('prompt');
-  const text = input.value.trim();
+  const attachments = pendingAttachments.slice();
+  const text = input.value.trim() || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
   if (!text) return;
   if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
   if (!state.conversationId) {
@@ -1581,7 +1634,7 @@ async function sendMessage() {
   }
   setSync('busy', 'درخواست به مدل…');
 
-  const userMessage = { role: 'user', content: text, created_at: Date.now() };
+  const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
   state.messages.push(userMessage);
   appendMessageElement(userMessage);
 
@@ -1599,6 +1652,7 @@ async function sendMessage() {
       body: JSON.stringify({
         conversationId: state.conversationId,
         message: text,
+        attachments,
         model: state.selectedModel || undefined,
         thinking: state.thinking,
         repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
@@ -1615,6 +1669,8 @@ async function sendMessage() {
       throw new Error(data.error || 'پاسخ سرور قابل خواندن نیست');
     }
 
+    pendingAttachments = [];
+    renderAttachments();
     const result = await consumeStream(response, bubble);
     if (result.ok) {
       await reloadCurrentConversation();

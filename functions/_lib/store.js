@@ -3,6 +3,7 @@
 // user's row.
 
 import { ensureSchema } from './schema.js';
+import { validateAttachments } from './attachments.js';
 import { clamp, fail, redactCode, redactSecrets, safeInt } from './util.js';
 
 const MAX_CONVERSATIONS_PER_USER = 300;
@@ -174,6 +175,9 @@ export function sanitizeStoredMessage(message) {
     content: redactSecrets(typeof message?.content === 'string' ? message.content : ''),
     created_at: safeInt(message?.created_at, Date.now()) || Date.now()
   };
+  if (role === 'user' && Array.isArray(message?.attachments) && message.attachments.length) {
+    out.attachments = validateAttachments(message.attachments);
+  }
   if (role === 'assistant' && Array.isArray(message?.tool_calls) && message.tool_calls.length) {
     out.tool_calls = message.tool_calls
       .filter((call) => call && /^[\w-]{1,128}$/.test(String(call.id || '')) && typeof call.function?.name === 'string')

@@ -9,6 +9,7 @@
 
 import { estimateTokens, fail, redactSecrets, stripSecrets, truncate } from './util.js';
 import { saveSummary } from './store.js';
+import { attachmentParts } from './attachments.js';
 
 export const DEFAULT_CONTEXT_TOKENS = 24_000;
 const SUMMARY_TRIGGER_TOKENS = 9_000;
@@ -34,6 +35,9 @@ export function toWire(message) {
     out.tool_call_id = message.tool_call_id;
   } else {
     out.content = typeof message.content === 'string' ? message.content : '';
+  }
+  if (message.role === 'user' && message.attachments?.length) {
+    out.content = [{ type: 'text', text: out.content }, ...attachmentParts(message.attachments)];
   }
   return out;
 }
