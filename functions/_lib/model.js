@@ -4,17 +4,49 @@
 import { fail, sleep, stripSecrets, envSecrets } from './util.js';
 
 export const ALLOWED_TOOLS = new Set([
+  'think',
   'list_files',
   'read_file',
   'search_code',
   'list_symbols',
   'write_file',
   'apply_patch',
+  'delete_file',
   'undo_edit',
   'file_history',
-  'run_command'
+  'run_command',
+  'web_search',
+  'fetch_url'
 ]);
-const DEFAULT_TIMEOUT_MS = 90_000;
+
+export const MODEL_CATALOG = [
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — قوی‌ترین استدلال و معماری کد', tier: 'flagship' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — سریع، دقیق و متعادل (پیش‌فرض)', tier: 'balanced' },
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol — پرچم‌دار استدلال و کدنویسی', tier: 'flagship' },
+  { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro — تخصصی الگوریتم و تفکر عمیق', tier: 'reasoning' },
+  { id: 'gemini-4-argon', label: 'Gemini 4 Argon — زمینه طولانی و چندمنظوره', tier: 'flagship' },
+  { id: 'grok-4.7', label: 'Grok 4.7 — تحلیل عمیق و حل مسئله', tier: 'flagship' },
+  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra — مهندسی نرم‌افزار پیشرفته', tier: 'balanced' },
+  { id: 'kimi-k3.1-pro', label: 'Kimi K3.1 Pro — تحلیل پروژه‌های بزرگ', tier: 'reasoning' },
+  { id: 'glm-5.3', label: 'GLM 5.3 — کدنویسی و ابزارخوانی دقیق', tier: 'balanced' },
+  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5 — نسخه پایدار کلود اپوس', tier: 'balanced' },
+  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1 — خلاق و روان', tier: 'balanced' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna — پاسخ‌گویی سریع و هوشمند', tier: 'fast' },
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra — سبک و پرسرعت', tier: 'fast' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 — فوق‌سریع و کم‌هزینه', tier: 'fast' },
+  { id: 'deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1 Flash — سریع برای ویرایش‌های کوتاه', tier: 'fast' },
+  { id: 'gemini-3-8-flash', label: 'Gemini 3.8 Flash — بسیار سریع', tier: 'fast' },
+  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash — سریع و اقتصادی', tier: 'fast' }
+];
+
+const MODEL_ID_RE = /^[a-zA-Z0-9._:/-]{1,120}$/;
+const DEFAULT_TIMEOUT_MS = 95_000;
+
+export function sanitizeModelId(value, env) {
+  const candidate = String(value || '').trim();
+  if (candidate && MODEL_ID_RE.test(candidate)) return candidate;
+  return String(env.MODEL_NAME || 'claude-sonnet-5-5');
+}
 
 export function modelEndpoint(env) {
   // Accept the URL exactly as a human copies it from a provider dashboard:
@@ -34,14 +66,29 @@ export async function listModels(env) {
   try {
     response = await fetch(modelEndpoint(env).replace(/\/chat\/completions$/, '/models'), {
       headers: { Authorization: `Bearer ${env.MODEL_API_KEY}`, Accept: 'application/json' },
-      redirect: 'manual', signal: AbortSignal.timeout(15000)
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000)
     });
-  } catch { fail('دریافت فهرست مدل‌ها ممکن نشد.', 502, 'models_unreachable'); }
+  } catch {
+    fail('دریافت فهرست مدل‌ها ممکن نشد.', 502, 'models_unreachable');
+  }
   if (!response.ok) fail('سرویس، فهرست مدل‌ها را ارائه نکرد.', 502, 'models_unavailable');
   let data;
-  try { data = await response.json(); } catch { fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response'); }
+  try {
+    data = await response.json();
+  } catch {
+    fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
+  }
   if (!Array.isArray(data?.data)) fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
-  return [...new Set(data.data.map(item => item?.id).filter(id => typeof id === 'string' && /^[a-zA-Z0-9._:/-]{1,160}$/.test(id)))].sort().slice(0, 1000);
+  return [
+    ...new Set(
+      data.data
+        .map((item) => item?.id)
+        .filter((id) => typeof id === 'string' && MODEL_ID_RE.test(id) && !/image|whisper|tts|embedding/i.test(id))
+    )
+  ]
+    .sort()
+    .slice(0, 500);
 }
 
 /** Validate and normalize the tool definitions the browser may send. */
@@ -50,7 +97,7 @@ export function sanitizeTools(tools) {
   if (!Array.isArray(tools)) fail('تعریف ابزارها نامعتبر است.', 400, 'bad_tools');
   const out = [];
   const seen = new Set();
-  for (const tool of tools.slice(0, 16)) {
+  for (const tool of tools.slice(0, 24)) {
     const fn = tool && tool.function;
     if (!fn || typeof fn.name !== 'string' || !ALLOWED_TOOLS.has(fn.name) || seen.has(fn.name)) {
       fail('ابزار ناشناخته یا تکراری است.', 400, 'bad_tools');
@@ -97,7 +144,8 @@ export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
     fail('MODEL_API_KEY در Cloudflare Secrets تنظیم نشده است.', 503, 'model_key_missing');
   }
-  const model = String(payload.model || env.MODEL_NAME || 'claude-sonnet-5-5');
+  const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
+  const model = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
   const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS, 120_000);
   const body = JSON.stringify({
     model,
@@ -142,8 +190,6 @@ export async function callModel(env, payload) {
     }
 
     if (response.status >= 300 && response.status < 400) {
-      // A redirect means the base URL is wrong or the provider moved; retrying
-      // will not help, so fail with a precise message instead of a generic one.
       fail(
         'آدرس سرویس مدل ریدایرکت می‌شود. MODEL_BASE_URL را بررسی کنید (باید دقیقاً به /v1 اشاره کند).',
         502,
@@ -162,11 +208,19 @@ export async function callModel(env, payload) {
       if (!message || typeof message !== 'object') {
         fail('ساختار پاسخ مدل با Chat Completions سازگار نیست.', 502, 'model_bad_response');
       }
+      const secrets = envSecrets(env);
+      const rawReasoning =
+        typeof message.reasoning_content === 'string'
+          ? message.reasoning_content
+          : typeof message.thinking === 'string'
+            ? message.thinking
+            : '';
       return {
         model: String(data.model || model),
+        reasoning: rawReasoning ? stripSecrets(rawReasoning, secrets) : '',
         message: {
           role: 'assistant',
-          content: typeof message.content === 'string' ? stripSecrets(message.content, envSecrets(env)) : '',
+          content: typeof message.content === 'string' ? stripSecrets(message.content, secrets) : '',
           tool_calls: normalizeToolCalls(message.tool_calls)
         },
         usage: {
@@ -177,7 +231,6 @@ export async function callModel(env, payload) {
     }
 
     lastStatus = response.status;
-    // Read and discard the body; provider diagnostics never reach the client.
     await response.text().catch(() => '');
     if ((response.status === 429 || response.status >= 500) && attempt === 0) {
       const retryAfter = Number(response.headers.get('Retry-After') || 0);
@@ -200,7 +253,7 @@ export async function callModel(env, payload) {
   }
   if (lastStatus === 400 || lastStatus === 422) {
     fail(
-      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً نام MODEL_NAME («${String(env.MODEL_NAME || 'claude-sonnet-5-5')}») روی این سرویس موجود نیست یا از tool call پشتیبانی نمی‌کند.`,
+      `سرویس مدل درخواست را نپذیرفت (کد ${lastStatus}). احتمالاً مدل «${model}» روی این سرویس فعال نیست یا از ابزارها پشتیبانی نمی‌کند؛ مدل دیگری انتخاب کنید.`,
       502,
       'model_rejected'
     );

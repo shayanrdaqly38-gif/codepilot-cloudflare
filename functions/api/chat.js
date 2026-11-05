@@ -1,22 +1,21 @@
-// POST /api/chat — one agent turn, durably stored in D1.
+// POST /api/chat — one autonomous agent turn, durably stored in D1.
 //
 // Flow:
 //   1. Auth (Cloudflare Access → signed session cookie) + same-origin check + limits.
 //   2. Persist the incoming user message BEFORE the model, so a failed or
 //      interrupted turn is never lost and `seq` stays ordered.
 //   3. Rebuild context from D1: rolling summary + recent window + long-term memory.
-//   4. Run the model loop. Tools execute server-side on the D1 workspace:
-//        list_files, read_file, search_code, list_symbols,
-//        write_file, apply_patch, undo_edit, run_command
+//   4. Run the model loop. Tools execute server-side:
+//        think, list_files, read_file, search_code, list_symbols,
+//        write_file, apply_patch, delete_file, undo_edit, file_history,
+//        run_command (real Linux container / sandbox / virtual),
+//        web_search (live multi-source internet search),
+//        fetch_url (live HTTP/API client with SSRF protection)
 //      Every edit is validated, diffed, snapshotted and reported back.
 //   5. Persist the whole assistant/tool group before streaming `done`.
-//
-// Response: Server-Sent Events — status / tool / tool_result / message /
-// edit / validation / done / error. Every model message is persisted before it
-// is streamed, so a dropped connection still leaves a consistent conversation.
 
 import { route } from '../_lib/api.js';
-import { callModel, sanitizeTools } from '../_lib/model.js';
+import { callModel, sanitizeModelId, sanitizeTools } from '../_lib/model.js';
 import {
   buildSystemPrompt,
   buildWorkingContext,
@@ -29,6 +28,7 @@ import {
   conversationView,
   deriveTitle,
   getConversation,
+  isSafePath,
   listMemories,
   listMessages,
   messageStats,
@@ -40,16 +40,35 @@ import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffStats, diffLines, unifiedDiff } from '../_lib/patch.js';
 import { formatSearchHits, formatSymbols, listSymbols, searchWorkspace } from '../_lib/search.js';
 import { validateChanges, validateFile } from '../_lib/validate.js';
-import { runCommand, sandboxEnabled } from '../_lib/sandbox.js';
+import { linuxRunnerEnabled, runCommand, sandboxEnabled } from '../_lib/sandbox.js';
 import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
+import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
 
 const MAX_CONTENT = 100_000;
 const MAX_LOOP_STEPS = 16;
-const MAX_TURN_INPUT_CHARS = 200_000;
+const MAX_THINKING_LOOP_STEPS = 24;
+const MAX_TURN_INPUT_CHARS = 260_000;
 const MAX_FILE_CHARS = 400_000;
 const MAX_TOOL_LOOPS_PER_FILE = 12;
 
 export const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'think',
+      description:
+        'Record structured chain-of-thought reasoning, architectural analysis, edge cases, and a step-by-step plan before complex edits or debugging. Side-effect free.',
+      parameters: {
+        type: 'object',
+        properties: {
+          thought: { type: 'string', description: 'Deep analysis of the problem, constraints, and edge cases' },
+          plan: { type: 'string', description: 'Concrete ordered steps to execute and verify (optional)' }
+        },
+        required: ['thought'],
+        additionalProperties: false
+      }
+    }
+  },
   {
     type: 'function',
     function: {
@@ -112,7 +131,7 @@ export const TOOLS = [
     function: {
       name: 'apply_patch',
       description:
-        'Edit an existing file with search/replace blocks. `search` must match exactly one place (read the file first). Whitespace drift is tolerated, but ambiguous matches fail. Prefer this over write_file for existing files.',
+        'Edit an existing file with search/replace blocks. `search` must match uniquely (read the file first). Whitespace drift is tolerated, but ambiguous matches fail. Prefer this over write_file for existing files.',
       parameters: {
         type: 'object',
         properties: {
@@ -153,8 +172,22 @@ export const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'delete_file',
+      description:
+        'Delete an obsolete file from the workspace (and from GitHub on commit). Saves a restorable version first.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'undo_edit',
-      description: 'Restore a file to its previous version. Call without `versionId` to undo the last edit.',
+      description: 'Restore a file to its previous version. Call without `versionId` to undo the last edit or deletion.',
       parameters: {
         type: 'object',
         properties: {
@@ -188,11 +221,48 @@ export const TOOLS = [
     function: {
       name: 'run_command',
       description:
-        'Run a shell command. If a real sandbox is configured it executes there; otherwise a safe virtual shell handles help/pwd/ls/cat/touch/echo/rm. The result always states which mode ran.',
+        'Execute a Bash / Linux command (bash, node, python3, gcc, go, rustc, sqlite3, grep, etc.) in a real isolated Linux OS container with workspace files mounted, or fall back to the virtual shell if offline. Always states which mode ran.',
       parameters: {
         type: 'object',
         properties: { command: { type: 'string' } },
         required: ['command'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description:
+        'Search the live internet for current news, documentation, prices, packages, or real-time facts. Follow up with `fetch_url` on relevant links for full content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search keywords (English or Persian)' },
+          limit: { type: 'number', description: 'Max results (default 8, max 15)' }
+        },
+        required: ['query'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_url',
+      description:
+        'Fetch any public web page (converted to clean readable text) or call any public HTTP/JSON REST API (GET, POST, PUT, PATCH, DELETE).',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Full https:// or http:// URL' },
+          method: { type: 'string', description: 'HTTP method (default GET)' },
+          headers: { type: 'object', description: 'Optional request headers' },
+          body: { type: 'string', description: 'Optional request body (JSON string or text for POST/PUT/PATCH)' },
+          maxChars: { type: 'number', description: 'Max characters to return (default 16000, max 40000)' }
+        },
+        required: ['url'],
         additionalProperties: false
       }
     }
@@ -228,11 +298,11 @@ function sseStream() {
 
 /* ------------------------------ path helpers ------------------------------ */
 
-const SAFE_PATH = /^[\w./-]{1,200}$/;
+const SAFE_PATH = /^[\w./[\]-]{1,200}$/;
 
 function assertSafePath(path) {
   const value = String(path || '');
-  if (!SAFE_PATH.test(value) || value.includes('..') || value.startsWith('/') || value.startsWith('.git/')) {
+  if (!SAFE_PATH.test(value) || !isSafePath(value)) {
     fail('مسیر فایل نامعتبر یا ناامن است.', 400, 'bad_path');
   }
   return value;
@@ -246,21 +316,37 @@ function fileIndex(workspace) {
 
 /**
  * Execute one tool call. Mutates `workspace` and fills `turn` with everything the
- * UI needs (edits, validation, diffs).
+ * UI needs (edits, deletions, validation, diffs, thinking).
  */
-async function executeTool({ env, owner, conversation, name, args, workspace, turn }) {
+async function executeTool({ env, owner, conversation, name, args, workspace, turn, send }) {
   if (!args || typeof args !== 'object') return { text: 'Error: invalid arguments', ok: false };
 
   switch (name) {
+    case 'think': {
+      const thought = String(args.thought || '').trim();
+      const plan = String(args.plan || '').trim();
+      if (thought && send) {
+        send('thinking', {
+          thought: redactSecrets(thought, envSecrets(env)).slice(0, 6000),
+          plan: plan ? redactSecrets(plan, envSecrets(env)).slice(0, 3000) : ''
+        });
+      }
+      return {
+        ok: true,
+        text: plan ? `Thought recorded. Plan:\n${plan.slice(0, 1500)}` : 'Thought recorded. Proceed with execution.'
+      };
+    }
+
     case 'list_files': {
       const files = workspace.files || {};
       const lines = Object.entries(files)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([path, content]) => `${path} (${String(content).length} chars)`);
-      const validation = validateChanges(files, Object.keys(files).slice(0, 40));
+      const validation = validateChanges(files, Object.keys(files).slice(0, 50));
       return {
         ok: true,
-        text: (lines.length ? lines.join('\n') : '(empty workspace)') +
+        text:
+          (lines.length ? lines.join('\n') : '(empty workspace)') +
           (validation.report.length ? `\n\n${validation.text}` : '')
       };
     }
@@ -268,7 +354,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
     case 'read_file': {
       const path = String(args.path || '');
       if (workspace.files?.[path] === undefined) {
-        const available = fileIndex(workspace).slice(0, 40).join(', ');
+        const available = fileIndex(workspace).slice(0, 50).join(', ');
         return { ok: false, text: `Error: file not found: ${path}. Available: ${available || '(none)'}` };
       }
       const content = String(workspace.files[path]);
@@ -278,7 +364,10 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
         const lines = content.split('\n');
         const from = Math.max(0, (Number.isFinite(start) ? start : 1) - 1);
         const to = Math.min(lines.length, Number.isFinite(end) ? end : lines.length);
-        const slice = lines.slice(from, to).map((line, index) => `${from + index + 1}\t${line}`).join('\n');
+        const slice = lines
+          .slice(from, to)
+          .map((line, index) => `${from + index + 1}\t${line}`)
+          .join('\n');
         return { ok: true, text: `Lines ${from + 1}-${to} of ${lines.length} in ${path}:\n${slice}` };
       }
       return { ok: true, text: content };
@@ -308,7 +397,6 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       try {
         applied = applyEdits(before, args.edits);
       } catch (error) {
-        // A failed patch must never change the workspace.
         return { ok: false, text: `Patch rejected: ${error.message}` };
       }
       if (applied.content === before) {
@@ -321,6 +409,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       });
       workspace.files[path] = applied.content;
       workspace.active = path;
+      turn.deleted.delete(path);
 
       const diff = unifiedDiff(before, applied.content, { path });
       const stats = diffStats(diffLines(before, applied.content));
@@ -352,8 +441,6 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       const existed = workspace.files[path] !== undefined;
       const before = existed ? String(workspace.files[path]) : '';
       if (existed && before === content) return { ok: false, text: 'No change: content is identical.' };
-      // Snapshot even for a brand-new file: an empty first version is what makes
-      // "delete this file" / "undo the creation" reachable from the history UI.
       await recordVersion(env, owner, conversation, {
         path,
         content: before,
@@ -361,9 +448,8 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       });
       workspace.files[path] = content;
       workspace.active = path;
+      turn.deleted.delete(path);
 
-      // Always produce a diff: a newly created file reads as one all-additions
-      // hunk, which is what the UI panel renders.
       const diff = unifiedDiff(before, content, { path });
       const stats = diffStats(diffLines(before, content));
       const validation = validateFile(path, content);
@@ -381,6 +467,37 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       };
     }
 
+    case 'delete_file': {
+      const path = assertSafePath(args.path);
+      if (workspace.files[path] === undefined) {
+        return { ok: false, text: `Error: file not found: ${path}.` };
+      }
+      if (Object.keys(workspace.files).length < 2) {
+        return { ok: false, text: 'Error: refusing to delete the last remaining file in the workspace.' };
+      }
+      const before = String(workspace.files[path]);
+      const versionId = await recordVersion(env, owner, conversation, {
+        path,
+        content: before,
+        reason: 'before-delete'
+      });
+      delete workspace.files[path];
+      if (workspace.active === path) {
+        workspace.active = Object.keys(workspace.files)[0] || '';
+      }
+      const diff = unifiedDiff(before, '', { path });
+      const stats = diffStats(diffLines(before, ''));
+      turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
+      turn.deleted.add(path);
+      turn.touched.delete(path);
+      turn.workspaceChanged = true;
+      turn.editCount += 1;
+      return {
+        ok: true,
+        text: `Deleted ${path} (−${stats.removed} lines). Snapshot saved as ${versionId} (undo_edit can restore it).`
+      };
+    }
+
     case 'undo_edit': {
       const path = assertSafePath(args.path);
       let target = null;
@@ -395,10 +512,13 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       if (!target) return { ok: false, text: `No saved version for ${path}.` };
 
       const current = String(workspace.files[path] ?? '');
-      if (target.content === current) return { ok: false, text: 'Already at that version.' };
+      if (workspace.files[path] !== undefined && target.content === current) {
+        return { ok: false, text: 'Already at that version.' };
+      }
       await recordVersion(env, owner, conversation, { path, content: current, reason: 'before-undo' });
       workspace.files[path] = target.content;
       workspace.active = path;
+      turn.deleted.delete(path);
 
       const diff = unifiedDiff(current, target.content, { path });
       const stats = diffStats(diffLines(current, target.content));
@@ -442,6 +562,20 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       return { ok: result.ok, text: result.text };
     }
 
+    case 'web_search': {
+      return searchWeb(env, { query: String(args.query || ''), limit: args.limit });
+    }
+
+    case 'fetch_url': {
+      return fetchExternalUrl(env, {
+        url: String(args.url || ''),
+        method: args.method,
+        headers: args.headers,
+        body: args.body,
+        maxChars: args.maxChars
+      });
+    }
+
     default:
       return { ok: false, text: `Error: unknown tool ${name}` };
   }
@@ -461,7 +595,11 @@ export async function onRequestPost({ request, env }) {
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
+      const selectedModel = data?.model ? sanitizeModelId(data.model, env) : undefined;
+      const thinking = Boolean(data?.thinking);
+      const maxSteps = thinking ? MAX_THINKING_LOOP_STEPS : MAX_LOOP_STEPS;
       const tools = data.tools === undefined ? TOOLS : sanitizeTools(data.tools);
+
       const conversation = await getConversation(env, identity.owner, conversationId);
       const { count } = await messageStats(env, conversation.id);
       if (count === 0) {
@@ -489,6 +627,8 @@ export async function onRequestPost({ request, env }) {
         validation: [],
         commands: [],
         touched: new Set(),
+        deleted: new Set(),
+        workspaceChanged: false,
         editCount: 0
       };
 
@@ -497,23 +637,36 @@ export async function onRequestPost({ request, env }) {
         conversation: { ...conversation, owner: identity.owner },
         messages: history,
         memories,
-        callModel: (payload) => callModel(env, payload),
+        callModel: (payload) => callModel(env, { ...payload, ...(selectedModel ? { model: selectedModel } : {}) }),
         saveMemories: (memo) =>
           env.DB.prepare(
             `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
              VALUES(?,?,?,?,?,?,?,?)
              ON CONFLICT(owner,scope,project,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
           )
-            .bind(crypto.randomUUID(), identity.owner, 'global', '', memo.key, redactSecrets(memo.value), Date.now(), Date.now())
+            .bind(
+              crypto.randomUUID(),
+              identity.owner,
+              'global',
+              '',
+              memo.key,
+              redactSecrets(memo.value),
+              Date.now(),
+              Date.now()
+            )
             .run()
       });
 
+      const linux = linuxRunnerEnabled(env);
+      const sb = sandboxEnabled(env);
       const systemPrompt = buildSystemPrompt({
         workspace,
         memories,
         repo: data.repo && typeof data.repo === 'object' ? data.repo : null,
         user: { email: identity.email },
-        sandbox: sandboxEnabled(env)
+        sandbox: sb,
+        linuxRunner: linux,
+        thinking
       });
 
       const messages = [{ role: 'system', content: systemPrompt }];
@@ -539,8 +692,8 @@ export async function onRequestPost({ request, env }) {
 
       (async () => {
         try {
-          send('status', { phase: 'thinking', sandbox: sandboxEnabled(env) });
-          while (steps < MAX_LOOP_STEPS) {
+          send('status', { phase: 'thinking', sandbox: sb, linuxRunner: linux });
+          while (steps < maxSteps) {
             steps += 1;
             const inputChars = JSON.stringify(messages).length;
             if (inputChars > MAX_TURN_INPUT_CHARS) {
@@ -548,8 +701,16 @@ export async function onRequestPost({ request, env }) {
               break;
             }
 
-            const result = await callModel(env, { temperature: 0.3, messages, tools });
+            const result = await callModel(env, {
+              ...(selectedModel ? { model: selectedModel } : {}),
+              temperature: 0.25,
+              messages,
+              tools
+            });
             usedModel = result.model;
+            if (result.reasoning) {
+              send('thinking', { thought: result.reasoning.slice(0, 6000), plan: '' });
+            }
             const assistant = result.message;
 
             if (assistant.tool_calls?.length) {
@@ -585,7 +746,8 @@ export async function onRequestPost({ request, env }) {
                     name: call.function.name,
                     args,
                     workspace,
-                    turn
+                    turn,
+                    send
                   });
                 } catch (error) {
                   outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
@@ -611,7 +773,6 @@ export async function onRequestPost({ request, env }) {
             finalText = String(assistant.content || '').trim() || 'انجام شد.';
             newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
             messages.push({ role: 'assistant', content: finalText });
-            // Stream the prose immediately so the user is not waiting on `done`.
             send('assistant', { content: finalText });
             break;
           }
@@ -619,19 +780,19 @@ export async function onRequestPost({ request, env }) {
           if (!finalText) {
             finalText =
               newMessages.length > 0
-                ? 'به سقف مراحل ابزار رسیدم. کار انجام‌شده ذخیره شد؛ درخواست را به بخش‌های کوچک‌تر تقسیم کنید.'
+                ? 'به سقف مراحل ابزار رسیدم. کار انجام‌شده ذخیره شد؛ در پیام بعدی بنویسید «ادامه بده» تا بقیه‌اش را کامل کنم.'
                 : 'پاسخی دریافت نشد. دوباره تلاش کنید.';
             if (!newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
               newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
             }
           }
 
-          // Persist the assistant/tool group, then the workspace snapshot.
           const repaired = repairToolGroups(newMessages);
           if (repaired.length) await appendMessages(env, conversation, repaired);
 
+          const hasWorkspaceChanges = turn.touched.size > 0 || turn.deleted.size > 0 || turn.workspaceChanged;
           const stats = await messageStats(env, conversation.id);
-          if (turn.touched.size) {
+          if (hasWorkspaceChanges) {
             await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
               .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
               .run();
@@ -652,15 +813,23 @@ export async function onRequestPost({ request, env }) {
           const validation = turn.validation.filter((entry) => !entry.ok || entry.warnings.length);
           send('done', {
             content: finalText,
+            model: usedModel,
             conversation: conversationView(latest),
             touchedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
-            workspaceDirty: turn.touched.size > 0,
-            workspace: turn.touched.size ? workspace : undefined,
-            diffs: turn.diffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed, diff: d.diff.slice(0, 60_000) })),
+            deletedFiles: [...turn.deleted],
+            workspaceDirty: hasWorkspaceChanges,
+            workspace: hasWorkspaceChanges ? workspace : undefined,
+            diffs: turn.diffs.map((d) => ({
+              path: d.path,
+              added: d.added,
+              removed: d.removed,
+              diff: d.diff.slice(0, 60_000)
+            })),
             validation,
             commands: turn.commands,
             steps,
-            sandbox: sandboxEnabled(env),
+            sandbox: sb,
+            linuxRunner: linux,
             context: {
               summaryUntil: working.summaryUntil,
               recentMessages: working.recent.length,
@@ -668,13 +837,10 @@ export async function onRequestPost({ request, env }) {
             }
           });
         } catch (error) {
-          // Durability on failure: keep the files that were already edited and
-          // the assistant/tool messages that are already complete, so a dropped
-          // model call cannot silently discard work the user saw in the diff.
           try {
             const repairedPartial = repairToolGroups(newMessages);
             if (repairedPartial.length) await appendMessages(env, conversation, repairedPartial);
-            if (turn.touched.size) {
+            if (turn.touched.size || turn.deleted.size || turn.workspaceChanged) {
               await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
                 .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
                 .run();
@@ -695,7 +861,7 @@ export async function onRequestPost({ request, env }) {
 
       return new Response(stream, { status: 200, headers });
     },
-    { write: true, body: 1_400_000 }
+    { write: true, body: 1_800_000 }
   );
 }
 

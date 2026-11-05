@@ -588,3 +588,207 @@ test('every tool the agent advertises is allowed through by the model layer', as
   ]);
   assert.deepEqual(payload, []);
 });
+
+test('validateFile validates shipped index.html with zero errors and handles raw-text <script>/<style> + tc_live_ secrets', async () => {
+  const { readFileSync } = await import('node:fs');
+  const realHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const realCheck = validate.validateFile('index.html', realHtml);
+  assert.equal(realCheck.ok, true, `index.html failed validation: ${realCheck.errors.join(' | ')}`);
+  assert.deepEqual(realCheck.errors, []);
+
+  // JS string containing `<script>` inside a `<script>` block must NOT confuse the HTML tag matcher.
+  const tricky = '<!doctype html><html><body><script>const x = "<script><div>";</script></body></html>';
+  assert.equal(validate.validateFile('tricky.html', tricky).ok, true);
+
+  // `tc_live_...` secrets are flagged by validateFile AND redacted by redactSecrets.
+  const util = await import(`${root}/_lib/util.js`);
+  const fakeKey = 'tc_live_' + 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4';
+  const secCheck = validate.validateFile('cfg.js', `const k = "${fakeKey}";`);
+  assert.equal(secCheck.secrets.length, 1);
+  assert.ok(secCheck.warnings.length >= 1);
+  assert.ok(!util.redactSecrets(`my key is ${fakeKey}`).includes(fakeKey));
+});
+
+test('SSRF protection blocks private/loopback/metadata/redirect targets and fetch_url + web_search work cleanly', async () => {
+  const web = await import(`${root}/_lib/web.js`);
+  const blockedUrls = [
+    'http://127.0.0.1/admin',
+    'http://localhost:8788/api/state',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.5/internal',
+    'http://192.168.1.1/',
+    'http://172.20.0.1/',
+    'http://100.64.0.1/',
+    'http://[::1]:8080/',
+    'http://[fd00::1]/',
+    'http://2130706433/',
+    'http://0x7f000001/',
+    'http://metadata.google.internal/',
+    'http://db.local/',
+    'ftp://example.com/file',
+    'https://user:pass@example.com/secret'
+  ];
+  for (const bad of blockedUrls) {
+    assert.throws(() => web.assertSafeExternalUrl(bad), `expected SSRF block for ${bad}`);
+  }
+  assert.equal(web.assertSafeExternalUrl('https://api.github.com/zen').hostname, 'api.github.com');
+
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (s === 'https://example.com/redirect-ssrf') {
+      return new Response('', { status: 302, headers: { Location: 'http://169.254.169.254/latest/meta-data/' } });
+    }
+    if (s === 'https://example.com/page') {
+      return new Response(
+        '<html><head><title>Test Doc</title><style>body{color:red}</style></head><body><h1>Hello World</h1><script>evil()</script><p>Live data 42.</p></body></html>',
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+      );
+    }
+    if (s.includes('html.duckduckgo.com')) {
+      return new Response(
+        '<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdevelopers.cloudflare.com%2Fworkers%2F">Cloudflare Workers Docs</a><a class="result__snippet">Build serverless apps on the edge.</a></div>',
+        { status: 200, headers: { 'Content-Type': 'text/html' } }
+      );
+    }
+    return new Response(JSON.stringify({ hits: [], query: {} }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+  try {
+    const ssrfRedirect = await web.fetchExternalUrl({}, { url: 'https://example.com/redirect-ssrf' });
+    assert.equal(ssrfRedirect.ok, false);
+    assert.match(ssrfRedirect.text, /مسدود|داخلی/);
+
+    const page = await web.fetchExternalUrl({}, { url: 'https://example.com/page' });
+    assert.equal(page.ok, true);
+    assert.match(page.text, /Title: Test Doc/);
+    assert.match(page.text, /Hello World/);
+    assert.ok(!page.text.includes('evil()'));
+
+    const search = await web.searchWeb({}, { query: 'cloudflare workers', limit: 5 });
+    assert.equal(search.ok, true);
+    assert.match(search.text, /https:\/\/developers\.cloudflare\.com\/workers\//);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('real Linux container execution & /api/run mount redacted workspace files and report exit codes honestly', async () => {
+  const runApi = await import(`${root}/api/run.js`);
+  const { env, cookie, id } = await setUp();
+  const linuxEnv = { ...env, CF_PAGES: '1' };
+  assert.equal(sandbox.linuxRunnerEnabled(linuxEnv), true);
+  assert.equal(sandbox.realExecutionMode(linuxEnv), 'linux-container');
+
+  let capturedPayload = null;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('wandbox.org/api/compile.json')) {
+      capturedPayload = JSON.parse(init.body);
+      return new Response(
+        JSON.stringify({
+          status: '0',
+          program_output: 'Linux wandbox 6.8.0 x86_64 GNU/Linux\nv20.11.0\n',
+          program_error: ''
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return original(url, init);
+  };
+  try {
+    const fakeSecret = 'tc_live_' + 'z9y8x7w6v5u4t3s2r1q0p9o8n7m6';
+    const res = await runApi.onRequestPost(
+      ctx(
+        req('/api/run', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            command: 'uname -a && node -v',
+            conversationId: id,
+            workspace: {
+              files: { 'app.js': `console.log("${fakeSecret}")` },
+              active: 'app.js'
+            }
+          }
+        }),
+        linuxEnv
+      )
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.mode, 'linux-container');
+    assert.match(body.stdout, /Linux wandbox/);
+    assert.ok(capturedPayload, 'wandbox container API was not called');
+    assert.equal(capturedPayload.compiler, 'bash');
+    assert.ok(!JSON.stringify(capturedPayload).includes(fakeSecret), 'secret leaked into Linux container mount');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('chat supports dynamic [id].js paths, delete_file + undo_edit restoration, custom model selection, and thinking SSE', async () => {
+  const { env, cookie, id } = await setUp();
+  const modelsApi = await import(`${root}/api/models.js`);
+  const modelsRes = await (await modelsApi.onRequestGet(ctx(req('/api/models', { headers: { Cookie: cookie } }), env))).json();
+  assert.ok(modelsRes.models.some((m) => m.id === 'claude-opus-5-5'));
+  assert.ok(modelsRes.models.some((m) => m.id === 'gpt-6.1-sol'));
+
+  const dynPath = 'functions/api/items/[id].js';
+  const model = scriptedModel([
+    toolCall('t0', 'think', { thought: 'We need a dynamic route file, then test deleting it.', plan: '1. write_file\n2. delete_file' }),
+    toolCall('t1', 'write_file', { path: dynPath, content: 'export async function onRequest() { return new Response("ok"); }\n' }),
+    { role: 'assistant', content: 'مسیر پویا ساخته شد.' }
+  ]);
+  let turn1;
+  try {
+    const res = await chat.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: id, message: 'فایل پویا بساز', model: 'claude-opus-5-5', thinking: true }
+        }),
+        env
+      )
+    );
+    const text = await res.text();
+    assert.match(text, /event: thinking/, 'thinking SSE event missing');
+    const doneMatch = text.match(/event: done\ndata: ([^\n]+)/);
+    turn1 = JSON.parse(doneMatch[1]);
+    assert.equal(model.calls[0].model, 'claude-opus-5-5');
+    assert.ok(turn1.touchedFiles.includes(dynPath));
+    assert.ok(turn1.workspace.files[dynPath]);
+  } finally {
+    model.restore();
+  }
+
+  // Delete the dynamic file and verify `deletedFiles` is reported, then restore via `undo_edit`.
+  const model2 = scriptedModel([
+    toolCall('d1', 'delete_file', { path: dynPath }),
+    { role: 'assistant', content: 'حذف شد.' }
+  ]);
+  try {
+    const turn2 = await send(env, cookie, id, 'فایل پویا را حذف کن');
+    const done2 = turn2.find((e) => e.name === 'done').data;
+    assert.ok(done2.deletedFiles.includes(dynPath));
+    assert.equal(done2.workspace.files[dynPath], undefined);
+  } finally {
+    model2.restore();
+  }
+
+  const model3 = scriptedModel([
+    toolCall('u1', 'undo_edit', { path: dynPath }),
+    { role: 'assistant', content: 'بازگردانی شد.' }
+  ]);
+  try {
+    const turn3 = await send(env, cookie, id, 'برگردان');
+    const done3 = turn3.find((e) => e.name === 'done').data;
+    assert.ok(done3.workspace.files[dynPath]?.includes('onRequest'));
+  } finally {
+    model3.restore();
+  }
+});
