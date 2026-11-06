@@ -1,31 +1,66 @@
-// GET /api/config — non-secret runtime configuration for the UI.
-// Never returns MODEL_API_KEY or any other secret.
+// GET  /api/config — non-secret runtime configuration + live models for the UI.
+// POST /api/config — save or reset per-user custom OpenAI-compatible API provider
+//                    (Base URL + AES-GCM encrypted API Key + optional Default Model)
+//                    and immediately hydrate its live `/v1/models` list.
 
 import { route, methodNotAllowed } from '../_lib/api.js';
 import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
-import { catalogModelsWithSpecs, fetchProviderModels, getModelReasoningSpec } from '../_lib/model.js';
+import { catalogModelsWithSpecs, fetchProviderModels, getModelReasoningSpec, parseProviderModelItem } from '../_lib/model.js';
+import {
+  getUserProviderSummary,
+  isTookenUrl,
+  resolveEffectiveEnv,
+  saveUserProviderConfig
+} from '../_lib/provider.js';
+
+async function buildModelsPayload(effectiveEnv, { force = false } = {}) {
+  const isTooken = isTookenUrl(effectiveEnv.MODEL_BASE_URL);
+  const byId = new Map(catalogModelsWithSpecs(effectiveEnv).map((m) => [m.id, m]));
+  let modelsSource = isTooken ? 'catalog' : 'empty';
+
+  if (effectiveEnv.MODEL_API_KEY && (effectiveEnv.CF_PAGES || effectiveEnv._customProvider || force)) {
+    try {
+      const live = await fetchProviderModels(effectiveEnv, { force });
+      if (live.length) {
+        modelsSource = 'remote';
+        if (!isTooken) byId.clear();
+        for (const item of live) byId.set(item.id, item);
+      }
+    } catch {
+      // Non-fatal during initial bootstrap; user can inspect diagnostics in ⌁ API.
+    }
+  }
+
+  let defaultModel = String(effectiveEnv.MODEL_NAME || '').trim();
+  if (!isTooken && (!defaultModel || (byId.size > 0 && !byId.has(defaultModel) && defaultModel === 'claude-sonnet-5-5'))) {
+    defaultModel = byId.keys().next().value || defaultModel || 'gpt-4o';
+  }
+  if (!defaultModel) defaultModel = 'claude-sonnet-5-5';
+
+  if (byId.size === 0 && defaultModel) {
+    const fallbackItem = parseProviderModelItem(
+      { id: defaultModel },
+      { isTooken, discoveredMap: effectiveEnv._discoveredSpecs }
+    );
+    if (fallbackItem) byId.set(defaultModel, fallbackItem);
+  }
+
+  return {
+    defaultModel,
+    modelsSource,
+    models: [...byId.values()]
+  };
+}
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
     const linux = linuxRunnerEnabled(env);
     const sb = sandboxEnabled(env);
-    const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
-
-    // On live Cloudflare Pages, opportunistically hydrate live `/v1/models` capabilities
-    // (cached for 5 minutes) so the UI immediately gets `tooken.club`'s exact per-model specs.
-    const byId = new Map(catalogModelsWithSpecs().map((m) => [m.id, m]));
-    let modelsSource = 'catalog';
-    if (env.CF_PAGES && env.MODEL_API_KEY) {
-      try {
-        const live = await fetchProviderModels(env);
-        if (live.length) {
-          modelsSource = 'remote';
-          for (const item of live) byId.set(item.id, item);
-        }
-      } catch {
-        // Non-fatal: curated catalog stays ready.
-      }
-    }
+    const [effectiveEnv, provider] = await Promise.all([
+      resolveEffectiveEnv(env, identity.owner),
+      getUserProviderSummary(env, identity.owner)
+    ]);
+    const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv);
 
     return {
       ok: true,
@@ -33,10 +68,11 @@ export async function onRequestGet({ request, env }) {
       singleTenant: identity.via === 'dev-fallback',
       storage: 'd1',
       user: { email: identity.email, name: identity.name },
+      provider,
       model: defaultModel,
-      modelReasoning: getModelReasoningSpec(defaultModel),
+      modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
       modelsSource,
-      models: [...byId.values()],
+      models,
       contextBudgetTokens: Number(env.CONTEXT_BUDGET_TOKENS) || 24000,
       sandbox: sb,
       linuxRunner: linux,
@@ -56,6 +92,8 @@ export async function onRequestGet({ request, env }) {
         urlFetch: true,
         deepThinking: true,
         reasoningEffort: true,
+        autoCapabilityDiscovery: true,
+        customProvider: true,
         modelPicker: true,
         realLogin: identity.via !== 'dev-fallback'
       }
@@ -63,7 +101,36 @@ export async function onRequestGet({ request, env }) {
   });
 }
 
+export async function onRequestPost({ request, env }) {
+  return route(
+    request,
+    env,
+    async ({ identity, data }) => {
+      const provider = await saveUserProviderConfig(env, identity.owner, {
+        reset: Boolean(data?.reset),
+        baseUrl: data?.baseUrl,
+        apiKey: data?.apiKey,
+        clearKey: Boolean(data?.clearKey),
+        defaultModel: data?.defaultModel
+      });
+      const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
+      const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv, { force: true });
+
+      return {
+        ok: true,
+        provider,
+        model: defaultModel,
+        modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
+        modelsSource,
+        models
+      };
+    },
+    { write: true, body: 16_000 }
+  );
+}
+
 export async function onRequest(context) {
   if (context.request.method === 'GET') return onRequestGet(context);
-  return methodNotAllowed('GET');
+  if (context.request.method === 'POST') return onRequestPost(context);
+  return methodNotAllowed('GET, POST');
 }
