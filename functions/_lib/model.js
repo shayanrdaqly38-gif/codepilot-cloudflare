@@ -2178,7 +2178,11 @@ export async function callModel(env, payload) {
     requestedEffort === 'high' || requestedEffort === 'xhigh' || requestedEffort === 'max'
       ? 150_000
       : DEFAULT_TIMEOUT_MS;
-  const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || deepTimeout, 160_000);
+  const requestedTimeout = Number(payload.timeoutMs) || 0;
+  const timeout = Math.min(
+    Math.max(Number(env.MODEL_TIMEOUT_MS) || deepTimeout, requestedTimeout),
+    180_000
+  );
   const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off' && isTooken;
   const useUpstreamStream =
     payload.upstreamStream === true ||

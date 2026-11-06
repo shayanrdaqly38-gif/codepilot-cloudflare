@@ -408,3 +408,162 @@ test('Codex/Claude agent modes gate mutating tools, inject AGENTS.md, normalize 
   assert.ok(forkRes.messageCount >= 2);
 });
 
+test('AI Power Engine scales maxSteps across 6 tiers, preserves untouched reasoning_effort, injects 4 axes, and auto-repairs broken code', async () => {
+  const providerLib = await import(`${root}/_lib/provider.js`);
+  const configApi = await import(`${root}/api/config.js`);
+
+  // 1. Verify resolvePowerExecutionPlan across all 6 levels
+  assert.equal(providerLib.resolvePowerExecutionPlan({ workStamina: 'low' }).maxSteps, 8);
+  assert.equal(providerLib.resolvePowerExecutionPlan({ workStamina: 'medium' }).maxSteps, 20);
+  assert.equal(providerLib.resolvePowerExecutionPlan({ workStamina: 'hard' }).maxSteps, 32);
+  assert.equal(providerLib.resolvePowerExecutionPlan({ workStamina: 'very-hard' }).maxSteps, 44);
+  assert.equal(providerLib.resolvePowerExecutionPlan({ workStamina: 'max' }).maxSteps, 60);
+  const ultraPlan = providerLib.resolvePowerExecutionPlan({ workStamina: 'ultra-code', detailThinking: 'ultra-code' });
+  assert.equal(ultraPlan.maxSteps, 80);
+  assert.equal(ultraPlan.contextBudget, 88_000);
+  assert.equal(ultraPlan.timeoutMs, 180_000);
+
+  // 2. Persist 4 independent Power axes via /api/config
+  const savedCfg = await (
+    await configApi.onRequestPost(
+      ctx(
+        req('/api/config', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            agentConfig: {
+              mode: 'auto-edit',
+              networkAccess: true,
+              shellAccess: true,
+              workStamina: 'ultra-code',
+              detailThinking: 'very-hard',
+              ambitionLevel: 'ultra-code',
+              humanSensitivity: 'max'
+            }
+          }
+        }),
+        env
+      )
+    )
+  ).json();
+  assert.equal(savedCfg.agentConfig.workStamina, 'ultra-code');
+  assert.equal(savedCfg.agentConfig.detailThinking, 'very-hard');
+  assert.equal(savedCfg.agentConfig.ambitionLevel, 'ultra-code');
+  assert.equal(savedCfg.agentConfig.humanSensitivity, 'max');
+
+  // 3. Run /api/chat with untouched reasoningEffort='high' + broken JS edit -> verify auto-repair gate fixes it!
+  const newConv = await (
+    await stateApi.onRequestPost(
+      ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+    )
+  ).json();
+  const capturedPayloads = [];
+  let turnStep = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+    const body = JSON.parse(init.body);
+    capturedPayloads.push(body);
+    turnStep += 1;
+    if (turnStep === 1) {
+      // Step 1: Model writes a broken JS file (missing closing brace)
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tc_write_broken',
+                    type: 'function',
+                    function: {
+                      name: 'write_file',
+                      arguments: JSON.stringify({ path: 'engine.js', content: 'function boost() {\n  return 10;\n' })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (turnStep === 2) {
+      // Step 2: Model tries to stop prematurely while engine.js still has a validation error!
+      return new Response(
+        JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'تمام شد.' } }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (turnStep === 3) {
+      // Step 3: Auto-repair gate caught the broken file and re-invoked model -> model fixes engine.js!
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tc_fix_broken',
+                    type: 'function',
+                    function: {
+                      name: 'write_file',
+                      arguments: JSON.stringify({ path: 'engine.js', content: 'function boost() {\n  return 100;\n}\n' })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'فایل engine.js اصلاح و تکمیل شد.' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  try {
+    const res = await chat.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            conversationId: newConv.id,
+            message: 'موتور را بساز',
+            reasoningEffort: 'high'
+          }
+        }),
+        env
+      )
+    );
+    assert.equal(res.status, 200);
+    const events = await parseSse(res);
+    const doneEvt = events.find((e) => e.name === 'done');
+    assert.ok(doneEvt, 'turn completes with done event');
+    assert.equal(doneEvt.data.maxSteps, 80, 'ultra-code stamina raises maxSteps to 80');
+    assert.equal(doneEvt.data.powerProfile.workStamina, 'ultra-code');
+    assert.equal(doneEvt.data.powerProfile.ambitionLevel, 'ultra-code');
+    assert.equal(doneEvt.data.workspace.files['engine.js'], 'function boost() {\n  return 100;\n}\n', 'auto-repair fixed broken syntax before finishing');
+    assert.ok(events.some((e) => e.name === 'status' && e.data?.phase === 'auto-repair'), 'emitted auto-repair status phase');
+
+    // Main native Effort ('high') must remain 100% untouched on the wire!
+    assert.equal(capturedPayloads[0].reasoning_effort, 'high', 'existing main reasoning_effort stays untouched');
+    const sysPrompt = capturedPayloads[0].messages[0].content;
+    assert.match(sysPrompt, /AI Power & Overdrive Directives/);
+    assert.match(sysPrompt, /10x ULTRA-CODE ENGINEERING/);
+    assert.match(sysPrompt, /Gold-Standard Human Ergonomics/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+
