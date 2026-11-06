@@ -1092,11 +1092,34 @@ test('extractRateLimitHeaders & fetchProviderQuota discover live remaining token
   assert.equal(rl.limitTokens, 100000);
   assert.equal(rl.remainingRequests, 49);
 
-  // 2. Tooken / OneAPI / NewAPI /api/usage/token live remaining tokens
+  // 2. Native Tooken Club /v1/balance + /v1/usage AND OneAPI /api/usage/token
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const u = String(url);
-    if (u === 'https://tooken.club/api/usage/token') {
+    if (u === 'https://tooken.club/v1/balance') {
+      return new Response(
+        JSON.stringify({
+          object: 'balance',
+          bonus_tokens: 4_640_000,
+          balance: '125.50',
+          reserved: '1.25',
+          currency: 'RUB'
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://tooken.club/v1/usage') {
+      return new Response(
+        JSON.stringify({
+          total_tokens: 360_000,
+          prompt_tokens: 300_000,
+          completion_tokens: 60_000,
+          requests: 42
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://oneapi.example.com/api/usage/token') {
       return new Response(
         JSON.stringify({
           code: true,
@@ -1140,9 +1163,20 @@ test('extractRateLimitHeaders & fetchProviderQuota discover live remaining token
       { force: true }
     );
     assert.equal(qTooken.supported, true);
-    assert.equal(qTooken.remainingTokens, 640_000);
-    assert.equal(qTooken.limitTokens, 1_000_000);
+    assert.equal(qTooken.source, 'tooken.club/v1/balance');
+    assert.equal(qTooken.remainingTokens, 4_640_000);
+    assert.equal(qTooken.remainingBalance, 125.5);
+    assert.equal(qTooken.reservedBalance, 1.25);
+    assert.equal(qTooken.currency, 'RUB');
     assert.equal(qTooken.usedTokens, 360_000);
+
+    const qOneApi = await modelLib.fetchProviderQuota(
+      { MODEL_API_KEY: 'sk-oneapi-quota-test-key', MODEL_BASE_URL: 'https://oneapi.example.com/v1' },
+      { force: true }
+    );
+    assert.equal(qOneApi.supported, true);
+    assert.equal(qOneApi.remainingTokens, 640_000);
+    assert.equal(qOneApi.limitTokens, 1_000_000);
 
     const qOpenRouter = await modelLib.fetchProviderQuota(
       { MODEL_API_KEY: 'sk-or-v1-quota-test-key', MODEL_BASE_URL: 'https://openrouter.ai/api/v1' },
