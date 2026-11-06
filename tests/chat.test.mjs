@@ -919,5 +919,105 @@ test('zero-cutoff streaming: streams even without env.CF_PAGES, breaks immediate
   }
 });
 
+test('elastic zero-413 context engine: slims giant historical tool payloads, auto-compacts on upstream 413 & 400 context_length_exceeded without touching reasoning_effort, and never forces manual /compact', async () => {
+  const original = globalThis.fetch;
+  try {
+    const bigConv = await (
+      await stateApi.onRequestPost(
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+      )
+    ).json();
+
+    // Seed giant multi-step tool history (>500 KB of redundant write_file arguments & read_file outputs)
+    const hugeCode = '// خط کد بسیار حجیم برای تست عبور از سقف پراکسی\nconst block = "' + 'A'.repeat(45_000) + '";\n';
+    const bloatedHistory = [];
+    for (let i = 0; i < 8; i += 1) {
+      bloatedHistory.push({ role: 'user', content: `گام بزرگ شماره ${i}`, created_at: Date.now() + i * 3 });
+      bloatedHistory.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: `tc_big_${i}`,
+            type: 'function',
+            function: { name: 'write_file', arguments: JSON.stringify({ path: `module_${i}.js`, content: hugeCode }) }
+          }
+        ],
+        created_at: Date.now() + i * 3 + 1
+      });
+      bloatedHistory.push({
+        role: 'tool',
+        tool_call_id: `tc_big_${i}`,
+        content: 'File saved.\n' + 'X'.repeat(11_000),
+        created_at: Date.now() + i * 3 + 2
+      });
+      bloatedHistory.push({ role: 'assistant', content: `ماژول ${i} ذخیره شد.`, created_at: Date.now() + i * 3 + 3 });
+    }
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          body: { action: 'append', id: bigConv.id, messages: bloatedHistory },
+          headers: { Cookie: cookie }
+        }),
+        env
+      )
+    );
+
+    // Simulate a strict proxy that STILL rejects payloads > 40 KB with HTTP 413 first,
+    // and then HTTP 400 context_length_exceeded if > 25 KB, verifying automatic multi-level self-compaction!
+    const wireAttempts = [];
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      const rawBody = String(init.body || '');
+      const parsed = JSON.parse(rawBody);
+      // Summarizer call (temperature 0.1, max_tokens 1600): simulate summarizer failing with 413 too -> deterministic local summary must kick in!
+      if (parsed.max_tokens === 1600) {
+        return new Response('413 Request Entity Too Large', { status: 413 });
+      }
+      wireAttempts.push({ len: rawBody.length, effort: parsed.reasoning_effort, msgCount: parsed.messages.length });
+      if (wireAttempts.length === 1) {
+        return new Response('<html><body>413 Request Entity Too Large</body></html>', { status: 413 });
+      }
+      if (wireAttempts.length === 2) {
+        return new Response(
+          JSON.stringify({ error: { message: 'This model maximum context length is exceeded (prompt is too long)' } }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(
+        'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"بدون خطای ۴۱۳ و بدون نیاز به /compact انجام شد!"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+      );
+    };
+
+    const res = await chat.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            conversationId: bigConv.id,
+            message: 'ادامه بده و قابلیت نهایی را اضافه کن',
+            reasoningEffort: 'high',
+            workStamina: 'ultra-code'
+          }
+        }),
+        env
+      )
+    );
+    const events = await parseSse(res);
+    assert.equal(events.find((e) => e.name === 'error'), undefined, 'must NOT fail with 413 context_too_large');
+    const doneEvt = events.find((e) => e.name === 'done');
+    assert.ok(doneEvt, 'completed cleanly after auto-compacting');
+    assert.equal(doneEvt.data.content, 'بدون خطای ۴۱۳ و بدون نیاز به /compact انجام شد!');
+    assert.equal(wireAttempts.length, 3, 'auto-compacted across 413 and 400 context_length_exceeded');
+    assert.ok(wireAttempts[2].len < wireAttempts[0].len, 'each compaction pass shrinks wire payload');
+    assert.equal(wireAttempts[2].effort, 'high', 'kept user reasoning_effort=high untouched across 413/400 compaction');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 
 

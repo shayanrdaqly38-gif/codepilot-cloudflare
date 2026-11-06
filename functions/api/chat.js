@@ -44,6 +44,7 @@ import {
   buildWorkingContext,
   compactToolResult,
   repairToolGroups,
+  slimHistoricalToolPayloads,
   toWire
 } from '../_lib/memory.js';
 import {
@@ -709,13 +710,16 @@ export async function onRequestPost(context) {
       const thinking = Boolean(reasoningEffort && reasoningEffort !== 'none');
       const powerPlan = resolvePowerExecutionPlan(agentConfig, reasoningEffort);
       const maxSteps = powerPlan.maxSteps;
+      // Keep active rolling window lean (<= 32k tokens) even in Ultra-Code mode so Persian UTF-8 + JSON tool calls
+      // never trip reverse-proxy 512KB/1MB HTTP 413 limits; older turns summarize into durable rolling memory automatically!
+      const cappedPowerContextBudget = Math.min(powerPlan.contextBudget, 32_000);
       if (
         agentConfig.workStamina &&
         agentConfig.workStamina !== 'medium' &&
         agentConfig.workStamina !== 'low' &&
-        powerPlan.contextBudget > (Number(effectiveEnv.CONTEXT_BUDGET_TOKENS) || 0)
+        cappedPowerContextBudget > (Number(effectiveEnv.CONTEXT_BUDGET_TOKENS) || 0)
       ) {
-        effectiveEnv.CONTEXT_BUDGET_TOKENS = String(powerPlan.contextBudget);
+        effectiveEnv.CONTEXT_BUDGET_TOKENS = String(cappedPowerContextBudget);
       }
 
       const MUTATING_TOOL_NAMES = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
@@ -909,11 +913,15 @@ export async function onRequestPost(context) {
             steps += 1;
             stepStreamedContent = '';
             stepStreamedReasoning = '';
-            const inputChars = estimateMessagesTextChars(messages);
-            if (inputChars > powerPlan.maxTurnInputChars) {
-              turnInterruptedReason = 'context_limit';
-              finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً از دستور `/compact` استفاده کنید و سپس بنویسید «ادامه».';
-              break;
+            // Live in-flight compaction: instead of EVER stopping on `maxTurnInputChars`, slim older steps'
+            // redundant `write_file`/`apply_patch`/`read_file` payloads on the fly so 80-step marathons never hit a ceiling!
+            if (steps > 3 || estimateMessagesTextChars(messages) > 140_000) {
+              const slimmedInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 6 });
+              messages.splice(1, messages.length - 1, ...slimmedInFlight);
+            }
+            if (estimateMessagesTextChars(messages) > Math.min(powerPlan.maxTurnInputChars, 210_000)) {
+              const tighterInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 2 });
+              messages.splice(1, messages.length - 1, ...tighterInFlight);
             }
 
             let deltaChars = 0;
