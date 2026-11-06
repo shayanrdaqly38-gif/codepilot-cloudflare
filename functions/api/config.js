@@ -5,22 +5,39 @@
 
 import { route, methodNotAllowed } from '../_lib/api.js';
 import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
-import { catalogModelsWithSpecs, fetchProviderModels, getModelReasoningSpec, parseProviderModelItem } from '../_lib/model.js';
+import {
+  catalogModelsWithSpecs,
+  fetchProviderModels,
+  getModelReasoningSpec,
+  parseProviderModelItem,
+  pickSmartProviderDefaultModel
+} from '../_lib/model.js';
 import {
   getUserAgentConfig,
   getUserProviderSummary,
+  isOpenRouterUrl,
   isTookenUrl,
+  loadCachedProviderModels,
   resolveEffectiveEnv,
   saveUserAgentConfig,
   saveUserProviderConfig
 } from '../_lib/provider.js';
 
-async function buildModelsPayload(effectiveEnv, { force = false } = {}) {
-  const isTooken = isTookenUrl(effectiveEnv.MODEL_BASE_URL);
+async function buildModelsPayload(effectiveEnv, { force = false, skipRemote = false } = {}) {
+  const baseUrl = String(effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1');
+  const isTooken = isTookenUrl(baseUrl);
+  const isOpenRouter = isOpenRouterUrl(baseUrl);
   const byId = new Map(catalogModelsWithSpecs(effectiveEnv).map((m) => [m.id, m]));
-  let modelsSource = isTooken ? 'catalog' : 'empty';
+  let modelsSource = byId.size > 0 ? 'catalog' : 'empty';
 
-  if (effectiveEnv.MODEL_API_KEY && (effectiveEnv.CF_PAGES || effectiveEnv._customProvider || force)) {
+  if (skipRemote) {
+    const cached = await loadCachedProviderModels(effectiveEnv, baseUrl).catch(() => null);
+    if (Array.isArray(cached) && cached.length) {
+      modelsSource = 'cache';
+      if (!isTooken) byId.clear();
+      for (const item of cached) byId.set(item.id, item);
+    }
+  } else if (effectiveEnv.MODEL_API_KEY && (effectiveEnv.CF_PAGES || effectiveEnv._customProvider || force)) {
     try {
       const live = await fetchProviderModels(effectiveEnv, { force });
       if (live.length) {
@@ -29,19 +46,15 @@ async function buildModelsPayload(effectiveEnv, { force = false } = {}) {
         for (const item of live) byId.set(item.id, item);
       }
     } catch {
-      // Non-fatal during initial bootstrap; user can inspect diagnostics in ⌁ API.
+      // Non-fatal during initial bootstrap or save; user still gets saved key + fallback catalog.
     }
   }
 
   let defaultModel = String(effectiveEnv.MODEL_NAME || '').trim();
   if (!isTooken && (!defaultModel || (byId.size > 0 && !byId.has(defaultModel) && defaultModel === 'claude-sonnet-5-5'))) {
-    if (byId.has('deepseek-v4.1-flash')) {
-      defaultModel = 'deepseek-v4.1-flash';
-    } else {
-      defaultModel = byId.keys().next().value || defaultModel || 'gpt-4o';
-    }
+    defaultModel = pickSmartProviderDefaultModel(baseUrl, byId, defaultModel);
   }
-  if (!defaultModel) defaultModel = 'claude-sonnet-5-5';
+  if (!defaultModel) defaultModel = isOpenRouter ? 'openrouter/auto' : 'claude-sonnet-5-5';
 
   if (byId.size === 0 && defaultModel) {
     const fallbackItem = parseProviderModelItem(
@@ -67,7 +80,12 @@ export async function onRequestGet({ request, env }) {
       getUserProviderSummary(env, identity.owner),
       getUserAgentConfig(env, identity.owner)
     ]);
-    const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv);
+    // Avoid downloading multi-MB aggregator `/models` lists synchronously during cold boot on OpenRouter;
+    // serve D1-cached or curated OpenRouter models immediately (<1ms CPU) and hydrate live models via `/api/models`.
+    const skipBootRemote = isOpenRouterUrl(effectiveEnv.MODEL_BASE_URL);
+    const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv, {
+      skipRemote: skipBootRemote
+    });
 
     return {
       ok: true,
@@ -149,7 +167,11 @@ export async function onRequestPost({ request, env }) {
         agentConfig = await getUserAgentConfig(env, identity.owner);
       }
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
-      const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv, { force: true });
+      const skipModels = Boolean(data?.skipModels);
+      const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv, {
+        force: !skipModels,
+        skipRemote: skipModels
+      });
 
       return {
         ok: true,
@@ -158,6 +180,7 @@ export async function onRequestPost({ request, env }) {
         model: defaultModel,
         modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
         modelsSource,
+        modelsDeferred: skipModels,
         models
       };
     },

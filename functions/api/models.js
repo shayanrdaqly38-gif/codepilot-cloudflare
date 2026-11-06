@@ -9,19 +9,22 @@ import {
   catalogModelsWithSpecs,
   discoverModelCapabilities,
   fetchProviderModels,
-  parseProviderModelItem
+  parseProviderModelItem,
+  pickSmartProviderDefaultModel
 } from '../_lib/model.js';
-import { isTookenUrl, resolveEffectiveEnv } from '../_lib/provider.js';
+import { isOpenRouterUrl, isTookenUrl, resolveEffectiveEnv } from '../_lib/provider.js';
 import { fail } from '../_lib/util.js';
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity, url }) => {
     const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
-    const isTooken = isTookenUrl(effectiveEnv.MODEL_BASE_URL);
+    const baseUrl = String(effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1');
+    const isTooken = isTookenUrl(baseUrl);
+    const isOpenRouter = isOpenRouterUrl(baseUrl);
     const force = url.searchParams.get('refresh') === '1';
     const byId = new Map(catalogModelsWithSpecs(effectiveEnv).map((m) => [m.id, m]));
 
-    let source = isTooken ? 'catalog' : 'empty';
+    let source = byId.size > 0 ? 'catalog' : 'empty';
     let liveError = null;
     try {
       const liveList = await fetchProviderModels(effectiveEnv, { force });
@@ -38,9 +41,9 @@ export async function onRequestGet({ request, env }) {
 
     let defaultModel = String(effectiveEnv.MODEL_NAME || '').trim();
     if (!isTooken && (!defaultModel || (byId.size > 0 && !byId.has(defaultModel) && defaultModel === 'claude-sonnet-5-5'))) {
-      defaultModel = byId.keys().next().value || defaultModel || '';
+      defaultModel = pickSmartProviderDefaultModel(baseUrl, byId, defaultModel);
     }
-    if (!defaultModel) defaultModel = 'claude-sonnet-5-5';
+    if (!defaultModel) defaultModel = isOpenRouter ? 'openrouter/auto' : 'claude-sonnet-5-5';
 
     if (defaultModel && !byId.has(defaultModel)) {
       const parsedDefault = parseProviderModelItem(

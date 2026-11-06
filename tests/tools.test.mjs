@@ -1333,3 +1333,151 @@ test('Zro (zro.moonmath.ai) /api/cli/status quota, /api/cli/models catalog, SSE 
   }
 });
 
+test('OpenRouter (openrouter.ai/api/v1): saves key atomically without 503 CPU spikes on 450-model 3MB catalogs, cleans mobile bidi/Bearer paste, normalizes URL typos, and routes chat headers & defaults', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+  const providerLib = await import(`${root}/_lib/provider.js`);
+  const configApi = await import(`${root}/api/config.js`);
+  const modelsApi = await import(`${root}/api/models.js`);
+  const env = makeEnv(keys);
+  const authRes = await auth.onRequestGet(ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys) } }), env));
+  const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
+
+  // 1. URL normalization fixes OpenRouter path typos (`openrouter.ai`, `openrouter.ai/v1`) and invisible Android RTL marks
+  assert.equal(providerLib.normalizeProviderBaseUrl('\u200Fopenrouter.ai\u200E'), 'https://openrouter.ai/api/v1');
+  assert.equal(providerLib.normalizeProviderBaseUrl('https://openrouter.ai/v1/'), 'https://openrouter.ai/api/v1');
+  assert.equal(providerLib.normalizeProviderBaseUrl('https://openrouter.ai/api/v1/chat/completions'), 'https://openrouter.ai/api/v1');
+
+  // Build a realistic 450-model (~2.5 MB) OpenRouter `/api/v1/models` payload
+  const longDesc = 'Detailed OpenRouter model specification and markdown documentation. '.repeat(65);
+  const giantOpenRouterModels = [];
+  for (let i = 0; i < 440; i += 1) {
+    giantOpenRouterModels.push({
+      id: `community-org/model-variant-${String(i).padStart(3, '0')}:free`,
+      name: `Community Model ${i}`,
+      description: longDesc,
+      context_length: 32768,
+      architecture: { modality: 'text->text', input_modalities: ['text'] },
+      top_provider: { context_length: 32768, max_completion_tokens: 4096 },
+      supported_parameters: ['temperature', 'top_p']
+    });
+  }
+  giantOpenRouterModels.push(
+    {
+      id: 'anthropic/claude-sonnet-4.5',
+      name: 'Anthropic: Claude Sonnet 4.5',
+      description: longDesc,
+      context_length: 200000,
+      supported_parameters: ['tools', 'tool_choice', 'reasoning', 'include_reasoning']
+    },
+    {
+      id: 'openai/gpt-4.1',
+      name: 'OpenAI: GPT-4.1',
+      description: longDesc,
+      context_length: 1000000,
+      supported_parameters: ['tools', 'tool_choice', 'temperature']
+    },
+    {
+      id: '@preset/my-coding-router',
+      name: 'My Coding Preset',
+      description: 'OpenRouter @preset model',
+      context_length: 200000,
+      supported_parameters: ['tools']
+    }
+  );
+  const giantPayloadStr = JSON.stringify({ data: giantOpenRouterModels });
+  assert.ok(giantPayloadStr.length > 1_800_000, 'simulated OpenRouter payload > 1.8 MB');
+
+  const originalFetch = globalThis.fetch;
+  let modelsFetchCount = 0;
+  let capturedChatHeaders = null;
+  let capturedChatBody = null;
+  try {
+    globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      if (u === 'https://openrouter.ai/api/v1/models') {
+        modelsFetchCount += 1;
+        return new Response(giantPayloadStr, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (u === 'https://openrouter.ai/api/v1/chat/completions') {
+        capturedChatHeaders = init.headers;
+        capturedChatBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            model: capturedChatBody.model,
+            choices: [{ message: { role: 'assistant', content: 'OpenRouter OK' } }],
+            usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('unexpected: ' + u, { status: 500 });
+    };
+
+    // 2. Phase 1 atomic save (`skipModels: true`) with Android invisible marks + `Bearer ` prefix saves in <20ms with ZERO upstream `/models` call!
+    const saveRes = await (
+      await configApi.onRequestPost(
+        ctx(
+          req('/api/config', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: {
+              baseUrl: '\u200Ehttps://openrouter.ai/api/v1\u200F',
+              apiKey: '  Bearer \u200Bsk-or-v1-abcdef0123456789abcdef0123456789\u200C  ',
+              skipModels: true
+            }
+          }),
+          env
+        )
+      )
+    ).json();
+
+    assert.equal(saveRes.ok, true);
+    assert.equal(modelsFetchCount, 0, 'skipModels=true must not touch remote /models during key save');
+    assert.equal(saveRes.provider.effectiveBaseUrl, 'https://openrouter.ai/api/v1');
+    assert.equal(saveRes.provider.hasCustomKey, true);
+    assert.equal(saveRes.provider.keyHint, 'sk-o••••6789');
+    assert.ok(saveRes.models.length >= 8, 'fallback OpenRouter models returned immediately');
+
+    // 3. Phase 2 `/api/models?refresh=1` parses 443-model ~2MB JSON fast, prioritizes flagship models, and caches in D1
+    const modelsRes = await (
+      await modelsApi.onRequestGet(
+        ctx(req('/api/models?refresh=1', { headers: { Cookie: cookie } }), env)
+      )
+    ).json();
+    assert.equal(modelsRes.ok, true);
+    assert.equal(modelsRes.source, 'remote');
+    assert.equal(modelsRes.defaultModel, 'anthropic/claude-sonnet-4.5');
+    assert.ok(modelsRes.models.length <= 225, 'giant 443-model list capped to <=225 to stay under Cloudflare CPU limit');
+    assert.equal(modelsRes.models[0].id, 'anthropic/claude-sonnet-4.5', 'flagship coding model prioritized at index 0');
+    assert.ok(modelsRes.models.some((m) => m.id === '@preset/my-coding-router'), 'supports OpenRouter @preset IDs');
+
+    // 4. Subsequent cold boot `GET /api/config` reads D1 cache with ZERO extra `/models` fetches!
+    const countBeforeBoot = modelsFetchCount;
+    const bootCfg = await (
+      await configApi.onRequestGet(ctx(req('/api/config', { headers: { Cookie: cookie } }), env))
+    ).json();
+    assert.equal(modelsFetchCount, countBeforeBoot, 'GET /api/config uses D1 cache without re-fetching 2MB OpenRouter /models');
+    assert.equal(bootCfg.model, 'anthropic/claude-sonnet-4.5');
+
+    // 5. `GET /api/health?probe=1` probes OpenRouter with `HTTP-Referer`, `X-Title`, and smart default model (NOT `claude-sonnet-5-5`)
+    const healthApi = await import(`${root}/api/health.js`);
+    const probeRes = await (
+      await healthApi.onRequestGet(
+        ctx(req('/api/health?probe=1', { headers: { Cookie: cookie } }), env)
+      )
+    ).json();
+    assert.equal(probeRes.checks.MODEL_API_KEY.ok, true);
+    assert.equal(probeRes.probe.ok, true);
+    assert.equal(capturedChatBody.model, 'anthropic/claude-sonnet-4.5');
+    assert.equal(capturedChatHeaders.Authorization, 'Bearer sk-or-v1-abcdef0123456789abcdef0123456789');
+    assert.equal(capturedChatHeaders['X-Title'], 'CodePilot');
+    assert.ok(capturedChatHeaders['HTTP-Referer']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+

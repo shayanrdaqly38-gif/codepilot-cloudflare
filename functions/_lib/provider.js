@@ -7,9 +7,24 @@ import { assertSafeExternalUrl } from './web.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const MODEL_ID_RE = /^[a-zA-Z0-9._:/-]{1,120}$/;
+const MODEL_ID_RE = /^[a-zA-Z0-9._:@/-]{1,160}$/;
+const INVISIBLE_MARKS_RE = /[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
 const MAX_CACHED_MODELS_PER_PROVIDER = 300;
 const DISCOVERY_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+const MODEL_LIST_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+export function cleanCredentialInput(value) {
+  let s = String(value || '').replace(INVISIBLE_MARKS_RE, '').trim();
+  if (
+    s.length >= 2 &&
+    ((s.startsWith('"') && s.endsWith('"')) ||
+      (s.startsWith("'") && s.endsWith("'")) ||
+      (s.startsWith('`') && s.endsWith('`')))
+  ) {
+    s = s.slice(1, -1).replace(INVISIBLE_MARKS_RE, '').trim();
+  }
+  return s;
+}
 
 function hexToBytes(hex) {
   const clean = String(hex || '');
@@ -56,33 +71,61 @@ export function maskApiKey(rawKey) {
   return `${s.slice(0, 4)}••••${s.slice(-4)}`;
 }
 
+export function isTookenUrl(baseUrl) {
+  return /(?:^|\/\/|\.)tooken\.club(?:\/|$|:)/i.test(String(baseUrl || ''));
+}
+
+export function isOpenRouterUrl(baseUrl) {
+  return /(?:^|\/\/|\.)openrouter\.ai(?:\/|$|:)/i.test(String(baseUrl || ''));
+}
+
 /**
  * Validate and normalize an OpenAI-compatible provider base URL (e.g.
  * `https://tooken.club/v1`, `https://openrouter.ai/api/v1`, `https://api.openai.com/v1`).
- * Blocks SSRF targets (localhost, RFC1918, cloud metadata).
+ * Blocks SSRF targets (localhost, RFC1918, cloud metadata) and normalizes common URL typos.
  */
 export function normalizeProviderBaseUrl(rawUrl) {
-  const trimmed = String(rawUrl || '').trim();
+  let trimmed = cleanCredentialInput(rawUrl);
   if (!trimmed) return '';
-  assertSafeExternalUrl(trimmed);
-  return trimmed
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    trimmed = `https://${trimmed}`;
+  }
+  const parsed = assertSafeExternalUrl(trimmed);
+  let normalized = `${parsed.origin}${parsed.pathname}`
     .replace(/\/+$/, '')
     .replace(/\/chat\/completions$/i, '')
+    .replace(/\/completions$/i, '')
     .replace(/\/models$/i, '')
+    .replace(/\/(?:credits|key|balance|usage)$/i, '')
     .replace(/\/+$/, '');
+
+  if (isOpenRouterUrl(normalized)) {
+    try {
+      const u = new URL(normalized);
+      const p = u.pathname.replace(/\/+$/, '');
+      if (!p || p === '/v1' || p === '/api') {
+        normalized = `${u.origin}/api/v1`;
+      }
+    } catch { /* keep normalized */ }
+  }
+  return normalized;
 }
 
 export function effectiveBaseUrlFromEnv(env) {
-  return String(env?.MODEL_BASE_URL || 'https://tooken.club/v1')
-    .trim()
+  const raw = cleanCredentialInput(env?.MODEL_BASE_URL || 'https://tooken.club/v1')
     .replace(/\/+$/, '')
     .replace(/\/chat\/completions$/i, '')
+    .replace(/\/completions$/i, '')
     .replace(/\/models$/i, '')
     .replace(/\/+$/, '');
-}
-
-export function isTookenUrl(baseUrl) {
-  return /(?:^|\/\/|\.)tooken\.club(?:\/|$|:)/i.test(String(baseUrl || ''));
+  if (isOpenRouterUrl(raw)) {
+    try {
+      const u = new URL(raw);
+      const p = u.pathname.replace(/\/+$/, '');
+      if (!p || p === '/v1' || p === '/api') return `${u.origin}/api/v1`;
+    } catch { /* ignore */ }
+  }
+  return raw;
 }
 
 async function readUserSettingsObj(env, owner) {
@@ -124,17 +167,22 @@ export async function getUserProviderSummary(env, owner) {
   const customDefaultModel = p?.defaultModel ? String(p.defaultModel) : '';
   const customActive = Boolean(customBaseUrl || hasCustomKey || customDefaultModel);
 
+  const effectiveBase = customBaseUrl || serverBaseUrl;
+  const fallbackDefModel = isOpenRouterUrl(effectiveBase)
+    ? 'openrouter/auto'
+    : String(env?.MODEL_NAME || 'claude-sonnet-5-5');
+
   return {
     customActive,
     usingCustom: customActive,
     baseUrl: customBaseUrl,
-    effectiveBaseUrl: customBaseUrl || serverBaseUrl,
+    effectiveBaseUrl: effectiveBase,
     serverBaseUrl,
     hasCustomKey,
     keyHint: p?.keyHint ? String(p.keyHint) : '',
     hasServerKey,
     defaultModel: customDefaultModel,
-    effectiveDefaultModel: customDefaultModel || String(env?.MODEL_NAME || 'claude-sonnet-5-5')
+    effectiveDefaultModel: customDefaultModel || fallbackDefModel
   };
 }
 
@@ -158,18 +206,20 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
   if (input.clearKey) {
     apiKeyEnc = '';
     keyHint = '';
-  } else if (typeof input.apiKey === 'string' && input.apiKey.trim()) {
-    const cleanKey = input.apiKey.trim();
-    if (cleanKey.length > 512 || /\s/.test(cleanKey)) {
-      fail('قالب کلید API معتبر نیست.', 400, 'bad_api_key');
+  } else if (typeof input.apiKey === 'string') {
+    const cleanedKey = cleanCredentialInput(input.apiKey).replace(/^bearer\s+/i, '').trim();
+    if (cleanedKey) {
+      if (cleanedKey.length > 2048 || /\s/.test(cleanedKey)) {
+        fail('قالب کلید API معتبر نیست (فاصله یا کاراکتر اضافی را حذف کنید).', 400, 'bad_api_key');
+      }
+      apiKeyEnc = await encryptApiKey(env, cleanedKey);
+      keyHint = maskApiKey(cleanedKey);
     }
-    apiKeyEnc = await encryptApiKey(env, cleanKey);
-    keyHint = maskApiKey(cleanKey);
   }
 
   let defaultModel = prev.defaultModel || '';
   if (input.defaultModel !== undefined) {
-    const candidate = String(input.defaultModel || '').trim();
+    const candidate = cleanCredentialInput(input.defaultModel);
     if (candidate && !MODEL_ID_RE.test(candidate)) {
       fail('شناسه‌ی مدل پیش‌فرض معتبر نیست.', 400, 'bad_model');
     }
@@ -534,4 +584,45 @@ export async function saveDiscoveredSpec(env, baseUrl, modelId, spec) {
   )
     .bind(key, JSON.stringify(compact))
     .run();
+}
+
+async function modelsMetaKey(baseUrl) {
+  const norm = effectiveBaseUrlFromEnv({ MODEL_BASE_URL: baseUrl }).toLowerCase();
+  const hash = await sha256Hex(norm);
+  return `mcat:${hash.slice(0, 20)}`;
+}
+
+export async function loadCachedProviderModels(env, baseUrl) {
+  if (!env?.DB || !baseUrl) return null;
+  await ensureSchema(env);
+  const key = await modelsMetaKey(baseUrl);
+  const row = await env.DB.prepare('SELECT value FROM meta WHERE key=?').bind(key).first();
+  if (!row?.value) return null;
+  try {
+    const parsed = JSON.parse(row.value);
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.models)) return null;
+    if (!parsed.at || Date.now() - parsed.at > MODEL_LIST_CACHE_TTL_MS) return null;
+    return parsed.models;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCachedProviderModels(env, baseUrl, models) {
+  if (!env?.DB || !baseUrl || !Array.isArray(models) || !models.length) return;
+  try {
+    await ensureSchema(env);
+    const key = await modelsMetaKey(baseUrl);
+    const slim = models.slice(0, 220);
+    const serialized = JSON.stringify({ at: Date.now(), models: slim });
+    if (serialized.length > 180_000) return;
+    await env.DB.prepare(
+      `INSERT INTO meta(key, value) VALUES(?, ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+    )
+      .bind(key, serialized)
+      .run();
+  } catch {
+    // Non-fatal cache write
+  }
 }

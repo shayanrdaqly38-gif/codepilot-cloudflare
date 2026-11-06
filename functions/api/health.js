@@ -46,9 +46,20 @@ export async function onRequestGet({ request, env }) {
             ? { ok: true, derived: true }
             : { ok: false, hint: 'تنظیم نشده. با openssl rand -base64 32 بسازید یا MODEL_API_KEY را تنظیم کنید.' };
 
-    checks.MODEL_API_KEY = env.MODEL_API_KEY
-      ? { ok: true }
-      : { ok: false, hint: 'تنظیم نشده. کلید ارائه‌دهنده‌ی مدل را به‌صورت Secret اضافه کنید.' };
+    let signedInIdentity = null;
+    try {
+      const authRes = await authenticate(request, env);
+      signedInIdentity = authRes?.identity || null;
+    } catch {
+      signedInIdentity = null;
+    }
+    const effectiveHealthEnv = signedInIdentity
+      ? await resolveEffectiveEnv(env, signedInIdentity.owner).catch(() => env)
+      : env;
+
+    checks.MODEL_API_KEY = effectiveHealthEnv?.MODEL_API_KEY
+      ? { ok: true, ...(effectiveHealthEnv._customProvider && !env.MODEL_API_KEY ? { custom: true } : {}) }
+      : { ok: false, hint: 'تنظیم نشده. کلید ارائه‌دهنده‌ی مدل را از بخش ⌁ API یا Cloudflare Secrets اضافه کنید.' };
 
     checks.DB = env.DB ? { ok: true } : { ok: false, hint: 'بایندینگ D1 با نام DB وجود ندارد.' };
 
@@ -82,17 +93,11 @@ export async function onRequestGet({ request, env }) {
     // it cannot be used to burn someone's quota anonymously.
     let probe = null;
     if (url.searchParams.get('probe') === '1') {
-      let identity = null;
-      try {
-        const authRes = await authenticate(request, env);
-        identity = authRes?.identity || null;
-      } catch {
-        identity = null;
-      }
+      const identity = signedInIdentity;
       if (!identity) {
         probe = { ok: false, error: 'برای تست مدل باید وارد شده باشید.' };
       } else {
-        const probeEnv = await resolveEffectiveEnv(env, identity.owner);
+        const probeEnv = effectiveHealthEnv || (await resolveEffectiveEnv(env, identity.owner));
         if (!probeEnv.MODEL_API_KEY) {
           probe = { ok: false, error: 'MODEL_API_KEY تنظیم نشده است.' };
         } else {
