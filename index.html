@@ -3898,7 +3898,9 @@ function renderCheckpointCardHtml(ckpt) {
     ? '⏸ توقف به علت اتمام توکن/کلید API — نقطه دقیق کار ذخیره شد'
     : ckpt.reason === 'step_limit'
       ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
-      : '⏸ ارتباط در میانه کار قطع شد — پیشرفت تا همین لحظه ذخیره شد';
+      : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
+        ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
+        : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
   const detail = ckpt.errorMessage || 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.';
   const metaParts = [];
   if (stepsCount > 0) metaParts.push(`${faNum(stepsCount)} گام انجام‌شده`);

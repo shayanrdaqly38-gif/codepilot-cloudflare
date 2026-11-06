@@ -427,6 +427,128 @@ function parseSummary(raw) {
 }
 
 /**
+ * Slim redundant giant payloads (`write_file` / `apply_patch` full file contents
+ * and huge `read_file` dumps) in OLDER turns/steps while keeping recent steps
+ * 100% verbatim and preserving valid JSON in `tool_calls[].function.arguments`.
+ */
+export function slimHistoricalToolPayloads(wireMessages, { keepVerbatimTail = 6 } = {}) {
+  if (!Array.isArray(wireMessages) || wireMessages.length <= keepVerbatimTail) {
+    return wireMessages || [];
+  }
+  const cutoff = Math.max(0, wireMessages.length - keepVerbatimTail);
+  return wireMessages.map((msg, idx) => {
+    if (!msg || idx >= cutoff) return msg;
+
+    if (msg.role === 'assistant') {
+      let changed = false;
+      let nextContent = msg.content;
+      if (typeof nextContent === 'string' && nextContent.length > 10_000) {
+        nextContent = `${nextContent.slice(0, 4500)}\n…[بخشی از پاسخ قدیمی فشرده شد (${nextContent.length} کاراکتر)]…\n${nextContent.slice(-1800)}`;
+        changed = true;
+      }
+      let nextCalls = msg.tool_calls;
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+        nextCalls = msg.tool_calls.map((tc) => {
+          const rawArgs = String(tc?.function?.arguments || '');
+          if (rawArgs.length <= 1600) return tc;
+          changed = true;
+          let targetPath = '';
+          try {
+            const parsed = JSON.parse(rawArgs);
+            targetPath = parsed?.path || parsed?.url || parsed?.command?.slice?.(0, 80) || '';
+          } catch {
+            const m = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+            if (m) targetPath = m[1];
+          }
+          return {
+            ...tc,
+            function: {
+              ...tc.function,
+              arguments: JSON.stringify({
+                ...(targetPath ? { path: targetPath } : {}),
+                _compacted_history: true,
+                _original_chars: rawArgs.length,
+                _note: 'Saved in workspace; call read_file if full latest content is needed.'
+              })
+            }
+          };
+        });
+      }
+      return changed ? { ...msg, content: nextContent, ...(nextCalls ? { tool_calls: nextCalls } : {}) } : msg;
+    }
+
+    if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 2200) {
+      const origLen = msg.content.length;
+      return {
+        ...msg,
+        content: `${msg.content.slice(0, 1200)}\n…[خروجی قدیمی ابزار فشرده شد (${origLen} کاراکتر) — در صورت نیاز مجدداً read_file اجرا کنید]…\n${msg.content.slice(-450)}`
+      };
+    }
+
+    return msg;
+  });
+}
+
+function slimTranscriptForSummary(messages) {
+  const MAX_TOTAL_CHARS = 55_000;
+  const slimmed = [];
+  let usedChars = 0;
+  for (const m of messages || []) {
+    if (!m) continue;
+    const entry = { role: m.role };
+    const rawText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+    entry.content = rawText.length > 1200 ? `${rawText.slice(0, 850)} … ${rawText.slice(-250)}` : rawText;
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      entry.tools = m.tool_calls.map((tc) => {
+        let p = '';
+        try { p = JSON.parse(tc?.function?.arguments || '{}')?.path || ''; } catch { /* ignore */ }
+        return p ? `${tc?.function?.name}(${p})` : String(tc?.function?.name || 'tool');
+      });
+    }
+    if (Array.isArray(m.attachments) && m.attachments.length) {
+      entry.attachments = m.attachments.map((a) => ({ name: a.name, type: a.type }));
+    }
+    const serializedLen = JSON.stringify(entry).length;
+    if (usedChars + serializedLen > MAX_TOTAL_CHARS && slimmed.length > 4) {
+      // Keep latest items in `older` if transcript is huge
+      slimmed.shift();
+    } else {
+      usedChars += serializedLen;
+    }
+    slimmed.push(entry);
+  }
+  return slimmed;
+}
+
+function buildDeterministicLocalSummary(previousSummary, olderMessages) {
+  const userGoals = [];
+  const touchedTools = new Set();
+  for (const m of olderMessages || []) {
+    if (!m) continue;
+    if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+      userGoals.push(m.content.trim().slice(0, 260));
+    }
+    if (Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        let p = '';
+        try { p = JSON.parse(tc?.function?.arguments || '{}')?.path || ''; } catch { /* ignore */ }
+        const label = p ? `${tc?.function?.name}(${p})` : tc?.function?.name;
+        if (label) touchedTools.add(label);
+      }
+    }
+  }
+  const parts = [];
+  if (previousSummary) parts.push(previousSummary.slice(0, 3500));
+  if (userGoals.length) {
+    parts.push(`درخواست‌های پیشین کاربر:\n- ${userGoals.slice(-8).join('\n- ')}`);
+  }
+  if (touchedTools.size) {
+    parts.push(`ابزارها و فایل‌های کارشده در گام‌های قبل: ${[...touchedTools].slice(-30).join(', ')}`);
+  }
+  return redactSecrets(parts.join('\n\n')).slice(0, MAX_SUMMARY_CHARS);
+}
+
+/**
  * Summarize the older part of the conversation when it no longer fits.
  * `callModel` is injected to keep this module free of provider details.
  * Returns { summary, summaryUntil, recent, memo }.
@@ -467,6 +589,7 @@ export async function buildWorkingContext({
     }
     if (cut > 0) {
       const older = pending.slice(0, cut);
+      let summarizedOk = false;
       try {
         const result = await callModel({
           temperature: 0.1,
@@ -477,9 +600,7 @@ export async function buildWorkingContext({
               role: 'user',
               content: JSON.stringify({
                 previous_memory: summary,
-                transcript: older.map((m) =>
-                  m.attachments?.length ? { ...m, attachments: m.attachments.map((a) => ({ name: a.name, type: a.type })) } : toWire(m)
-                )
+                transcript: slimTranscriptForSummary(older)
               })
             }
           ]
@@ -490,6 +611,7 @@ export async function buildWorkingContext({
         if (parsed.summary) {
           summary = redactSecrets(parsed.summary).slice(0, MAX_SUMMARY_CHARS);
           summaryUntil += cut;
+          summarizedOk = true;
           await saveSummary(env, conversation.owner, conversation.id, { summary, summaryUntil });
           if (parsed.memo?.length && saveMemories) {
             for (const memo of parsed.memo) {
@@ -500,7 +622,17 @@ export async function buildWorkingContext({
           window = selectWindow(pending, budget);
         }
       } catch {
-        // Summarization is best-effort; fall back to a hard window below.
+        // Fall through to deterministic local summary so oversized history never gets stuck!
+      }
+      if (!summarizedOk) {
+        const fallbackSummary = buildDeterministicLocalSummary(summary, older);
+        if (fallbackSummary) {
+          summary = fallbackSummary;
+          summaryUntil += cut;
+          await saveSummary(env, conversation.owner, conversation.id, { summary, summaryUntil }).catch(() => {});
+          pending = repaired.slice(summaryUntil);
+          window = selectWindow(pending, budget);
+        }
       }
     }
   }
@@ -524,28 +656,48 @@ export async function buildWorkingContext({
     return toWire(msg);
   };
 
-  let recent = normalizeWireSequence(recentSlice.map(toRecentWire));
+  let recent = slimHistoricalToolPayloads(
+    normalizeWireSequence(recentSlice.map(toRecentWire)),
+    { keepVerbatimTail: 6 }
+  );
 
-  // Hard guard on non-binary text size so a misconfigured budget cannot overflow context,
-  // without penalizing legitimate image_url Base64 blocks on the latest turn.
-  const textCharsOf = (items) =>
+  // Measure FULL wire text size INCLUDING `tool_calls[].function.arguments` so proxy 413 limits are never tripped!
+  const wireCharsOf = (items) =>
     items.reduce((sum, m) => {
-      if (typeof m.content === 'string') return sum + m.content.length;
-      if (Array.isArray(m.content)) {
-        return sum + m.content.reduce((s, p) => s + (typeof p?.text === 'string' ? p.text.length : 1000), 0);
+      let c = 0;
+      if (typeof m.content === 'string') c += m.content.length;
+      else if (Array.isArray(m.content)) {
+        c += m.content.reduce((s, p) => s + (typeof p?.text === 'string' ? p.text.length : 1200), 0);
       }
-      return sum;
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          c += (tc?.function?.name?.length || 0) + (tc?.function?.arguments?.length || 0) + 32;
+        }
+      }
+      return sum + c;
     }, 0);
 
-  if (textCharsOf(recent) > 400_000) {
-    const trimmed = selectWindow(pending, Math.min(budget, 8_000));
+  if (wireCharsOf(recent) > 180_000) {
+    const trimmed = selectWindow(pending, Math.min(budget, 12_000));
     const trimmedSlice = pending.slice(trimmed.start);
-    recent = normalizeWireSequence(
-      trimmedSlice.map((m, idx) => (idx === trimmedSlice.length - 1 ? toWire(m) : toRecentWire(m, -1)))
+    recent = slimHistoricalToolPayloads(
+      normalizeWireSequence(
+        trimmedSlice.map((m, idx) => (idx === trimmedSlice.length - 1 ? toWire(m) : toRecentWire(m, -1)))
+      ),
+      { keepVerbatimTail: 2 }
     );
-    if (textCharsOf(recent) > 400_000) {
-      fail('تاریخچه‌ی ابزار بیش از حد بزرگ است؛ گفتگوی جدید بسازید.', 413, 'context_too_large');
-    }
+  }
+  if (wireCharsOf(recent) > 180_000) {
+    // Even a single giant recent turn gets slimmed cleanly instead of ever throwing 413!
+    recent = slimHistoricalToolPayloads(recent, { keepVerbatimTail: 0 }).map((m, idx, arr) => {
+      if (idx === arr.length - 1 && m.role === 'user' && typeof m.content === 'string' && m.content.length > 120_000) {
+        return {
+          ...m,
+          content: `${m.content.slice(0, 85_000)}\n\n…[بخشی از متن بسیار بزرگ برای رعایت سقف مدل خلاصه شد]…\n\n${m.content.slice(-25_000)}`
+        };
+      }
+      return m;
+    });
   }
 
   return { summary, summaryUntil, recent };
@@ -604,34 +756,41 @@ export async function forceCompactConversation({ env, conversation, messages, ca
 
   const older = pending.slice(0, cut);
   const beforeTokens = tokensOf(pending);
-  const result = await callModel({
-    temperature: 0.1,
-    max_tokens: 1600,
-    messages: [
-      { role: 'system', content: SUMMARY_SYSTEM },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          previous_memory: summary,
-          transcript: older.map((m) =>
-            m.attachments?.length
-              ? { ...m, attachments: m.attachments.map((a) => ({ name: a.name, type: a.type })) }
-              : toWire(m)
-          )
-        })
-      }
-    ]
-  });
-  const raw = result?.message?.content ?? result?.content ?? '';
-  const parsed = parseSummary(raw);
-  if (!parsed.summary) {
+  let nextSummary = '';
+  let parsedMemo = [];
+  try {
+    const result = await callModel({
+      temperature: 0.1,
+      max_tokens: 1600,
+      messages: [
+        { role: 'system', content: SUMMARY_SYSTEM },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            previous_memory: summary,
+            transcript: slimTranscriptForSummary(older)
+          })
+        }
+      ]
+    });
+    const raw = result?.message?.content ?? result?.content ?? '';
+    const parsed = parseSummary(raw);
+    nextSummary = parsed.summary || '';
+    parsedMemo = parsed.memo || [];
+  } catch {
+    nextSummary = '';
+  }
+  if (!nextSummary) {
+    nextSummary = buildDeterministicLocalSummary(summary, older);
+  }
+  if (!nextSummary) {
     return { compacted: false, summary, summaryUntil, keptMessages: pending.length };
   }
-  summary = redactSecrets(parsed.summary).slice(0, MAX_SUMMARY_CHARS);
+  summary = redactSecrets(nextSummary).slice(0, MAX_SUMMARY_CHARS);
   summaryUntil += cut;
   await saveSummary(env, conversation.owner, conversation.id, { summary, summaryUntil });
-  if (parsed.memo?.length && saveMemories) {
-    for (const memo of parsed.memo) {
+  if (parsedMemo.length && saveMemories) {
+    for (const memo of parsedMemo) {
       await saveMemories(memo).catch(() => {});
     }
   }
