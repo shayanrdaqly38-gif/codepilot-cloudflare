@@ -7,9 +7,11 @@ import { route, methodNotAllowed } from '../_lib/api.js';
 import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
 import { catalogModelsWithSpecs, fetchProviderModels, getModelReasoningSpec, parseProviderModelItem } from '../_lib/model.js';
 import {
+  getUserAgentConfig,
   getUserProviderSummary,
   isTookenUrl,
   resolveEffectiveEnv,
+  saveUserAgentConfig,
   saveUserProviderConfig
 } from '../_lib/provider.js';
 
@@ -33,7 +35,11 @@ async function buildModelsPayload(effectiveEnv, { force = false } = {}) {
 
   let defaultModel = String(effectiveEnv.MODEL_NAME || '').trim();
   if (!isTooken && (!defaultModel || (byId.size > 0 && !byId.has(defaultModel) && defaultModel === 'claude-sonnet-5-5'))) {
-    defaultModel = byId.keys().next().value || defaultModel || 'gpt-4o';
+    if (byId.has('deepseek-v4.1-flash')) {
+      defaultModel = 'deepseek-v4.1-flash';
+    } else {
+      defaultModel = byId.keys().next().value || defaultModel || 'gpt-4o';
+    }
   }
   if (!defaultModel) defaultModel = 'claude-sonnet-5-5';
 
@@ -56,9 +62,10 @@ export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
     const linux = linuxRunnerEnabled(env);
     const sb = sandboxEnabled(env);
-    const [effectiveEnv, provider] = await Promise.all([
+    const [effectiveEnv, provider, agentConfig] = await Promise.all([
       resolveEffectiveEnv(env, identity.owner),
-      getUserProviderSummary(env, identity.owner)
+      getUserProviderSummary(env, identity.owner),
+      getUserAgentConfig(env, identity.owner)
     ]);
     const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv);
 
@@ -69,11 +76,12 @@ export async function onRequestGet({ request, env }) {
       storage: 'd1',
       user: { email: identity.email, name: identity.name },
       provider,
+      agentConfig,
       model: defaultModel,
       modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
       modelsSource,
       models,
-      contextBudgetTokens: Number(env.CONTEXT_BUDGET_TOKENS) || 24000,
+      contextBudgetTokens: Number(effectiveEnv.CONTEXT_BUDGET_TOKENS || env.CONTEXT_BUDGET_TOKENS) || 24000,
       sandbox: sb,
       linuxRunner: linux,
       executionMode: realExecutionMode(env),
@@ -95,6 +103,9 @@ export async function onRequestGet({ request, env }) {
         autoCapabilityDiscovery: true,
         customProvider: true,
         modelPicker: true,
+        codexModes: true,
+        slashCommands: true,
+        agentsMd: true,
         realLogin: identity.via !== 'dev-fallback'
       }
     };
@@ -106,6 +117,27 @@ export async function onRequestPost({ request, env }) {
     request,
     env,
     async ({ identity, data }) => {
+      let agentConfig;
+      if (data?.agentConfig && typeof data.agentConfig === 'object') {
+        agentConfig = await saveUserAgentConfig(env, identity.owner, data.agentConfig);
+      }
+      const touchesProvider =
+        data?.reset !== undefined ||
+        data?.baseUrl !== undefined ||
+        data?.apiKey !== undefined ||
+        data?.clearKey !== undefined ||
+        data?.defaultModel !== undefined;
+
+      if (!touchesProvider && agentConfig) {
+        const provider = await getUserProviderSummary(env, identity.owner);
+        return {
+          ok: true,
+          provider,
+          agentConfig,
+          contextBudgetTokens: agentConfig.contextBudget
+        };
+      }
+
       const provider = await saveUserProviderConfig(env, identity.owner, {
         reset: Boolean(data?.reset),
         baseUrl: data?.baseUrl,
@@ -113,19 +145,23 @@ export async function onRequestPost({ request, env }) {
         clearKey: Boolean(data?.clearKey),
         defaultModel: data?.defaultModel
       });
+      if (!agentConfig) {
+        agentConfig = await getUserAgentConfig(env, identity.owner);
+      }
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
       const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv, { force: true });
 
       return {
         ok: true,
         provider,
+        agentConfig,
         model: defaultModel,
         modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
         modelsSource,
         models
       };
     },
-    { write: true, body: 16_000 }
+    { write: true, body: 24_000 }
   );
 }
 

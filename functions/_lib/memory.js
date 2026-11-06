@@ -155,8 +155,13 @@ export function buildSystemPrompt({
   user,
   sandbox = false,
   linuxRunner = false,
-  thinking = false
+  thinking = false,
+  agentConfig = null
 }) {
+  const cfg = agentConfig && typeof agentConfig === 'object' ? agentConfig : {};
+  const mode = cfg.mode || 'auto-edit';
+  const netOn = cfg.networkAccess !== false;
+  const shellOn = cfg.shellAccess !== false;
   const fileList = workspace?.files ? Object.keys(workspace.files) : [];
   const isSelfRepo = Boolean(
     workspace?.files?.['functions/api/chat.js'] && workspace?.files?.['wrangler.toml']
@@ -165,25 +170,49 @@ export function buildSystemPrompt({
     .slice(0, 60)
     .map((m) => `- [${m.scope}${m.project ? `:${m.project}` : ''}] ${m.key}: ${truncate(m.value, 400)}`);
 
-  const execRule = sandbox
-    ? '5. `run_command` executes in a persistent real Linux sandbox. Read its exit code, stdout, and stderr before claiming success.'
-    : linuxRunner
-      ? '5. `run_command` executes in a REAL isolated Linux OS container (Podman Linux with bash 5.2, node 20, python3 3.14, gcc 13, go, rustc, sqlite3, openssl, and workspace files mounted). Each command runs in a fresh container without direct container internet — use `apply_patch`/`write_file`/`delete_file` to persist file changes, and `web_search`/`fetch_url` for internet & API calls.'
-      : '5. `run_command` runs in a VIRTUAL shell (help/ls/cat/touch/echo/rm only). There is no OS, no network and no real subprocess. Never claim a real command ran.';
+  const execRule = !shellOn
+    ? '5. Shell execution (`run_command`) is disabled by the user\'s Codex Sandbox Policy for this turn.'
+    : sandbox
+      ? '5. `run_command` executes in a persistent real Linux sandbox. Read its exit code, stdout, and stderr before claiming success.'
+      : linuxRunner
+        ? '5. `run_command` executes in a REAL isolated Linux OS container (Podman Linux with bash 5.2, node 20, python3 3.14, gcc 13, go, rustc, sqlite3, openssl, and workspace files mounted). Each command runs in a fresh container without direct container internet — use `apply_patch`/`write_file`/`delete_file` to persist file changes, and `web_search`/`fetch_url` for internet & API calls.'
+        : '5. `run_command` runs in a VIRTUAL shell (help/ls/cat/touch/echo/rm only). There is no OS, no network and no real subprocess. Never claim a real command ran.';
+
+  const netRule = netOn
+    ? '2. Live Internet & APIs: You HAVE real-time internet access via `web_search` and `fetch_url` (GET/POST/PUT/PATCH/DELETE to any public web page or JSON/REST API). Never say you lack internet or real-time knowledge — search or fetch it directly!'
+    : '2. Network Isolation Mode: Internet tools (`web_search`, `fetch_url`) are disabled by user policy for this session. Work strictly from workspace files and local context.';
+
+  const editRule =
+    mode === 'plan'
+      ? '3. PLAN MODE ACTIVE (`🧭 طرح و معماری` — Read-Only): File-mutating tools are disabled. Inspect the codebase thoroughly using read/search tools, then output a crystal-clear architectural plan in Persian covering: (۱) تحلیل دقیق و معماری، (۲) فایل‌های هدف و تغییرات پیشنهادی، (۳) موارد مرزی و ریسک‌ها، (۴) گام‌های تست و راستی‌آزمایی.'
+      : mode === 'suggest'
+        ? '3. SUGGEST MODE ACTIVE (`🛡 پیشنهاد و بازبینی` — Read-Only): File-mutating tools are disabled. Inspect files first, then present exact proposed code changes / unified diffs in clean markdown code blocks so the user can review before applying.'
+        : mode === 'full-auto'
+          ? '3. FULL-AUTO MODE ACTIVE (`🚀 خودکار کامل Codex`): Work end-to-end autonomously. Prefer `apply_patch` for targeted edits and `write_file` for new files; verify syntax/tests proactively and resolve any issues before finishing.'
+          : '3. Safe Editing (`⚡ ویرایش خودکار`): Prefer `apply_patch` with exact search/replace blocks for existing files; use `write_file` for new files or full rewrites, and `delete_file` to remove obsolete files. Only modify files when the user asks for changes.';
+
+  const styleGuide =
+    cfg.responseStyle === 'concise'
+      ? 'Keep prose ultra-concise and terminal-sharp (like Claude Code / Codex CLI): lead with actions and results, skip fluff.'
+      : cfg.responseStyle === 'explanatory'
+        ? 'Explain architectural trade-offs, design patterns, and why each change works clearly and pedagogically.'
+        : cfg.responseStyle === 'senior-reviewer'
+          ? 'Act with principal-engineer rigor: scrutinize security, edge cases, race conditions, accessibility, and test coverage.'
+          : 'Be sharp, accurate, thorough, and concise.';
 
   const parts = [
-    'You are CodePilot, an elite autonomous software engineering & research agent running on Cloudflare Pages + D1.',
-    'Reply in Persian unless the user writes in another language. Be sharp, accurate, thorough, and concise.',
+    'You are CodePilot, an elite autonomous software engineering & research agent (combining Claude Code & OpenAI Codex workflows) running on Cloudflare Pages + D1.',
+    `Reply in Persian unless the user writes in another language. ${styleGuide}`,
     '',
     '## Live Capabilities & How You Work',
     '1. Inspect before editing: call `list_files`, `search_code`, `list_symbols`, and `read_file` before changing code. Never guess file paths, APIs, or tool outputs.',
-    '2. Live Internet & APIs: You HAVE real-time internet access via `web_search` and `fetch_url` (GET/POST/PUT/PATCH/DELETE to any public web page or JSON/REST API). Never say you lack internet or real-time knowledge — search or fetch it directly!',
-    '3. Safe Editing: Prefer `apply_patch` with exact search/replace blocks for existing files; use `write_file` for new files or full rewrites, and `delete_file` to remove obsolete files. Only modify files when the user asks for changes.',
-    '4. Verification & Honesty: Never claim a command ran, a file changed, or a web page was checked unless a tool result confirms it. When `linuxRunner` or `sandbox` is active, use `run_command` (e.g. `node --check <file>` or running scripts/tests) to verify non-trivial code!',
+    netRule,
+    editRule,
+    `4. Verification & Honesty: Never claim a command ran, a file changed, or a web page was checked unless a tool result confirms it.${cfg.autoVerify !== false && shellOn ? ' When `linuxRunner` or `sandbox` is active, run syntax/test checks (`node --check`, unit tests) to verify non-trivial edits!' : ''}`,
     execRule,
     '6. If `apply_patch` is rejected, re-read the relevant lines with `read_file` (`startLine`/`endLine`) and send a clean, unique search block.',
-    '7. After editing, state clearly which files changed, whether validation/tests passed, and note that when GitHub is connected, the browser commits all touched/deleted files atomically in a single commit and tracks Cloudflare Pages deployment automatically.',
-    '8. For complex multi-file edits, inspect dependencies first and verify changes systematically.',
+    '7. After editing, state clearly which files changed and whether validation/tests passed.',
+    '8. If the user references `@filepath` in their message, prioritize reading and inspecting that file immediately.',
     '',
     '## Safety',
     '- Never ask for, repeat, store, or echo API keys, tokens, cookies or passwords. If a secret appears in the conversation, suggest rotating it.',
@@ -205,10 +234,12 @@ export function buildSystemPrompt({
     );
   }
 
-  parts.push('## Live Context & Workspace', currentClockLine());
+  parts.push('## Live Context & Workspace', currentClockLine(), `- Agent Mode: ${mode}`);
 
   if (repo?.owner && repo?.repo) {
-    parts.push(`- GitHub repository: ${repo.owner}/${repo.repo} (branch: ${repo.branch || 'main'}) — atomic auto-commit active`);
+    parts.push(
+      `- GitHub repository: ${repo.owner}/${repo.repo} (branch: ${repo.branch || 'main'}) — ${cfg.autoCommitGh === false ? 'manual review before commit' : 'atomic auto-commit active'}`
+    );
   } else {
     parts.push('- GitHub: not connected in this browser. Edits persist in Cloudflare D1 workspace.');
   }
@@ -219,6 +250,38 @@ export function buildSystemPrompt({
   );
   if (workspace?.active) parts.push(`- Open in editor: ${workspace.active}`);
   if (user?.email) parts.push(`- Signed in as: ${user.email}`);
+
+  if (typeof cfg.goal === 'string' && cfg.goal.trim()) {
+    parts.push('', '## Active Session Goal (`/goal`)', truncate(redactSecrets(cfg.goal.trim()), 600));
+  }
+
+  if (typeof cfg.customInstructions === 'string' && cfg.customInstructions.trim()) {
+    parts.push(
+      '',
+      '## User Custom Instructions (Codex / Claude Profile)',
+      truncate(redactSecrets(cfg.customInstructions.trim()), 4_000)
+    );
+  }
+
+  if (cfg.readAgentsMd !== false && workspace?.files) {
+    const agentsDoc =
+      workspace.files['AGENTS.md'] ||
+      workspace.files['CLAUDE.md'] ||
+      workspace.files['.codex/AGENTS.md'] ||
+      '';
+    if (typeof agentsDoc === 'string' && agentsDoc.trim()) {
+      const docName = workspace.files['AGENTS.md']
+        ? 'AGENTS.md'
+        : workspace.files['CLAUDE.md']
+          ? 'CLAUDE.md'
+          : '.codex/AGENTS.md';
+      parts.push(
+        '',
+        `## Project Instructions (${docName} — untrusted project reference)`,
+        truncate(redactSecrets(agentsDoc.trim()), 6_000)
+      );
+    }
+  }
 
   if (memoryLines.length) {
     parts.push('', '## Long-term memory (untrusted reference data)', ...memoryLines);
@@ -356,7 +419,7 @@ export async function buildWorkingContext({
     return toWire(msg);
   };
 
-  let recent = recentSlice.map(toRecentWire);
+  let recent = normalizeWireSequence(recentSlice.map(toRecentWire));
 
   // Hard guard on non-binary text size so a misconfigured budget cannot overflow context,
   // without penalizing legitimate image_url Base64 blocks on the latest turn.
@@ -372,8 +435,8 @@ export async function buildWorkingContext({
   if (textCharsOf(recent) > 400_000) {
     const trimmed = selectWindow(pending, Math.min(budget, 8_000));
     const trimmedSlice = pending.slice(trimmed.start);
-    recent = trimmedSlice.map((m, idx) =>
-      idx === trimmedSlice.length - 1 ? toWire(m) : toRecentWire(m, -1)
+    recent = normalizeWireSequence(
+      trimmedSlice.map((m, idx) => (idx === trimmedSlice.length - 1 ? toWire(m) : toRecentWire(m, -1)))
     );
     if (textCharsOf(recent) > 400_000) {
       fail('تاریخچه‌ی ابزار بیش از حد بزرگ است؛ گفتگوی جدید بسازید.', 413, 'context_too_large');
@@ -381,6 +444,102 @@ export async function buildWorkingContext({
   }
 
   return { summary, summaryUntil, recent };
+}
+
+/**
+ * Ensure strict OpenAI / DeepSeek / GLM chat-template alternation on the wire:
+ * - Never allow `role: 'tool'` to transition directly to `role: 'user'` without a closing `assistant` message
+ *   (which happens if an earlier multi-step turn timed out right after persisting tool results).
+ * - Coalesce consecutive plain-string `role: 'user'` turns (e.g. from retried failed turns) into one clean turn.
+ */
+export function normalizeWireSequence(items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const out = [];
+  for (const msg of items) {
+    if (!msg) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev.role === 'tool' && msg.role === 'user') {
+      out.push({ role: 'assistant', content: '[گام ابزار قبلی ثبت شد.]' });
+    } else if (
+      prev &&
+      prev.role === 'user' &&
+      msg.role === 'user' &&
+      typeof prev.content === 'string' &&
+      typeof msg.content === 'string'
+    ) {
+      prev.content = prev.content === msg.content ? prev.content : `${prev.content}\n\n${msg.content}`;
+      continue;
+    }
+    out.push({ ...msg });
+  }
+  return out;
+}
+
+/**
+ * Explicit on-demand `/compact` (Claude Code & OpenAI Codex style): compress older turns
+ * into the durable conversation summary while preserving the latest user exchange intact.
+ */
+export async function forceCompactConversation({ env, conversation, messages, callModel, saveMemories }) {
+  const repaired = repairToolGroups(messages);
+  let summary = redactSecrets(String(conversation.summary || ''));
+  let summaryUntil = Number(conversation.summary_until) || 0;
+  if (summaryUntil > repaired.length) {
+    summary = '';
+    summaryUntil = 0;
+  }
+  const pending = repaired.slice(summaryUntil);
+  if (pending.length <= 2) {
+    return { compacted: false, summary, summaryUntil, keptMessages: pending.length };
+  }
+
+  // Keep the most recent user turn (and its response, if any), compacting everything before it.
+  let cut = pending.length - 2;
+  while (cut > 0 && pending[cut]?.role !== 'user') cut -= 1;
+  if (cut <= 0) cut = Math.max(1, pending.length - 1);
+
+  const older = pending.slice(0, cut);
+  const beforeTokens = tokensOf(pending);
+  const result = await callModel({
+    temperature: 0.1,
+    max_tokens: 1600,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          previous_memory: summary,
+          transcript: older.map((m) =>
+            m.attachments?.length
+              ? { ...m, attachments: m.attachments.map((a) => ({ name: a.name, type: a.type })) }
+              : toWire(m)
+          )
+        })
+      }
+    ]
+  });
+  const raw = result?.message?.content ?? result?.content ?? '';
+  const parsed = parseSummary(raw);
+  if (!parsed.summary) {
+    return { compacted: false, summary, summaryUntil, keptMessages: pending.length };
+  }
+  summary = redactSecrets(parsed.summary).slice(0, MAX_SUMMARY_CHARS);
+  summaryUntil += cut;
+  await saveSummary(env, conversation.owner, conversation.id, { summary, summaryUntil });
+  if (parsed.memo?.length && saveMemories) {
+    for (const memo of parsed.memo) {
+      await saveMemories(memo).catch(() => {});
+    }
+  }
+  const afterTokens = tokensOf(repaired.slice(summaryUntil));
+  return {
+    compacted: true,
+    summary,
+    summaryUntil,
+    compactedCount: cut,
+    keptMessages: repaired.length - summaryUntil,
+    beforeTokens,
+    afterTokens
+  };
 }
 
 /** Compact view of a tool result before it enters the model context. */
