@@ -396,6 +396,7 @@ function parseProviderUsageObject(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : raw;
   const totalsObj =
+    (obj.activity30d && typeof obj.activity30d === 'object' ? obj.activity30d : null) ||
     (obj.totals && typeof obj.totals === 'object' ? obj.totals : null) ||
     (obj.summary && typeof obj.summary === 'object' ? obj.summary : null) ||
     (obj.usage && typeof obj.usage === 'object' ? obj.usage : null);
@@ -403,30 +404,45 @@ function parseProviderUsageObject(raw) {
   const promptTokens = firstNum(
     obj.prompt_tokens,
     obj.input_tokens,
+    obj.inputTokens,
     obj.total_prompt_tokens,
     obj.total_input_tokens,
     totalsObj?.prompt_tokens,
-    totalsObj?.input_tokens
+    totalsObj?.input_tokens,
+    totalsObj?.inputTokens
   );
   const completionTokens = firstNum(
     obj.completion_tokens,
     obj.output_tokens,
+    obj.outputTokens,
     obj.total_completion_tokens,
     obj.total_output_tokens,
     totalsObj?.completion_tokens,
-    totalsObj?.output_tokens
+    totalsObj?.output_tokens,
+    totalsObj?.outputTokens
+  );
+  const cacheReadTokens = firstNum(
+    obj.cache_read_input_tokens,
+    obj.cacheReadInputTokens,
+    obj.cached_tokens,
+    totalsObj?.cache_read_input_tokens,
+    totalsObj?.cacheReadInputTokens,
+    totalsObj?.cached_tokens
   );
   const reasoningTokens = firstNum(
     obj.reasoning_tokens,
     obj.total_reasoning_tokens,
-    totalsObj?.reasoning_tokens
+    totalsObj?.reasoning_tokens,
+    totalsObj?.reasoningTokens
   );
   const totalTokens = firstNum(
     obj.total_tokens,
+    obj.totalTokens,
     obj.tokens_used,
     obj.used_tokens,
     obj.tokens,
     totalsObj?.total_tokens,
+    totalsObj?.totalTokens,
     totalsObj?.tokens,
     promptTokens !== null || completionTokens !== null
       ? (promptTokens || 0) + (completionTokens || 0) + (reasoningTokens || 0)
@@ -438,6 +454,7 @@ function parseProviderUsageObject(raw) {
     obj.request_count,
     obj.count,
     totalsObj?.requests,
+    totalsObj?.modelRequests,
     totalsObj?.total_requests,
     totalsObj?.count
   );
@@ -445,19 +462,23 @@ function parseProviderUsageObject(raw) {
     obj.total_cost,
     obj.cost,
     obj.spent,
+    obj.spend,
     obj.total_spent,
     obj.total_usage_usd,
     totalsObj?.total_cost,
     totalsObj?.cost,
-    totalsObj?.spent
+    totalsObj?.spent,
+    totalsObj?.spend
   );
-  const currency = String(obj.currency || totalsObj?.currency || '').trim().toUpperCase() || null;
+  const currency =
+    String(obj.currency || obj.billing?.currency || totalsObj?.currency || '').trim().toUpperCase() || null;
 
   if (totalTokens === null && requests === null && totalCost === null) return null;
   return {
     ...(totalTokens !== null ? { totalTokens: Math.round(totalTokens) } : {}),
     ...(promptTokens !== null ? { promptTokens: Math.round(promptTokens) } : {}),
     ...(completionTokens !== null ? { completionTokens: Math.round(completionTokens) } : {}),
+    ...(cacheReadTokens !== null ? { cacheReadTokens: Math.round(cacheReadTokens) } : {}),
     ...(reasoningTokens !== null ? { reasoningTokens: Math.round(reasoningTokens) } : {}),
     ...(requests !== null ? { requests: Math.round(requests) } : {}),
     ...(totalCost !== null ? { totalCost: Number(totalCost.toFixed(6)) } : {}),
@@ -484,6 +505,90 @@ function parseQuotaFromObject(raw, sourceLabel = 'provider', defaultCurrency = '
     (toNum(obj.hard_limit_usd) !== null && toNum(obj.hard_limit_usd) >= 99_999_999)
   ) {
     return { supported: true, unlimited: true, source: sourceLabel };
+  }
+
+  // 1b. Zro by MoonMath (`/api/cli/status` — supports both nested `billing.*` and top-level `freeUsage`/`spendQuota`/`usagePacks`)
+  if (
+    (obj.billing && typeof obj.billing === 'object') ||
+    (obj.freeUsage && typeof obj.freeUsage === 'object') ||
+    (obj.spendQuota && typeof obj.spendQuota === 'object')
+  ) {
+    const b = obj.billing && typeof obj.billing === 'object' ? obj.billing : {};
+    const cur = String(b.currency || obj.currency || defaultCurrency).trim().toUpperCase();
+    const planObj = b.plan && typeof b.plan === 'object' ? b.plan : null;
+    const planStrRaw =
+      typeof obj.plan === 'string'
+        ? obj.plan
+        : typeof b.plan === 'string'
+          ? b.plan
+          : typeof planObj?.id === 'string'
+            ? planObj.id
+            : '';
+    const planName = planStrRaw ? planStrRaw.trim().toLowerCase().slice(0, 32) : '';
+
+    const packsObj =
+      (b.usagePacks && typeof b.usagePacks === 'object' ? b.usagePacks : null) ||
+      (obj.usagePacks && typeof obj.usagePacks === 'object' ? obj.usagePacks : null);
+    const freeObj =
+      (b.free && typeof b.free === 'object' ? b.free : null) ||
+      (obj.freeUsage && typeof obj.freeUsage === 'object' ? obj.freeUsage : null);
+    const spendObj = obj.spendQuota && typeof obj.spendQuota === 'object' ? obj.spendQuota : null;
+    const act = obj.activity30d && typeof obj.activity30d === 'object' ? obj.activity30d : null;
+
+    const freeRemPct = toNum(freeObj?.remainingPercent ?? freeObj?.remaining_percent);
+    const freeResetsAt =
+      typeof freeObj?.windowResetsAt === 'string'
+        ? freeObj.windowResetsAt.slice(0, 40)
+        : typeof freeObj?.resetsAt === 'string'
+          ? freeObj.resetsAt.slice(0, 40)
+          : null;
+
+    const packsRem = toNum(packsObj?.remainingUsd ?? packsObj?.remaining);
+    const spendRem = toNum(spendObj?.remainingUsd ?? spendObj?.remaining ?? planObj?.remaining);
+    const explicitTotalRem = toNum(b.totalRemaining ?? b.total_remaining);
+    const totalRem =
+      explicitTotalRem !== null
+        ? explicitTotalRem
+        : spendRem !== null || packsRem !== null
+          ? (spendRem || 0) + (packsRem || 0)
+          : null;
+
+    const planLim = toNum(spendObj?.limitUsd ?? planObj?.allowance ?? freeObj?.limitUsd) || 0;
+    const packsLim = toNum(packsObj?.totalUsd ?? packsObj?.total) || 0;
+    const totalLim = planLim + packsLim;
+
+    const planUsed = toNum(spendObj?.usedUsd ?? planObj?.used ?? freeObj?.usedUsd) || 0;
+    const packsUsed = toNum(packsObj?.usedUsd ?? packsObj?.used) || 0;
+    const actSpend = toNum(act?.spend);
+    const totalUsedMoney = planUsed + packsUsed > 0 ? planUsed + packsUsed : actSpend;
+    const usedTok30d = firstNum(
+      act?.totalTokens,
+      act?.total_tokens,
+      act && (toNum(act.inputTokens) !== null || toNum(act.outputTokens) !== null)
+        ? (toNum(act.inputTokens) || 0) + (toNum(act.outputTokens) || 0)
+        : null
+    );
+
+    if (totalRem !== null || freeRemPct !== null || planObj !== null || planName) {
+      return {
+        supported: true,
+        unlimited: false,
+        ...(planName ? { plan: planName } : {}),
+        ...(freeRemPct !== null
+          ? { remainingPercent: Math.max(0, Math.min(100, Number(freeRemPct.toFixed(1)))) }
+          : {}),
+        ...(freeResetsAt ? { windowResetsAt: freeResetsAt } : {}),
+        ...(totalRem !== null && totalRem >= 0 ? { remainingBalance: Number(totalRem.toFixed(4)) } : {}),
+        ...(packsRem !== null && packsRem > 0 ? { packsRemainingUsd: Number(packsRem.toFixed(4)) } : {}),
+        ...(totalLim > 0 ? { limitBalance: Number(totalLim.toFixed(4)) } : {}),
+        ...(totalUsedMoney !== null && totalUsedMoney >= 0
+          ? { usedBalance: Number(totalUsedMoney.toFixed(4)) }
+          : {}),
+        ...(usedTok30d !== null && usedTok30d >= 0 ? { usedTokens: Math.floor(usedTok30d) } : {}),
+        currency: cur || 'USD',
+        source: sourceLabel
+      };
+    }
   }
 
   // 2. DeepSeek `/user/balance` format (`balance_infos: [{ currency, total_balance }]`)
@@ -845,6 +950,12 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
     const dsJson = await safeGetJson(`${originUrl}/user/balance`, '/user/balance');
     rawMetrics = extractSafeMetrics(dsJson);
     result = parseQuotaFromObject(dsJson, 'api.deepseek.com/user/balance', 'USD');
+  } else if (lowerBase.includes('moonmath.ai')) {
+    // Zro by MoonMath (`https://zro.moonmath.ai/api/cli/status`)
+    const cliStatusJson = await safeGetJson(`${originUrl}/api/cli/status`, '/api/cli/status');
+    rawMetrics = extractSafeMetrics(cliStatusJson);
+    providerUsage = parseProviderUsageObject(cliStatusJson);
+    result = parseQuotaFromObject(cliStatusJson, `${hostName}/api/cli/status`, 'USD');
   } else if (lowerBase.includes('tooken.club')) {
     // Native Tooken Club live balance & usage endpoints (`/v1/balance` + `/v1/usage`)
     const [v1BalanceJson, v1UsageJson] = await Promise.all([
@@ -858,24 +969,34 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
       result.usedTokens = providerUsage.totalTokens;
     }
   } else {
-    // Universal probe for OneAPI/NewAPI, LiteLLM, Tooken-like `/v1/balance`, and OpenAI-compatible gateways
+    // Universal probe for OneAPI/NewAPI, LiteLLM, Zro-compatible `/api/cli/status`, Tooken-like `/v1/balance`, and OpenAI gateways
     const now = new Date();
     const start = new Date(now.getTime() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10);
     const end = new Date(now.getTime() + 24 * 3600 * 1000).toISOString().slice(0, 10);
 
-    const [v1BalanceJson, v1UsageJson, tokenUsageJson, subJson, billUsageJson, creditGrantsJson, keyInfoJson] =
-      await Promise.all([
-        safeGetJson(`${baseUrl}/balance`, '/v1/balance'),
-        safeGetJson(`${baseUrl}/usage`, '/v1/usage'),
-        safeGetJson(`${originUrl}/api/usage/token`, '/api/usage/token'),
-        safeGetJson(`${baseUrl}/dashboard/billing/subscription`, '/dashboard/billing/subscription'),
-        safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`, '/dashboard/billing/usage'),
-        safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`, '/dashboard/billing/credit_grants'),
-        safeGetJson(`${originUrl}/key/info`, '/key/info')
-      ]);
+    const [
+      cliStatusJson,
+      v1BalanceJson,
+      v1UsageJson,
+      tokenUsageJson,
+      subJson,
+      billUsageJson,
+      creditGrantsJson,
+      keyInfoJson
+    ] = await Promise.all([
+      safeGetJson(`${originUrl}/api/cli/status`, '/api/cli/status'),
+      safeGetJson(`${baseUrl}/balance`, '/v1/balance'),
+      safeGetJson(`${baseUrl}/usage`, '/v1/usage'),
+      safeGetJson(`${originUrl}/api/usage/token`, '/api/usage/token'),
+      safeGetJson(`${baseUrl}/dashboard/billing/subscription`, '/dashboard/billing/subscription'),
+      safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`, '/dashboard/billing/usage'),
+      safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`, '/dashboard/billing/credit_grants'),
+      safeGetJson(`${originUrl}/key/info`, '/key/info')
+    ]);
 
-    providerUsage = parseProviderUsageObject(v1UsageJson);
+    providerUsage = parseProviderUsageObject(cliStatusJson) || parseProviderUsageObject(v1UsageJson);
     rawMetrics =
+      extractSafeMetrics(cliStatusJson) ||
       extractSafeMetrics(v1BalanceJson) ||
       extractSafeMetrics(tokenUsageJson) ||
       extractSafeMetrics(subJson) ||
@@ -883,6 +1004,7 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
       extractSafeMetrics(keyInfoJson);
 
     result =
+      parseQuotaFromObject(cliStatusJson, `${hostName}/api/cli/status`, 'USD') ||
       parseQuotaFromObject(v1BalanceJson, `${hostName}/v1/balance`, 'USD') ||
       parseQuotaFromObject(tokenUsageJson, `${hostName}/api/usage/token`, 'USD');
 
@@ -1249,6 +1371,7 @@ export function parseProviderModelItem(item, options = {}) {
         item.input_token_limit ??
         item.context_length ??
         item.context_window ??
+        item.contextWindow ??
         topProvider.context_length ??
         limits.input ??
         limits.context ??
@@ -1260,6 +1383,8 @@ export function parseProviderModelItem(item, options = {}) {
   const maxOutputTokens =
     Number(
       item.max_output_tokens ??
+        item.maxOutputTokens ??
+        item.max_output_length ??
         item.max_completion_tokens ??
         item.output_token_limit ??
         topProvider.max_completion_tokens ??
@@ -1275,6 +1400,7 @@ export function parseProviderModelItem(item, options = {}) {
     item.supports_vision ??
     caps.vision ??
     (Array.isArray(item.input_modalities) ? item.input_modalities.includes('image') : undefined) ??
+    (Array.isArray(item.modalities?.input) ? item.modalities.input.includes('image') : undefined) ??
     (Array.isArray(arch.input_modalities) ? arch.input_modalities.includes('image') : undefined) ??
     (modalityStr ? modalityStr.includes('image') : undefined);
   const vision = typeof visionRaw === 'boolean' ? visionRaw : (base?.vision ?? null);
@@ -1288,8 +1414,10 @@ export function parseProviderModelItem(item, options = {}) {
     (supportedParams ? supportedParams.includes('tools') || supportedParams.includes('tool_choice') : undefined);
   const tools = typeof toolsRaw === 'boolean' ? toolsRaw : (base?.tools ?? true);
 
-  const defaultEffort = pickDefaultEffort(id, levels, base?.defaultEffort);
+  const preferredDefault = normalizeEffortToken(item.reasoning?.defaultLevel || item.default_effort) || base?.defaultEffort;
+  const defaultEffort = pickDefaultEffort(id, levels, preferredDefault);
   const title =
+    (typeof item.displayName === 'string' && item.displayName.trim()) ||
     (typeof item.name === 'string' && item.name.trim()) ||
     (typeof item.title === 'string' && item.title.trim()) ||
     (typeof item.display_name === 'string' && item.display_name.trim()) ||
@@ -1482,6 +1610,22 @@ export async function fetchProviderModels(env, { force = false } = {}) {
   }
 
   let response;
+  let cliModelsPromise = null;
+  if (!isTooken && /moonmath\.ai/i.test(baseUrl)) {
+    try {
+      const originUrl = new URL(baseUrl).origin;
+      cliModelsPromise = fetch(`${originUrl}/api/cli/models`, {
+        headers: { Authorization: `Bearer ${env.MODEL_API_KEY}`, Accept: 'application/json' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5_000)
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+    } catch {
+      cliModelsPromise = null;
+    }
+  }
+
   try {
     response = await fetch(`${baseUrl}/models`, {
       headers: { Authorization: `Bearer ${env.MODEL_API_KEY}`, Accept: 'application/json' },
@@ -1501,9 +1645,30 @@ export async function fetchProviderModels(env, { force = false } = {}) {
   const rawList = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : null;
   if (!rawList) fail('فهرست مدل‌ها نامعتبر است.', 502, 'models_bad_response');
 
+  const cliCatalog = cliModelsPromise ? await cliModelsPromise : null;
+  const cliById = new Map();
+  const cliOrderIds = [];
+  if (typeof cliCatalog?.default === 'string' && cliCatalog.default) {
+    cliOrderIds.push(cliCatalog.default);
+  }
+  if (Array.isArray(cliCatalog?.models)) {
+    for (const cm of cliCatalog.models) {
+      if (cm?.id) {
+        cliById.set(cm.id, cm);
+        cliById.set(`zro/${cm.id}`, cm);
+        if (!cliOrderIds.includes(cm.id)) cliOrderIds.push(cm.id);
+      }
+    }
+  }
+
   const byId = new Map();
   for (const rawItem of rawList.slice(0, 600)) {
-    const parsed = parseProviderModelItem(typeof rawItem === 'string' ? { id: rawItem } : rawItem, {
+    const baseObj = typeof rawItem === 'string' ? { id: rawItem } : rawItem;
+    const rich =
+      baseObj?.id && cliById.has(baseObj.id)
+        ? { ...cliById.get(baseObj.id), ...baseObj, id: baseObj.id, featured: !String(baseObj.id).startsWith('zro/') }
+        : baseObj;
+    const parsed = parseProviderModelItem(rich, {
       isTooken,
       discoveredMap: env._discoveredSpecs
     });
@@ -1515,6 +1680,12 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     for (const cat of MODEL_CATALOG) {
       if (byId.has(cat.id)) ordered.push(byId.get(cat.id));
     }
+  } else if (cliOrderIds.length) {
+    for (const cid of cliOrderIds) {
+      if (byId.has(cid)) ordered.push(byId.get(cid));
+    }
+  } else if (byId.has('deepseek-v4.1-flash')) {
+    ordered.push(byId.get('deepseek-v4.1-flash'));
   }
   const rest = [...byId.values()]
     .filter((m) => !ordered.some((o) => o.id === m.id))
@@ -1865,10 +2036,124 @@ function extractReasoningAndText(message) {
   };
 }
 
+function extractSafeUpstreamError(errText, secrets = []) {
+  if (!errText) return '';
+  let msg = '';
+  try {
+    const parsed = JSON.parse(errText);
+    msg =
+      parsed?.error?.message ||
+      parsed?.message ||
+      (typeof parsed?.error === 'string' ? parsed.error : '') ||
+      '';
+  } catch {
+    msg = '';
+  }
+  const clean = stripSecrets(String(msg || '').replace(/\s+/g, ' ').trim(), secrets).slice(0, 180);
+  if (!clean || /^</.test(clean)) return '';
+  return clean;
+}
+
+async function consumeChatSseResponse(response, onDelta) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return null;
+  const dec = new TextDecoder();
+  let buf = '';
+  let outModel = '';
+  let finishReason = 'stop';
+  let contentAcc = '';
+  let reasoningAcc = '';
+  let usageObj = null;
+  const toolMap = new Map();
+
+  const handleDataLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) return;
+    const payloadStr = line.slice(5).trim();
+    if (!payloadStr || payloadStr === '[DONE]') return;
+    let evt;
+    try {
+      evt = JSON.parse(payloadStr);
+    } catch {
+      return;
+    }
+    if (evt?.model) outModel = String(evt.model);
+    if (evt?.usage && typeof evt.usage === 'object') usageObj = evt.usage;
+    const choice = evt?.choices?.[0];
+    if (!choice) return;
+    if (choice.finish_reason) finishReason = String(choice.finish_reason);
+    const d = choice.delta || choice.message || {};
+
+    if (typeof d.content === 'string' && d.content) {
+      contentAcc += d.content;
+      if (typeof onDelta === 'function') {
+        try { onDelta({ type: 'content', text: d.content }); } catch { /* ignore */ }
+      }
+    }
+    const rChunk =
+      (typeof d.reasoning_content === 'string' && d.reasoning_content) ||
+      (typeof d.reasoning === 'string' && d.reasoning) ||
+      (typeof d.thinking === 'string' && d.thinking) ||
+      '';
+    if (rChunk) {
+      reasoningAcc += rChunk;
+      if (typeof onDelta === 'function') {
+        try { onDelta({ type: 'reasoning', text: rChunk }); } catch { /* ignore */ }
+      }
+    }
+    if (Array.isArray(d.tool_calls)) {
+      for (const tc of d.tool_calls) {
+        const idx = Number.isInteger(tc?.index) ? tc.index : toolMap.size;
+        const prev = toolMap.get(idx) || { id: '', type: 'function', function: { name: '', arguments: '' } };
+        if (typeof tc.id === 'string' && tc.id) prev.id = tc.id;
+        if (typeof tc.function?.name === 'string' && tc.function.name) prev.function.name += tc.function.name;
+        if (typeof tc.function?.arguments === 'string' && tc.function.arguments) {
+          prev.function.arguments += tc.function.arguments;
+        }
+        toolMap.set(idx, prev);
+      }
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nlIdx;
+    while ((nlIdx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nlIdx);
+      buf = buf.slice(nlIdx + 1);
+      handleDataLine(line);
+    }
+  }
+  if (buf.trim()) handleDataLine(buf);
+
+  const toolCalls = [...toolMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => v);
+
+  return {
+    model: outModel,
+    choices: [
+      {
+        finish_reason: finishReason,
+        message: {
+          role: 'assistant',
+          content: contentAcc,
+          ...(reasoningAcc ? { reasoning_content: reasoningAcc } : {}),
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+        }
+      }
+    ],
+    ...(usageObj ? { usage: usageObj } : {})
+  };
+}
+
 /**
  * POST a Chat Completions request using the model's genuine `reasoning_effort`,
  * with automatic runtime self-learning if a new/external model reports different
- * allowed `reasoning_effort` values.
+ * allowed `reasoning_effort` values, and upstream SSE streaming in production so
+ * large edits never hit non-streaming proxy timeouts.
  */
 export async function callModel(env, payload) {
   if (!env.MODEL_API_KEY) {
@@ -1876,7 +2161,17 @@ export async function callModel(env, payload) {
   }
   const endpoint = modelEndpoint(env);
   const baseUrl = endpoint.replace(/\/chat\/completions$/, '');
-  const defaultModel = String(env.MODEL_NAME || 'claude-sonnet-5-5');
+  const isTooken = isTookenUrl(baseUrl);
+  let resolvedLiveDefault = '';
+  if (!payload.model && !env.MODEL_NAME && !isTooken) {
+    try {
+      const liveModels = await fetchProviderModels(env);
+      if (liveModels.length) resolvedLiveDefault = liveModels[0].id;
+    } catch {
+      resolvedLiveDefault = '';
+    }
+  }
+  const defaultModel = resolvedLiveDefault || String(env.MODEL_NAME || 'claude-sonnet-5-5');
   const requestedModel = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
   const requestedEffort = normalizeReasoningEffort(payload.reasoningEffort, requestedModel, payload.thinking, env);
   const deepTimeout =
@@ -1884,7 +2179,11 @@ export async function callModel(env, payload) {
       ? 150_000
       : DEFAULT_TIMEOUT_MS;
   const timeout = Math.min(Number(env.MODEL_TIMEOUT_MS) || deepTimeout, 160_000);
-  const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off' && isTookenUrl(baseUrl);
+  const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off' && isTooken;
+  const useUpstreamStream =
+    payload.upstreamStream === true ||
+    (payload.upstreamStream !== false && /moonmath\.ai/i.test(baseUrl)) ||
+    (payload.upstreamStream !== false && Boolean(env.CF_PAGES) && typeof payload.onDelta === 'function');
   const candidates = [requestedModel];
   if (allowFailover) {
     for (const candidate of FALLBACK_MODELS) {
@@ -1896,6 +2195,7 @@ export async function callModel(env, payload) {
   let activeMessages = payload.messages;
   let downgradedOnce = false;
   let lastStatus = 0;
+  let lastErrDetail = '';
 
   for (let cIndex = 0; cIndex < candidates.length; cIndex += 1) {
     const model = candidates[cIndex];
@@ -1912,7 +2212,8 @@ export async function callModel(env, payload) {
       const currentVariant = wireVariants[variantIdx];
       const body = JSON.stringify({
         model,
-        stream: false,
+        stream: useUpstreamStream,
+        ...(useUpstreamStream ? { stream_options: { include_usage: true } } : {}),
         ...currentVariant.params,
         messages: activeMessages,
         ...(payload.tools && payload.tools.length
@@ -1929,7 +2230,7 @@ export async function callModel(env, payload) {
           headers: {
             Authorization: `Bearer ${env.MODEL_API_KEY}`,
             'Content-Type': 'application/json',
-            Accept: 'application/json'
+            Accept: useUpstreamStream ? 'text/event-stream, application/json' : 'application/json'
           },
           body
         });
@@ -1952,8 +2253,13 @@ export async function callModel(env, payload) {
 
       if (response.ok) {
         let data;
+        const ct = String(response.headers?.get?.('content-type') || '').toLowerCase();
         try {
-          data = await response.json();
+          if (ct.includes('text/event-stream')) {
+            data = await consumeChatSseResponse(response, payload.onDelta);
+          } else {
+            data = await response.json();
+          }
         } catch {
           fail('پاسخ مدل قابل خواندن نبود.', 502, 'model_bad_response');
         }
@@ -1994,8 +2300,8 @@ export async function callModel(env, payload) {
             ...(toolCalls.length ? { tool_calls: toolCalls } : {})
           },
           usage: {
-            prompt_tokens: Number(data?.usage?.prompt_tokens) || 0,
-            completion_tokens: Number(data?.usage?.completion_tokens) || 0,
+            prompt_tokens: Number(data?.usage?.prompt_tokens ?? data?.usage?.input_tokens) || 0,
+            completion_tokens: Number(data?.usage?.completion_tokens ?? data?.usage?.output_tokens) || 0,
             reasoning_tokens: reasoningTokens
           }
         };
@@ -2003,10 +2309,12 @@ export async function callModel(env, payload) {
 
       const status = response.status;
       lastStatus = status;
+      const errText = await response.text().catch(() => '');
+      const safeDetail = extractSafeUpstreamError(errText, envSecrets(env));
+      if (safeDetail) lastErrDetail = safeDetail;
 
       // Runtime self-learning & seamless fallback when a model rejects a reasoning_effort value
       if ((status === 400 || status === 422) && currentVariant.effort !== null) {
-        const errText = await response.text().catch(() => '');
         const signal = parseErrorReasoningSignal(errText, currentVariant.effort);
 
         if (signal.type === 'unsupported') {
@@ -2062,7 +2370,11 @@ export async function callModel(env, payload) {
         }
       }
 
-      if ((status === 429 || status === 500 || status === 502 || status === 503 || status === 504) && statusRetries === 0 && cIndex === 0) {
+      if (
+        (status === 408 || status === 429 || status === 499 || status === 500 || status === 502 || status === 503 || status === 504) &&
+        statusRetries === 0 &&
+        cIndex === 0
+      ) {
         statusRetries += 1;
         await sleep(status === 429 ? 900 : 500);
         continue;
@@ -2073,19 +2385,37 @@ export async function callModel(env, payload) {
       }
 
       if (status === 401 || status === 403) {
-        fail('کلید API مدل پذیرفته نشد. از بخش ⌁ API کلید یا آدرس سرویس را بررسی کنید.', 502, 'model_auth');
+        fail(
+          `کلید API مدل پذیرفته نشد${lastErrDetail ? ` (${lastErrDetail})` : ''}. از بخش ⌁ API کلید یا آدرس سرویس را بررسی کنید.`,
+          502,
+          'model_auth'
+        );
+      }
+      if (status === 402) {
+        fail(
+          `اعتبار یا سهمیه‌ی حساب/کلید در سرویس مدل تمام شده است${lastErrDetail ? ` (${lastErrDetail})` : ''}.`,
+          402,
+          'model_quota_exhausted'
+        );
       }
       if (status === 404) {
         fail(`مدل یا مسیر «${model}» در سرویس فعلی پیدا نشد (آدرس یا نام مدل را بررسی کنید).`, 502, 'model_not_found');
       }
+      if (status === 408 || status === 499) {
+        fail('پاسخ مدل طولانی شد و ارتباط توسط درگاه بسته شد. دوباره تلاش کنید یا سطح تفکر را کمتر کنید.', 504, 'model_timeout');
+      }
       if (status === 413) {
-        fail('حجم پیام ارسالی بیش از سقف مدل است؛ گفتگو را کوتاه‌تر کنید یا گفتگوی جدید بسازید.', 413, 'context_too_large');
+        fail('حجم پیام ارسالی بیش از سقف مدل است؛ از دستور /compact یا گفتگوی جدید استفاده کنید.', 413, 'context_too_large');
       }
       if (status === 429) {
-        fail('سهمیه‌ی سرویس مدل موقتاً پر شده است. چند ثانیه صبر کنید.', 429, 'model_rate_limited');
+        fail('سهمیه‌ی لحظه‌ای سرویس مدل پر شده است. چند ثانیه صبر کنید.', 429, 'model_rate_limited');
       }
       if (status >= 400 && status < 500) {
-        fail('درخواست توسط مدل رد شد (ناسازگاری پارامتر یا محتوا).', 502, 'model_rejected');
+        fail(
+          `درخواست توسط مدل رد شد${lastErrDetail ? `: ${lastErrDetail}` : ' (ناسازگاری پارامتر یا محتوا).'}` ,
+          502,
+          'model_rejected'
+        );
       }
       break;
     }

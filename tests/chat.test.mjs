@@ -292,3 +292,119 @@ test('rate limits stop a runaway loop', async () => {
   // Another owner is unaffected.
   await enforceChatLimits(envLimits, 'owner-b');
 });
+
+test('Codex/Claude agent modes gate mutating tools, inject AGENTS.md, normalize interrupted tool->user history, and support fork + agentConfig', async () => {
+  const memory = await import(`${root}/_lib/memory.js`);
+  const configApi = await import(`${root}/api/config.js`);
+  const stateApi = await import(`${root}/api/state/index.js`);
+
+  // 1. normalizeWireSequence closes interrupted tool->user turns and coalesces consecutive user retries
+  const ctxOut = await memory.buildWorkingContext({
+    env: makeEnv(keys),
+    conversation: { id: 'c1', owner: 'u1', summary: '', summary_until: 0 },
+    messages: [
+      { seq: 1, role: 'user', content: 'اولین تلاش ناموفق' },
+      { seq: 2, role: 'user', content: 'دومین تلاش پس از خطا' },
+      {
+        seq: 3,
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'tc_1', type: 'function', function: { name: 'list_files', arguments: '{}' } }]
+      },
+      { seq: 4, role: 'tool', tool_call_id: 'tc_1', content: '["index.html"]' },
+      { seq: 5, role: 'user', content: 'ادامه بده' }
+    ],
+    callModel: async () => ({ message: { content: 'خلاصه' } })
+  });
+  const roles = ctxOut.recent.map((m) => m.role);
+  assert.deepEqual(roles, ['user', 'assistant', 'tool', 'assistant', 'user'], 'no consecutive user turns or direct tool->user jump');
+  assert.match(ctxOut.recent[0].content, /اولین تلاش ناموفق[\s\S]*دومین تلاش/);
+
+  // 2. Persist agentConfig via /api/config
+  const saveCfgRes = await (
+    await configApi.onRequestPost(
+      ctx(
+        req('/api/config', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            agentConfig: {
+              mode: 'plan',
+              networkAccess: false,
+              responseStyle: 'senior-reviewer',
+              goal: 'بازبینی امنیتی بدون تغییر فایل',
+              theme: 'claude-warm'
+            }
+          }
+        }),
+        env
+      )
+    )
+  ).json();
+  assert.equal(saveCfgRes.ok, true);
+  assert.equal(saveCfgRes.agentConfig.mode, 'plan');
+  assert.equal(saveCfgRes.agentConfig.networkAccess, false);
+  assert.equal(saveCfgRes.agentConfig.responseStyle, 'senior-reviewer');
+
+  // Save an AGENTS.md file in the workspace so buildSystemPrompt auto-injects it
+  await stateApi.onRequestPost(
+    ctx(
+      req('/api/state', {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: {
+          action: 'workspace',
+          id: conversationId,
+          workspace: { files: { 'AGENTS.md': 'Rule #42: Always prefer pure functions.' }, active: 'AGENTS.md' }
+        }
+      }),
+      env
+    )
+  );
+
+  // 3. In plan mode + networkAccess:false, mutating tools and web tools are stripped and AGENTS.md is injected!
+  let capturedPayload = null;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+    capturedPayload = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'نقشه معماری آماده شد.' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  try {
+    const events = await send('معماری را بررسی کن');
+    assert.ok(events.some((e) => e.name === 'done'));
+    const toolNames = (capturedPayload.tools || []).map((t) => t.function.name);
+    assert.ok(toolNames.includes('read_file'));
+    assert.ok(!toolNames.includes('write_file'), 'plan mode must block write_file');
+    assert.ok(!toolNames.includes('apply_patch'), 'plan mode must block apply_patch');
+    assert.ok(!toolNames.includes('run_command'), 'plan mode must block run_command');
+    assert.ok(!toolNames.includes('web_search'), 'networkAccess:false must block web_search');
+    const sysText = capturedPayload.messages[0].content;
+    assert.match(sysText, /PLAN MODE/);
+    assert.match(sysText, /Rule #42: Always prefer pure functions/);
+    assert.match(sysText, /بازبینی امنیتی بدون تغییر فایل/);
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  // 4. Fork action clones conversation + workspace + messages
+  const forkRes = await (
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { action: 'fork', id: conversationId, title: 'شاخه تست' }
+        }),
+        env
+      )
+    )
+  ).json();
+  assert.equal(forkRes.ok, true);
+  assert.ok(forkRes.id && forkRes.id !== conversationId);
+  assert.ok(forkRes.messageCount >= 2);
+});
+
