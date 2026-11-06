@@ -249,3 +249,68 @@ test('a turn that appends many messages does not use a compound SELECT', async (
   assert.equal(rows.results.length, 30);
   assert.deepEqual(rows.results.map((r) => r.seq), Array.from({ length: 30 }, (_, i) => i + 1));
 });
+
+test('usage endpoint tracks exact prompt/completion/reasoning tokens, live provider quota, and manual tokenCap', async () => {
+  const store = await import(`${root}/_lib/store.js`);
+  const localEnv = makeEnv(keys, { MODEL_API_KEY: 'tc_state_usage_key_999', MODEL_BASE_URL: 'https://tooken.club/v1' });
+  const signed = await (async () => {
+    const token = accessToken(keys, { sub: 'quota@example.com', email: 'quota@example.com' });
+    const res = await auth.onRequestGet(ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': token } }), localEnv));
+    return res.headers.get('Set-Cookie').split(';')[0];
+  })();
+
+  const owner = 'https://team.cloudflareaccess.com|quota@example.com';
+  await store.recordUsage(localEnv, owner, {
+    inChars: 500,
+    outChars: 900,
+    promptTokens: 1200,
+    completionTokens: 450,
+    reasoningTokens: 310
+  });
+  await store.recordUsage(localEnv, owner, {
+    inChars: 200,
+    outChars: 300,
+    promptTokens: 800,
+    completionTokens: 250,
+    reasoningTokens: 90
+  });
+
+  // Save manual tokenCap via POST /api/state/usage
+  const capRes = await (
+    await usageApi.onRequestPost(
+      ctx(req('/api/state/usage', { method: 'POST', body: { tokenCap: 50_000 }, headers: { Cookie: signed } }), localEnv)
+    )
+  ).json();
+  assert.equal(capRes.ok, true);
+  assert.equal(capRes.tokenCap, 50_000);
+
+  // Query GET /api/state/usage?live=1&refresh=1 with mocked upstream quota
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === 'https://tooken.club/api/usage/token') {
+      return new Response(
+        JSON.stringify({ data: { total_available: 420_000, total_granted: 500_000, total_used: 80_000 } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return originalFetch(url, init);
+  };
+  try {
+    const uRes = await (
+      await usageApi.onRequestGet(
+        ctx(req('/api/state/usage?live=1&refresh=1', { headers: { Cookie: signed } }), localEnv)
+      )
+    ).json();
+    assert.equal(uRes.ok, true);
+    assert.equal(uRes.tokenCap, 50_000);
+    assert.equal(uRes.totals.requests, 2);
+    assert.equal(uRes.totals.promptTokens, 2000);
+    assert.equal(uRes.totals.completionTokens, 700);
+    assert.equal(uRes.totals.reasoningTokens, 400);
+    assert.equal(uRes.totals.totalTokens, 3100);
+    assert.equal(uRes.quota.supported, true);
+    assert.equal(uRes.quota.remainingTokens, 420_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

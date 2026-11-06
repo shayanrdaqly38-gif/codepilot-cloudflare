@@ -1077,3 +1077,88 @@ test('universal auto-discovery finds exact Effort levels for brand-new models an
     globalThis.fetch = originalFetch;
   }
 });
+
+test('extractRateLimitHeaders & fetchProviderQuota discover live remaining tokens across providers', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+
+  // 1. Rate-limit header extraction on completion responses
+  const fakeHeaders = new Headers({
+    'x-ratelimit-remaining-tokens': '84500',
+    'x-ratelimit-limit-tokens': '100000',
+    'x-ratelimit-remaining-requests': '49'
+  });
+  const rl = modelLib.extractRateLimitHeaders(fakeHeaders);
+  assert.equal(rl.remainingTokens, 84500);
+  assert.equal(rl.limitTokens, 100000);
+  assert.equal(rl.remainingRequests, 49);
+
+  // 2. Tooken / OneAPI / NewAPI /api/usage/token live remaining tokens
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u === 'https://tooken.club/api/usage/token') {
+      return new Response(
+        JSON.stringify({
+          code: true,
+          data: {
+            total_available: 640_000,
+            total_granted: 1_000_000,
+            total_used: 360_000,
+            unlimited_quota: false
+          }
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://openrouter.ai/api/v1/credits') {
+      return new Response(
+        JSON.stringify({ data: { total_credits: 25.0, total_usage: 6.25 } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://openrouter.ai/api/v1/key') {
+      return new Response(
+        JSON.stringify({ data: { usage: 6.25, limit: null } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://api.deepseek.com/user/balance') {
+      return new Response(
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [{ currency: 'USD', total_balance: '14.50', granted_balance: '5.00', topped_up_balance: '9.50' }]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response('not found', { status: 404 });
+  };
+
+  try {
+    const qTooken = await modelLib.fetchProviderQuota(
+      { MODEL_API_KEY: 'tc_live_quota_test_key_1', MODEL_BASE_URL: 'https://tooken.club/v1' },
+      { force: true }
+    );
+    assert.equal(qTooken.supported, true);
+    assert.equal(qTooken.remainingTokens, 640_000);
+    assert.equal(qTooken.limitTokens, 1_000_000);
+    assert.equal(qTooken.usedTokens, 360_000);
+
+    const qOpenRouter = await modelLib.fetchProviderQuota(
+      { MODEL_API_KEY: 'sk-or-v1-quota-test-key', MODEL_BASE_URL: 'https://openrouter.ai/api/v1' },
+      { force: true }
+    );
+    assert.equal(qOpenRouter.supported, true);
+    assert.equal(qOpenRouter.remainingUsd, 18.75);
+    assert.equal(qOpenRouter.limitUsd, 25);
+
+    const qDeepSeek = await modelLib.fetchProviderQuota(
+      { MODEL_API_KEY: 'sk-ds-quota-test-key', MODEL_BASE_URL: 'https://api.deepseek.com/v1' },
+      { force: true }
+    );
+    assert.equal(qDeepSeek.supported, true);
+    assert.equal(qDeepSeek.remainingUsd, 14.5);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
