@@ -320,3 +320,131 @@ test('usage endpoint tracks exact prompt/completion/reasoning tokens, live provi
     globalThis.fetch = originalFetch;
   }
 });
+
+test('multi-MB Persian workspace overflows cleanly to workspace_files, clones server-side via copyWorkspaceFrom, and lite pagination slims heavy chats', async () => {
+  const localEnv = makeEnv(keys);
+  const token = accessToken(keys);
+  const authRes = await auth.onRequestGet(
+    ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': token } }), localEnv)
+  );
+  const signed = authRes.headers.get('Set-Cookie').split(';')[0];
+
+  // Build > 2.2 MB UTF-8 Persian workspace across 5 files (exceeds D1's 2 MB single-column ceiling)
+  const persianChunk = 'سلام کدپایلوت — این یک متن آزمایشی فارسی برای بررسی سقف بایتی پایگاه‌داده کلودفلر است.\n'.repeat(2100);
+  const bigFiles = {
+    'part1.txt': persianChunk,
+    'part2.txt': persianChunk,
+    'part3.txt': persianChunk,
+    'part4.txt': persianChunk,
+    'app.js': 'export const ok = true;\n'
+  };
+  const totalBytes = new TextEncoder().encode(JSON.stringify(bigFiles)).byteLength;
+  assert.ok(totalBytes > 1_300_000, `expected >1.3MB UTF-8 workspace, got ${totalBytes}`);
+
+  const createA = await (
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          body: { action: 'create', workspace: { files: bigFiles, active: 'app.js' } },
+          headers: { Cookie: signed }
+        }),
+        localEnv
+      )
+    )
+  ).json();
+  assert.equal(createA.ok, true);
+  assert.ok(createA.id);
+
+  // Verify conversations.workspace stayed tiny (< 512 bytes) while workspace_files holds the files
+  const rawRow = await localEnv.DB.prepare('SELECT workspace FROM conversations WHERE id=?').bind(createA.id).first();
+  assert.ok(rawRow.workspace.length < 512, `inline pointer should be tiny, got ${rawRow.workspace.length}`);
+
+  // Zero-upload server-side clone (`copyWorkspaceFrom`) creates a new chat in 1ms with all files intact!
+  const createB = await (
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          body: { action: 'create', copyWorkspaceFrom: createA.id },
+          headers: { Cookie: signed }
+        }),
+        localEnv
+      )
+    )
+  ).json();
+  assert.equal(createB.ok, true);
+  assert.ok(createB.id && createB.id !== createA.id);
+
+  const openedB = await (
+    await oneConv.onRequestGet({
+      ...ctx(req(`/api/state/conversations/${createB.id}`, { headers: { Cookie: signed } }), localEnv),
+      params: { id: createB.id }
+    })
+  ).json();
+  assert.equal(openedB.workspace.files['app.js'], 'export const ok = true;\n');
+  assert.equal(openedB.workspace.files['part3.txt'].length, persianChunk.length);
+
+  // Append 24 heavy messages with 25,000-char tool arguments and verify `?lite=1&limit=8&skipWorkspace=1`
+  const heavyMsgs = [];
+  for (let i = 0; i < 12; i += 1) {
+    heavyMsgs.push({
+      role: 'assistant',
+      content: `گام ${i + 1}`,
+      tool_calls: [
+        {
+          id: `tc_${i}`,
+          type: 'function',
+          function: { name: 'write_file', arguments: JSON.stringify({ path: `f${i}.js`, content: 'x'.repeat(25_000) }) }
+        }
+      ]
+    });
+    heavyMsgs.push({
+      role: 'tool',
+      tool_call_id: `tc_${i}`,
+      content: 'Saved OK\n' + 'y'.repeat(9000)
+    });
+  }
+  await stateApi.onRequestPost(
+    ctx(
+      req('/api/state', {
+        method: 'POST',
+        body: { action: 'append', id: createB.id, messages: heavyMsgs },
+        headers: { Cookie: signed }
+      }),
+      localEnv
+    )
+  );
+
+  const litePage1 = await (
+    await oneConv.onRequestGet({
+      ...ctx(
+        req(`/api/state/conversations/${createB.id}?lite=1&limit=8&skipWorkspace=1`, { headers: { Cookie: signed } }),
+        localEnv
+      ),
+      params: { id: createB.id }
+    })
+  ).json();
+  assert.equal(litePage1.ok, true);
+  assert.equal(litePage1.workspace, undefined, 'skipWorkspace=1 omits workspace download');
+  assert.equal(litePage1.messages.length, 8);
+  assert.equal(litePage1.hasOlderMessages, true);
+  assert.ok(Number.isFinite(litePage1.oldestSeq));
+  const assistantWithTool = litePage1.messages.find((m) => m.role === 'assistant' && m.tool_calls?.length);
+  assert.ok(assistantWithTool.tool_calls[0].function.arguments.length <= 240, 'lite mode slims giant write_file arguments');
+
+  const litePage2 = await (
+    await oneConv.onRequestGet({
+      ...ctx(
+        req(`/api/state/conversations/${createB.id}?lite=1&limit=8&beforeSeq=${litePage1.oldestSeq}&skipWorkspace=1`, {
+          headers: { Cookie: signed }
+        }),
+        localEnv
+      ),
+      params: { id: createB.id }
+    })
+  ).json();
+  assert.equal(litePage2.messages.length, 8);
+  assert.ok(litePage2.messages.at(-1).seq < litePage1.oldestSeq, 'beforeSeq returns strictly older messages');
+});
+

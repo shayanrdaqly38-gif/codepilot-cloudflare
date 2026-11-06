@@ -52,13 +52,16 @@ import {
   conversationView,
   deriveTitle,
   getConversation,
+  hydrateConversationWorkspace,
   isSafePath,
   listMemories,
   listMessages,
   messageStats,
+  persistConversationWorkspace,
   recordUsage,
   safeWorkspace
 } from '../_lib/store.js';
+import { registerActiveTurn } from '../_lib/turn-registry.js';
 import { envSecrets, fail, redactSecrets, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
@@ -660,15 +663,25 @@ export async function onRequestPost(context) {
     request,
     env,
     async ({ identity, data, setCookie, waitUntil }) => {
-      await enforceChatLimits(env, identity.owner);
-
       const conversationId = String(data?.conversationId || '');
+      const preloadedWaveCkpt = conversationId
+        ? await loadTurnCheckpoint(env, identity.owner, conversationId).catch(() => null)
+        : null;
+      const isWaveContinuation = Boolean(
+        data?.silentAutoResume === true && preloadedWaveCkpt?.active && preloadedWaveCkpt?.reason === 'wave_continue'
+      );
+      if (!isWaveContinuation) {
+        await enforceChatLimits(env, identity.owner);
+      }
+
       const attachments = await resolveUploadRefs(env, identity.owner, data?.attachments);
       const userText = (typeof data?.message === 'string' ? data.message.trim() : '') || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
+      const subreqTracker = { count: 1 };
+      effectiveEnv._subreq = subreqTracker;
       const incomingPower =
         data?.powerProfile && typeof data.powerProfile === 'object' ? data.powerProfile : {};
       const agentConfig = normalizeAgentConfig(
@@ -760,7 +773,7 @@ export async function onRequestPost(context) {
 
       let workspace;
       try {
-        workspace = safeWorkspace(JSON.parse(conversation.workspace || '{}'));
+        workspace = await hydrateConversationWorkspace(env, conversation);
       } catch {
         workspace = safeWorkspace({});
       }
@@ -778,6 +791,14 @@ export async function onRequestPost(context) {
 
       const linux = linuxRunnerEnabled(env);
       const sb = sandboxEnabled(env);
+      const turnReg = registerActiveTurn(identity.owner, conversation.id);
+      if (request?.signal) {
+        if (request.signal.aborted) {
+          turnReg.controller.abort();
+        } else {
+          request.signal.addEventListener('abort', () => turnReg.controller.abort(), { once: true });
+        }
+      }
 
       const { stream, send, close } = sseStream();
       const headers = {
@@ -908,9 +929,26 @@ export async function onRequestPost(context) {
           }
 
           let autoRepairAttempts = 0;
+          let hitWaveBoundary = false;
           const MUTATING_LIVE_SET = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
+          const EXTERNAL_FETCH_TOOLS = new Set(['run_command', 'web_search', 'fetch_url']);
+          const safeWaveSteps = Math.max(2, Math.min(Number(effectiveEnv.WAVE_STEP_BUDGET) || 24, 34));
+          const safeSubreqCap = Math.max(4, Math.min(Number(effectiveEnv.WAVE_SUBREQ_BUDGET) || 34, 42));
+          const priorCompletedSteps = resumingFromCheckpoint ? Number(existingCheckpoint?.completedSteps) || 0 : 0;
+          const remainingTotalSteps = Math.max(4, maxSteps - priorCompletedSteps);
+          const waveMaxSteps = Math.min(remainingTotalSteps, safeWaveSteps);
 
-          while (steps < maxSteps) {
+          while (steps < waveMaxSteps) {
+            if (turnReg.signal.aborted) {
+              const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+              stopErr.status = 499;
+              stopErr.code = 'turn_stopped';
+              throw stopErr;
+            }
+            if (steps > 0 && subreqTracker.count >= safeSubreqCap) {
+              hitWaveBoundary = true;
+              break;
+            }
             steps += 1;
             stepStreamedContent = '';
             stepStreamedReasoning = '';
@@ -927,7 +965,12 @@ export async function onRequestPost(context) {
 
             let deltaChars = 0;
             let lastToolDeltaPing = 0;
-            send('status', { phase: steps > 1 ? 'working' : (resumingFromCheckpoint ? 'resuming' : 'thinking'), step: steps, maxSteps });
+            send('status', {
+              phase: steps > 1 ? 'working' : (resumingFromCheckpoint ? 'resuming' : 'thinking'),
+              step: priorCompletedSteps + steps,
+              waveStep: steps,
+              maxSteps
+            });
             let result;
             try {
               result = await callModel(effectiveEnv, {
@@ -935,9 +978,20 @@ export async function onRequestPost(context) {
                 ...(reasoningEffort !== null ? { reasoningEffort } : {}),
                 temperature: agentConfig.temperature ?? 0.25,
                 timeoutMs: powerPlan.timeoutMs,
+                signal: turnReg.signal,
                 messages,
                 tools,
                 onDelta: (chunk) => {
+                  if (chunk?.type === 'rate_limit_wait') {
+                    send('status', {
+                      phase: 'rate_limit_wait',
+                      waitMs: chunk.waitMs || 2500,
+                      attempt: chunk.attempt || 1,
+                      step: priorCompletedSteps + steps,
+                      maxSteps
+                    });
+                    return;
+                  }
                   if (chunk?.type === 'tool_delta') {
                     const nowMs = Date.now();
                     if (nowMs - lastToolDeltaPing >= 1200) {
@@ -946,7 +1000,7 @@ export async function onRequestPost(context) {
                         phase: 'tool_streaming',
                         toolName: chunk.name || 'tool',
                         chars: chunk.totalChars || 0,
-                        step: steps,
+                        step: priorCompletedSteps + steps,
                         maxSteps
                       });
                     }
@@ -956,18 +1010,23 @@ export async function onRequestPost(context) {
                   deltaChars += chunk.text.length;
                   if (chunk.type === 'content') {
                     stepStreamedContent += chunk.text;
-                    send('delta', { text: chunk.text, step: steps });
+                    send('delta', { text: chunk.text, step: priorCompletedSteps + steps });
                   } else if (chunk.type === 'reasoning') {
                     stepStreamedReasoning += chunk.text;
                     if (deltaChars <= powerPlan.thinkingDeltaLimit) {
-                      send('thinking_delta', { text: chunk.text, step: steps });
+                      send('thinking_delta', { text: chunk.text, step: priorCompletedSteps + steps });
                     }
                   }
                 }
               });
             } catch (stepErr) {
+              if (stepErr?.code === 'subrequest_limit') {
+                steps = Math.max(0, steps - 1);
+                hitWaveBoundary = true;
+                break;
+              }
               // Seamless Server-Side Auto-Heal when an upstream SSE socket resets mid-stream!
-              if (stepErr?.code === 'stream_interrupted' && autoHealCount < MAX_AUTO_HEALS) {
+              if (stepErr?.code === 'stream_interrupted' && !turnReg.signal.aborted && autoHealCount < MAX_AUTO_HEALS) {
                 autoHealCount += 1;
                 const partialPiece = String(stepErr.partialContent || stepStreamedContent || '');
                 send('status', { phase: 'auto-heal', attempt: autoHealCount, step: steps, maxSteps });
@@ -1043,6 +1102,9 @@ export async function onRequestPost(context) {
                   args = {};
                 }
                 let outcome;
+                if (EXTERNAL_FETCH_TOOLS.has(call.function.name)) {
+                  subreqTracker.count += 1;
+                }
                 try {
                   outcome = await executeTool({
                     env,
@@ -1094,10 +1156,7 @@ export async function onRequestPost(context) {
 
               // Persist workspace to D1 immediately after every mutating step so zero file edits can ever be lost!
               if (stepMutatedWorkspace) {
-                await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
-                  .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
-                  .run()
-                  .catch(() => {});
+                await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
               }
               continue;
             }
@@ -1166,14 +1225,22 @@ export async function onRequestPost(context) {
             break;
           }
 
+          let isWaveHandoff = false;
+          const cumulativeStepsNow = priorCompletedSteps + steps;
+          const nextWaveNumber = (Number(existingCheckpoint?.waveNumber) || 0) + 1;
+
           if (!finalText) {
-            if (newMessages.length > 0) {
+            if ((hitWaveBoundary || (newMessages.length > 0 && steps >= waveMaxSteps)) && cumulativeStepsNow < maxSteps) {
+              // Clean Multi-Wave Handoff BEFORE Cloudflare Workers' 50-subrequest limit!
+              isWaveHandoff = true;
+              turnInterruptedReason = 'wave_continue';
+            } else if (newMessages.length > 0) {
               turnInterruptedReason = 'step_limit';
               finalText = 'به سقف مراحل این نوبت رسیدم و تمام فایل‌ها و تغییرات تا همین نقطه ذخیره شدند. بنویسید «ادامه» تا دقیقاً از مرحله‌ی بعدی ادامه دهم.';
             } else {
               finalText = 'پاسخی دریافت نشد. دوباره تلاش کنید.';
             }
-            if (!newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
+            if (finalText && !newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
               newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
             }
           }
@@ -1184,9 +1251,7 @@ export async function onRequestPost(context) {
           const hasWorkspaceChanges = turn.touched.size > 0 || turn.deleted.size > 0 || turn.workspaceChanged;
           const stats = await messageStats(env, conversation.id);
           if (hasWorkspaceChanges) {
-            await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
-              .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
-              .run();
+            await persistConversationWorkspace(env, identity.owner, conversation.id, workspace);
           }
 
           let savedCheckpoint = null;
@@ -1196,11 +1261,12 @@ export async function onRequestPost(context) {
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
               originalGoal: userText,
               reason: turnInterruptedReason,
+              waveNumber: isWaveHandoff ? nextWaveNumber : undefined,
               stepsCompleted: steps,
               touchedFiles: touchedList,
               deletedFiles: [...turn.deleted],
               completedTools: completedToolsLog,
-              partialContent: turnInterruptedReason === 'step_limit' ? '' : finalText
+              partialContent: isWaveHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
             }).catch(() => null);
           } else if (resumingFromCheckpoint || existingCheckpoint) {
             await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
@@ -1258,10 +1324,13 @@ export async function onRequestPost(context) {
             validation,
             commands: turn.commands,
             steps,
+            cumulativeSteps: cumulativeStepsNow,
             maxSteps,
+            waveContinue: isWaveHandoff,
+            waveNumber: isWaveHandoff ? nextWaveNumber : undefined,
             powerProfile: powerPlan.axes,
-            interrupted: Boolean(turnInterruptedReason),
-            interruptedReason: turnInterruptedReason || null,
+            interrupted: Boolean(turnInterruptedReason && !isWaveHandoff),
+            interruptedReason: isWaveHandoff ? null : turnInterruptedReason || null,
             resumable: Boolean(savedCheckpoint),
             checkpoint: savedCheckpoint,
             resumedFromCheckpoint: resumingFromCheckpoint,
@@ -1288,17 +1357,21 @@ export async function onRequestPost(context) {
           const errCode = String(error?.code || 'chat_failed');
           const errMsg = error?.status ? error.message : 'خطا در پردازش درخواست. پیشرفت ذخیره شد؛ بنویسید «ادامه».';
           const reason =
-            errCode === 'model_quota_exhausted'
-              ? 'quota_exhausted'
-              : errCode === 'model_auth'
-                ? 'auth_failed'
-                : errCode === 'model_rate_limited'
-                  ? 'rate_limited'
-                  : errCode === 'stream_interrupted' || errCode === 'model_bad_response'
-                    ? 'stream_cutoff'
-                    : errCode === 'model_timeout' || errCode === 'model_unreachable'
-                      ? 'timeout'
-                      : 'error';
+            errCode === 'turn_stopped'
+              ? 'user_stopped'
+              : errCode === 'model_quota_exhausted'
+                ? 'quota_exhausted'
+                : errCode === 'model_auth'
+                  ? 'auth_failed'
+                  : errCode === 'model_rate_limited'
+                    ? 'rate_limited'
+                    : errCode === 'subrequest_limit'
+                      ? 'wave_continue'
+                      : errCode === 'stream_interrupted' || errCode === 'model_bad_response'
+                        ? 'stream_cutoff'
+                        : errCode === 'model_timeout' || errCode === 'model_unreachable'
+                          ? 'timeout'
+                          : 'error';
 
           let savedCheckpoint = null;
           try {
@@ -1319,9 +1392,7 @@ export async function onRequestPost(context) {
                 .run();
             }
             if (hasChanges) {
-              await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
-                .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
-                .run();
+              await persistConversationWorkspace(env, identity.owner, conversation.id, workspace);
             }
             savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
@@ -1340,19 +1411,34 @@ export async function onRequestPost(context) {
             // Persisting the error report matters more than this best effort.
           }
 
-          send('error', {
-            error: errMsg,
-            code: errCode,
-            reason,
-            resumable: true,
-            partialContent,
-            savedFiles: touchedList,
-            deletedFiles: [...turn.deleted],
-            workspace: hasChanges ? workspace : undefined,
-            checkpoint: savedCheckpoint,
-            partial: newMessages.length > 0 || Boolean(partialContent)
-          });
+          if (errCode === 'turn_stopped') {
+            send('stopped', {
+              code: 'turn_stopped',
+              reason: 'user_stopped',
+              message: errMsg,
+              resumable: true,
+              partialContent,
+              savedFiles: touchedList,
+              deletedFiles: [...turn.deleted],
+              workspace: hasChanges ? workspace : undefined,
+              checkpoint: savedCheckpoint
+            });
+          } else {
+            send('error', {
+              error: errMsg,
+              code: errCode,
+              reason,
+              resumable: true,
+              partialContent,
+              savedFiles: touchedList,
+              deletedFiles: [...turn.deleted],
+              workspace: hasChanges ? workspace : undefined,
+              checkpoint: savedCheckpoint,
+              partial: newMessages.length > 0 || Boolean(partialContent)
+            });
+          }
         } finally {
+          turnReg.release();
           close();
         }
       })();

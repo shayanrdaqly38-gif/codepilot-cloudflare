@@ -8,8 +8,10 @@ import { clamp, fail, redactCode, redactSecrets, safeInt } from './util.js';
 
 const MAX_CONVERSATIONS_PER_USER = 300;
 const MAX_MESSAGES_PER_CONVERSATION = 4000;
-const MAX_WORKSPACE_CHARS = 1_800_000;
+const MAX_WORKSPACE_CHARS = 6_000_000;
+const INLINE_WORKSPACE_MAX_BYTES = 900_000;
 const MAX_TITLE = 120;
+const utf8Encoder = new TextEncoder();
 
 export async function db(env) {
   await ensureSchema(env);
@@ -61,7 +63,7 @@ export async function listConversations(env, owner, { archived = null, limit = 2
   return rows.results || [];
 }
 
-export async function createConversation(env, owner, { title = 'گفتگوی جدید', workspace = {} } = {}) {
+export async function createConversation(env, owner, { title = 'گفتگوی جدید', workspace = {}, copyWorkspaceFrom = '' } = {}) {
   const database = await db(env);
   const count = await database
     .prepare('SELECT COUNT(*) AS n FROM conversations WHERE owner=?')
@@ -72,13 +74,63 @@ export async function createConversation(env, owner, { title = 'گفتگوی ج�
   }
   const id = crypto.randomUUID();
   const now = Date.now();
-  await database
-    .prepare(
-      `INSERT INTO conversations(id,owner,title,created_at,updated_at,workspace,last_message_at)
-       VALUES(?,?,?,?,?,?,?)`
-    )
-    .bind(id, owner, sanitizeTitle(title), now, now, JSON.stringify(safeWorkspace(workspace)), now)
-    .run();
+  const cleanTitle = sanitizeTitle(title);
+
+  // Zero-upload server-side clone when starting a new chat from an active conversation:
+  // avoids uploading/re-parsing 1–3 MB of workspace files over slow mobile networks!
+  if (typeof copyWorkspaceFrom === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(copyWorkspaceFrom)) {
+    const src = await database
+      .prepare('SELECT id, workspace FROM conversations WHERE id=? AND owner=?')
+      .bind(copyWorkspaceFrom, owner)
+      .first();
+    if (src) {
+      await database.batch([
+        database
+          .prepare(
+            `INSERT INTO conversations(id,owner,title,created_at,updated_at,workspace,last_message_at)
+             VALUES(?,?,?,?,?,?,?)`
+          )
+          .bind(id, owner, cleanTitle, now, now, src.workspace || '{}', now),
+        database
+          .prepare(
+            `INSERT INTO workspace_files(conversation_id,path,content,updated_at)
+             SELECT ?, path, content, ? FROM workspace_files WHERE conversation_id=?`
+          )
+          .bind(id, now, src.id)
+      ]);
+      return id;
+    }
+  }
+
+  const safe = safeWorkspace(workspace);
+  const inlineJson = JSON.stringify(safe);
+  const byteLen = utf8Encoder.encode(inlineJson).byteLength;
+  if (byteLen <= INLINE_WORKSPACE_MAX_BYTES) {
+    await database
+      .prepare(
+        `INSERT INTO conversations(id,owner,title,created_at,updated_at,workspace,last_message_at)
+         VALUES(?,?,?,?,?,?,?)`
+      )
+      .bind(id, owner, cleanTitle, now, now, inlineJson, now)
+      .run();
+  } else {
+    const pointerJson = JSON.stringify({
+      __externalFiles: true,
+      active: safe.active,
+      repo: safe.repo,
+      files: {}
+    });
+    const fileRows = Object.entries(safe.files).map(([path, content]) => [id, path, content, now]);
+    await database.batch([
+      database
+        .prepare(
+          `INSERT INTO conversations(id,owner,title,created_at,updated_at,workspace,last_message_at)
+           VALUES(?,?,?,?,?,?,?)`
+        )
+        .bind(id, owner, cleanTitle, now, now, pointerJson, now),
+      ...insertRows(database, 'workspace_files', ['conversation_id', 'path', 'content', 'updated_at'], fileRows)
+    ]);
+  }
   return id;
 }
 
@@ -121,6 +173,7 @@ export async function deleteConversation(env, owner, id) {
   const conversation = await getConversation(env, owner, id);
   const database = await db(env);
   await database.batch([
+    database.prepare('DELETE FROM workspace_files WHERE conversation_id=?').bind(conversation.id),
     database.prepare('DELETE FROM messages WHERE conversation_id=?').bind(conversation.id),
     database.prepare('DELETE FROM conversations WHERE id=? AND owner=?').bind(conversation.id, owner)
   ]);
@@ -128,6 +181,88 @@ export async function deleteConversation(env, owner, id) {
 }
 
 /* --------------------------------- messages -------------------------------- */
+
+function slimMessageForLiteUi(msg) {
+  if (!msg || typeof msg !== 'object') return msg;
+  let out = msg;
+  if (Array.isArray(out.attachments) && out.attachments.some((a) => typeof a?.data === 'string' && a.data.length > 300_000)) {
+    out = {
+      ...out,
+      attachments: out.attachments.map((a) =>
+        typeof a?.data === 'string' && a.data.length > 300_000
+          ? { name: a.name, type: a.type, size: Math.floor((a.data.length / 4) * 3) }
+          : a
+      )
+    };
+  }
+  if (out.role === 'tool' && typeof out.content === 'string' && out.content.length > 4200) {
+    out = { ...out, content: out.content.slice(0, 4200) + '\n…' };
+  }
+  if (out.role === 'assistant' && Array.isArray(out.tool_calls) && out.tool_calls.length) {
+    let changed = false;
+    const slimCalls = out.tool_calls.map((call) => {
+      const name = call?.function?.name || '';
+      const args = String(call?.function?.arguments || '');
+      const cap = name === 'think' ? 4500 : 240;
+      if (args.length <= cap) return call;
+      changed = true;
+      return {
+        ...call,
+        function: {
+          ...call.function,
+          arguments: args.slice(0, cap)
+        }
+      };
+    });
+    if (changed) out = { ...out, tool_calls: slimCalls };
+  }
+  return out;
+}
+
+export async function listMessagesPage(env, conversationId, { limit = 100, beforeSeq = null, lite = false } = {}) {
+  const database = await db(env);
+  const pageSize = clamp(safeInt(limit, 100), 1, 500);
+  const fetchCount = pageSize + 1;
+  const hasBefore = beforeSeq !== null && beforeSeq !== undefined && Number.isFinite(Number(beforeSeq));
+  const rows = hasBefore
+    ? await database
+        .prepare(
+          `SELECT seq,created_at,body FROM messages
+           WHERE conversation_id=? AND seq<?
+           ORDER BY seq DESC LIMIT ?`
+        )
+        .bind(conversationId, Math.floor(Number(beforeSeq)), fetchCount)
+        .all()
+    : await database
+        .prepare(
+          `SELECT seq,created_at,body FROM messages
+           WHERE conversation_id=?
+           ORDER BY seq DESC LIMIT ?`
+        )
+        .bind(conversationId, fetchCount)
+        .all();
+
+  const rawList = rows.results || [];
+  const hasOlderMessages = rawList.length > pageSize;
+  const slice = hasOlderMessages ? rawList.slice(0, pageSize) : rawList;
+  slice.reverse();
+
+  const messages = [];
+  for (const row of slice) {
+    try {
+      const body = JSON.parse(row.body);
+      const parsed = { ...body, seq: row.seq, created_at: row.created_at };
+      messages.push(lite ? slimMessageForLiteUi(parsed) : parsed);
+    } catch {
+      messages.push({ role: 'assistant', content: '[پیام خراب حذف شد]', seq: row.seq, created_at: row.created_at });
+    }
+  }
+  return {
+    messages,
+    hasOlderMessages,
+    oldestSeq: messages.length ? messages[0].seq : null
+  };
+}
 
 export async function listMessages(env, conversationId, { afterSeq = -1, limit = 6000 } = {}) {
   const database = await db(env);
@@ -237,20 +372,29 @@ function insertRows(database, table, columns, rows) {
   return statements;
 }
 
-/** Insert messages after `lastSeq`, keeping seq contiguous. */
+/** Insert messages after `lastSeq`, keeping seq contiguous (with optimistic retry on concurrent inserts). */
 export async function appendMessages(env, conversation, messages) {
   const database = await db(env);
-  const { count, lastSeq } = await messageStats(env, conversation.id);
-  if (count + messages.length > MAX_MESSAGES_PER_CONVERSATION) {
-    fail('این گفتگو به سقف پیام رسیده است؛ گفتگوی جدیدی بسازید.', 409, 'quota');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { count, lastSeq } = await messageStats(env, conversation.id);
+    if (count + messages.length > MAX_MESSAGES_PER_CONVERSATION) {
+      fail('این گفتگو به سقف پیام رسیده است؛ گفتگوی جدیدی بسازید.', 409, 'quota');
+    }
+    const rows = messages.map((message, index) => {
+      const clean = sanitizeStoredMessage(message);
+      return [conversation.id, lastSeq + 1 + index, clean.created_at, clean.role || '', JSON.stringify(clean)];
+    });
+    const statements = insertRows(database, 'messages', ['conversation_id', 'seq', 'created_at', 'role', 'body'], rows);
+    try {
+      if (statements.length) await database.batch(statements);
+      return { nextSeq: lastSeq + messages.length, inserted: messages.length };
+    } catch (err) {
+      if (attempt < 2 && /unique|constraint/i.test(String(err?.message || ''))) {
+        continue;
+      }
+      throw err;
+    }
   }
-  const rows = messages.map((message, index) => {
-    const clean = sanitizeStoredMessage(message);
-    return [conversation.id, lastSeq + 1 + index, clean.created_at, clean.role || '', JSON.stringify(clean)];
-  });
-  const statements = insertRows(database, 'messages', ['conversation_id', 'seq', 'created_at', 'role', 'body'], rows);
-  if (statements.length) await database.batch(statements);
-  return { nextSeq: lastSeq + messages.length, inserted: messages.length };
 }
 
 /** Replace the whole history (used by "rewind" / branch a conversation). */
@@ -312,14 +456,77 @@ export function isSafePath(path) {
   );
 }
 
+export async function hydrateConversationWorkspace(env, conversation) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(conversation?.workspace || '{}');
+  } catch {
+    parsed = {};
+  }
+  if (parsed && parsed.__externalFiles && conversation?.id) {
+    const database = await db(env);
+    const rows = await database
+      .prepare('SELECT path, content FROM workspace_files WHERE conversation_id=? ORDER BY path ASC')
+      .bind(conversation.id)
+      .all();
+    const files = {};
+    for (const row of rows.results || []) {
+      if (row && typeof row.path === 'string' && typeof row.content === 'string') {
+        files[row.path] = row.content;
+      }
+    }
+    return safeWorkspace({
+      files,
+      active: parsed.active,
+      repo: parsed.repo
+    });
+  }
+  return safeWorkspace(parsed);
+}
+
+export async function persistConversationWorkspace(
+  env,
+  owner,
+  conversationId,
+  workspace,
+  { bumpRevision = false } = {}
+) {
+  const database = await db(env);
+  const safe = safeWorkspace(workspace);
+  const now = Date.now();
+  const inlineJson = JSON.stringify(safe);
+  const byteLen = utf8Encoder.encode(inlineJson).byteLength;
+  const revClause = bumpRevision ? ', revision=revision+1' : '';
+
+  if (byteLen <= INLINE_WORKSPACE_MAX_BYTES) {
+    await database.batch([
+      database.prepare('DELETE FROM workspace_files WHERE conversation_id=?').bind(conversationId),
+      database
+        .prepare(`UPDATE conversations SET workspace=?, updated_at=?${revClause} WHERE id=? AND owner=?`)
+        .bind(inlineJson, now, conversationId, owner)
+    ]);
+  } else {
+    const pointerJson = JSON.stringify({
+      __externalFiles: true,
+      active: safe.active,
+      repo: safe.repo,
+      files: {}
+    });
+    const fileRows = Object.entries(safe.files).map(([path, content]) => [conversationId, path, content, now]);
+    await database.batch([
+      database.prepare('DELETE FROM workspace_files WHERE conversation_id=?').bind(conversationId),
+      ...insertRows(database, 'workspace_files', ['conversation_id', 'path', 'content', 'updated_at'], fileRows),
+      database
+        .prepare(`UPDATE conversations SET workspace=?, updated_at=?${revClause} WHERE id=? AND owner=?`)
+        .bind(pointerJson, now, conversationId, owner)
+    ]);
+  }
+  return safe;
+}
+
 export async function saveWorkspace(env, owner, id, workspace) {
   const conversation = await getConversation(env, owner, id);
-  const safe = safeWorkspace(workspace);
-  await (await db(env))
-    .prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
-    .bind(JSON.stringify(safe), Date.now(), conversation.id, owner)
-    .run();
-  return safe;
+  return persistConversationWorkspace(env, owner, conversation.id, workspace);
 }
 
 /* --------------------------------- summary -------------------------------- */

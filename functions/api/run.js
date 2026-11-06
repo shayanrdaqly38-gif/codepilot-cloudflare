@@ -5,7 +5,7 @@
 import { route, methodNotAllowed } from '../_lib/api.js';
 import { enforceChatLimits } from '../_lib/limits.js';
 import { runCommand } from '../_lib/sandbox.js';
-import { safeWorkspace, getConversation } from '../_lib/store.js';
+import { safeWorkspace, getConversation, hydrateConversationWorkspace } from '../_lib/store.js';
 import { fail } from '../_lib/util.js';
 
 export async function onRequestPost({ request, env }) {
@@ -22,11 +22,7 @@ export async function onRequestPost({ request, env }) {
         workspace = safeWorkspace(data.workspace);
       } else if (data?.conversationId) {
         const conv = await getConversation(env, identity.owner, String(data.conversationId));
-        try {
-          workspace = safeWorkspace(JSON.parse(conv.workspace || '{}'));
-        } catch {
-          workspace = { files: {} };
-        }
+        workspace = await hydrateConversationWorkspace(env, conv);
       }
 
       const result = await runCommand(env, { command, workspace });

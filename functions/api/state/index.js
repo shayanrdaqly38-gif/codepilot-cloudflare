@@ -26,6 +26,7 @@ import {
   replaceMessages,
   renameConversation,
   saveWorkspace,
+  hydrateConversationWorkspace,
   setConversationFlags,
   upsertMemory,
   getConversation,
@@ -73,7 +74,8 @@ export async function onRequestPost({ request, env }) {
         case 'create': {
           const id = await createConversation(env, owner, {
             title: data.title ? String(data.title) : 'گفتگوی جدید',
-            workspace: data.workspace || {}
+            workspace: data.workspace || {},
+            copyWorkspaceFrom: typeof data.copyWorkspaceFrom === 'string' ? data.copyWorkspaceFrom : ''
           });
           return { ok: true, id };
         }
@@ -174,14 +176,11 @@ export async function onRequestPost({ request, env }) {
         case 'fork': {
           const src = await getConversation(env, owner, data.id);
           const srcMessages = await listMessages(env, src.id);
-          let ws = {};
-          try {
-            ws = JSON.parse(src.workspace || '{}');
-          } catch {
-            ws = {};
-          }
           const forkTitle = String(data.title || `⑂ ${src.title || 'گفتگو'}`).slice(0, 120);
-          const newId = await createConversation(env, owner, { title: forkTitle, workspace: ws });
+          const newId = await createConversation(env, owner, {
+            title: forkTitle,
+            copyWorkspaceFrom: src.id
+          });
           if (srcMessages.length) {
             const newConv = await getConversation(env, owner, newId);
             await appendMessages(env, newConv, srcMessages);
@@ -232,7 +231,7 @@ export async function onRequestPost({ request, env }) {
               conversation: conversationView(full),
               messages: await listMessages(env, full.id),
               summary: full.summary,
-              workspace: JSON.parse(full.workspace || '{}')
+              workspace: await hydrateConversationWorkspace(env, full)
             });
           }
           return {
@@ -248,6 +247,7 @@ export async function onRequestPost({ request, env }) {
           const conversations = await listConversations(env, owner, { limit: 300 });
           const statements = [];
           for (const row of conversations) {
+            statements.push(env.DB.prepare('DELETE FROM workspace_files WHERE conversation_id=?').bind(row.id));
             statements.push(env.DB.prepare('DELETE FROM messages WHERE conversation_id=?').bind(row.id));
           }
           statements.push(env.DB.prepare('DELETE FROM conversations WHERE owner=?').bind(owner));
@@ -260,7 +260,7 @@ export async function onRequestPost({ request, env }) {
           fail('دستور ناشناخته است.', 400, 'unknown_action');
       }
     },
-    { write: true, body: 2_200_000 }
+    { write: true, body: 6_500_000 }
   );
 }
 

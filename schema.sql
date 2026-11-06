@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS conversations_owner_updated
   ON conversations(owner, archived, updated_at DESC);
 
+-- Overflow per-file storage when multi-file / Persian UTF-8 workspaces approach
+-- D1's 2 MB single-column ceiling (`conversations.workspace` stores metadata + pointer).
+CREATE TABLE IF NOT EXISTS workspace_files (
+  conversation_id TEXT NOT NULL,
+  path            TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  PRIMARY KEY (conversation_id, path)
+);
+
 -- `seq` is the durable ordering key. `body` is the exact Chat Completions
 -- message JSON (role, content, tool_calls, tool_call_id), so replays are valid.
 CREATE TABLE IF NOT EXISTS messages (
@@ -81,11 +91,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS memories_owner_scope_key
   ON memories(owner, scope, project, key);
 
 CREATE TABLE IF NOT EXISTS usage_daily (
-  owner        TEXT NOT NULL,
-  day          TEXT NOT NULL,
-  requests     INTEGER NOT NULL DEFAULT 0,
-  input_chars  INTEGER NOT NULL DEFAULT 0,
-  output_chars INTEGER NOT NULL DEFAULT 0,
+  owner             TEXT NOT NULL,
+  day               TEXT NOT NULL,
+  requests          INTEGER NOT NULL DEFAULT 0,
+  input_chars       INTEGER NOT NULL DEFAULT 0,
+  output_chars      INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (owner, day)
 );
 
@@ -112,5 +125,5 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   reset_at INTEGER NOT NULL
 );
 
-INSERT INTO meta(key, value) VALUES ('schema_version', '4')
+INSERT INTO meta(key, value) VALUES ('schema_version', '7')
   ON CONFLICT(key) DO UPDATE SET value = excluded.value;

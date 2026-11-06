@@ -957,12 +957,20 @@ body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
 @keyframes maraPulse{0%,100%{opacity:1}50%{opacity:.55}}
 #marathonStatus.pulse{animation:maraPulse 1.6s ease-in-out infinite}
 .marathon-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:800;color:#3a1c00;background:linear-gradient(135deg,#ffb347,#ff8c42);border-radius:999px;padding:2px 8px;animation:maraPulse 1.6s ease-in-out infinite}
+.quick-new-btn{width:32px;height:32px;min-height:32px!important;padding:0;border-radius:9px!important;border:1px solid var(--line-strong);background:rgba(217,105,65,.14);color:var(--claude-bright);font-size:17px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+.quick-new-btn:hover{background:rgba(217,105,65,.26);border-color:var(--claude)}
+.stop-pill{background:#c0392b28!important;color:#ff948a!important;border:1px solid #e0564688!important;font-weight:700}
+.stop-pill:hover{background:#c0392b44!important}
+.load-older-wrap{display:flex;justify-content:center;padding:4px 0 8px}
+.load-older-wrap button{min-height:32px;padding:5px 14px;border-radius:999px;font-size:11.5px;background:var(--panel-2,#1b2433);border:1px solid var(--line-strong);color:var(--text-soft);cursor:pointer}
+.conv-loading-state{padding:22px 14px;text-align:center;color:var(--muted);font-size:12.5px}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
 <header class="top">
   <div class="top-start">
     <button class="mobile-files icon-pill" id="sidebarToggle" aria-controls="workspaceSidebar" aria-expanded="false" onclick="toggleSidebar()" title="تاریخچه و فایل‌ها" aria-label="تاریخچه و فایل‌ها">☰</button>
+    <button type="button" class="quick-new-btn" id="quickNewChatBtn" onclick="newConversation()" title="گفتگوی جدید فوری" aria-label="گفتگوی جدید">＋</button>
     <div class="brand">
       <div class="logo">✳</div>
       <span class="brand-name">CodePilot</span>
@@ -1138,6 +1146,7 @@ body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
         <button type="button" class="mode-pill" id="modeCycleBtn" data-mode="auto-edit" onclick="cycleAgentMode()" title="تغییر حالت عامل (Shift+Tab)">⚡ Auto</button>
         <button type="button" class="power-pill" id="powerBoostBtn" data-tier="medium" onclick="openPowerModal()" title="موتور تقویت هوش مصنوعی (طول کار، دقت جزئیات، پیشرفته‌سازی، حساسیت)">🔥 قدرت</button>
         <span class="hint" id="composerHint"></span>
+        <button type="button" class="send-pill stop-pill" id="stopTurnBtn" hidden onclick="stopCurrentTurn()" title="توقف فوری و ذخیره پیشرفت">⏹ توقف</button>
         <button class="primary send-pill" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
       </div>
     </div>
@@ -1530,6 +1539,7 @@ const API = {
   versions: '/api/state/versions',
   search: '/api/state/search',
   chat: '/api/chat',
+  stop: '/api/chat/stop',
   health: '/api/health'
 };
 
@@ -1716,6 +1726,15 @@ const state = {
   tokenCap: null,
   lastTurnTokens: null,
   busy: false,
+  activeTurnToken: 0,
+  chatAbortController: null,
+  openConvAbort: null,
+  openConvSeq: 0,
+  pendingCreatePromise: null,
+  convCache: new Map(),
+  hasOlderMessages: false,
+  oldestSeq: null,
+  loadingOlder: false,
   paletteItems: [],
   paletteIndex: 0,
   paletteKind: '',
@@ -1773,12 +1792,17 @@ async function api(path, options = {}) {
   if (init.body && !init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
   let res;
   let data = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       res = await fetch(path, init);
-    } catch {
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 500));
+    } catch (err) {
+      if (init.signal?.aborted || err?.name === 'AbortError') {
+        const abortErr = new Error('درخواست لغو شد.');
+        abortErr.aborted = true;
+        throw abortErr;
+      }
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 450 * (attempt + 1)));
         continue;
       }
       throw new Error('ارتباط با سرور برقرار نشد.');
@@ -1788,8 +1812,8 @@ async function api(path, options = {}) {
     if (type.includes('application/json')) {
       try { data = await res.json(); } catch { data = null; }
     }
-    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt === 0) {
-      await new Promise((r) => setTimeout(r, 600));
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt < 2 && !init.signal?.aborted) {
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
       continue;
     }
     break;
@@ -2871,8 +2895,11 @@ async function boot() {
     return;
   }
 
+  const configPromise = api(API.config).catch(() => null);
+  let snapshot;
   try {
-    const config = await api(API.config).catch(() => null);
+    const [config, snap] = await Promise.all([configPromise, api(API.state)]);
+    snapshot = snap;
     if (config) {
       state.config = config;
       state.provider = config.provider || null;
@@ -2885,7 +2912,6 @@ async function boot() {
       state.sandbox = Boolean(config.sandbox);
       state.linuxRunner = Boolean(config.linuxRunner);
       state.executionMode = config.executionMode || (state.sandbox ? 'sandbox' : state.linuxRunner ? 'linux-container' : 'virtual');
-      // If user switched to a custom provider (e.g. Zro) and stale localStorage selectedModel isn't in catalog, clear stale selection so provider's active model works cleanly!
       if (
         state.provider?.usingCustom &&
         state.selectedModel &&
@@ -2900,10 +2926,6 @@ async function boot() {
       syncShellBadge();
       renderTerminalIntro();
     }
-  } catch { /* non-fatal */ }
-
-  try {
-    const snapshot = await api(API.state);
     state.conversations = snapshot.conversations || [];
     state.memory = snapshot.memory || [];
     renderConversations();
@@ -3087,70 +3109,283 @@ function showStorageFailure(error) {
   $('prompt').disabled = true;
 }
 
-async function newConversation(open = true) {
-  setSync('busy', 'ساخت گفتگوی جدید…');
-  try {
-    const workspace = snapshotWorkspace();
-    const result = await api(API.state, {
+function putConvCache(id, entry) {
+  if (!id || String(id).startsWith('pending-')) return;
+  if (state.convCache.has(id)) state.convCache.delete(id);
+  state.convCache.set(id, entry);
+  while (state.convCache.size > 8) {
+    const oldestKey = state.convCache.keys().next().value;
+    state.convCache.delete(oldestKey);
+  }
+}
+
+function detachActiveTurnForNavigation() {
+  if (!state.busy && !state.chatAbortController) return;
+  const prevConvId = state.conversationId;
+  state.activeTurnToken += 1;
+  if (state.chatAbortController) {
+    try { state.chatAbortController.abort(); } catch { /* ignore */ }
+    state.chatAbortController = null;
+  }
+  if (prevConvId && !String(prevConvId).startsWith('pending-')) {
+    fetch(API.stop, {
       method: 'POST',
-      body: JSON.stringify({ action: 'create', workspace })
-    });
-    const conv = {
-      id: result.id,
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: prevConvId })
+    }).catch(() => {});
+  }
+  state.busy = false;
+  document.body.classList.remove('is-working');
+  const stopBtn = $('stopTurnBtn');
+  if (stopBtn) stopBtn.hidden = true;
+  $('sendBtn').disabled = pendingAttachments.some((file) => file.status !== 'ready');
+  $('sendBtn').textContent = 'ارسال ↑';
+  $('composerHint').textContent = '';
+}
+
+async function stopCurrentTurn() {
+  const convId = state.conversationId;
+  if (state.chatAbortController) {
+    try { state.chatAbortController.abort(); } catch { /* ignore */ }
+  }
+  if (convId && !String(convId).startsWith('pending-')) {
+    try {
+      await fetch(API.stop, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: convId })
+      });
+    } catch { /* ignore */ }
+  }
+  toast('⏹ اجرای پاسخ متوقف شد و پیشرفت ذخیره گردید');
+}
+
+function applyOpenedConversationData(id, data, { preserveScroll = false } = {}) {
+  state.conversationId = id;
+  state.messages = data.messages || [];
+  state.hasOlderMessages = Boolean(data.hasOlderMessages);
+  state.oldestSeq = data.oldestSeq ?? (state.messages.length ? state.messages[0].seq : null);
+  state.activeCheckpoint = data.checkpoint || null;
+  if (data.workspace !== undefined) {
+    state.workspace = normalizeWorkspace(data.workspace || {});
+  }
+  try { localStorage.setItem('cp-last-conversation', id); } catch { /* ignore */ }
+  const conv = state.conversations.find((c) => c.id === id);
+  if (conv && data.conversation) Object.assign(conv, data.conversation);
+  const summaryUntil = Number(data.conversation?.summaryUntil || 0);
+  const activeMsgs = state.messages.filter((m) => !summaryUntil || (Number(m.seq) || 0) > summaryUntil);
+  const summaryChars = String(data.conversation?.summary || '').length;
+  const msgChars = activeMsgs.reduce((acc, m) => acc + String(m.content || '').length + 28, 0);
+  state.contextTokens = activeMsgs.length ? Math.ceil((summaryChars + msgChars) / 3.6) : 0;
+  renderConversations();
+  renderChat({ preserveScroll });
+  if (data.workspace !== undefined) {
+    renderTree();
+    renderEditor();
+  }
+  closeDiff();
+  state.turnNotices = null;
+  updateContextMeter(data.conversation || {});
+}
+
+async function newConversation(open = true) {
+  const prevId = state.conversationId;
+  const canCopyServerSide = Boolean(prevId && !String(prevId).startsWith('pending-') && state.dirtyFiles.size === 0);
+
+  if (open) {
+    if (state.openConvAbort) {
+      try { state.openConvAbort.abort(); } catch { /* ignore */ }
+      state.openConvAbort = null;
+    }
+    state.openConvSeq += 1;
+    if (state.busy) detachActiveTurnForNavigation();
+    toggleSidebar(false);
+    setWorkspaceView('chat');
+  }
+
+  const tempId = open ? `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` : null;
+  if (open && tempId) {
+    const optimisticConv = {
+      id: tempId,
       title: 'گفتگوی جدید',
       messageCount: 0,
       updatedAt: Date.now(),
       pinned: false
     };
-    state.conversations.unshift(conv);
+    state.conversations.unshift(optimisticConv);
+    state.conversationId = tempId;
+    state.messages = [];
+    state.hasOlderMessages = false;
+    state.oldestSeq = null;
     state.activeCheckpoint = null;
+    state.contextTokens = 0;
+    state.turnNotices = null;
+    closeDiff();
     renderConversations();
-    if (open) {
-      await openConversation(result.id, { fresh: true });
-    } else {
-      state.contextTokens = 0;
-      renderTopTokenBadge();
-    }
-    setSync('on', 'گفتگوی جدید در D1 ذخیره شد');
-    return result.id;
-  } catch (error) {
-    toast('ساخت گفتگو ناموفق بود: ' + error.message, 3500);
-    setSync('', 'خطا در ذخیره‌سازی');
-    return null;
+    renderChat();
+    updateContextMeter({});
   }
+
+  setSync('busy', 'ساخت گفتگوی جدید…');
+  const createPayload = canCopyServerSide
+    ? { action: 'create', copyWorkspaceFrom: prevId }
+    : { action: 'create', workspace: snapshotWorkspace() };
+
+  const task = (async () => {
+    try {
+      const result = await api(API.state, {
+        method: 'POST',
+        body: JSON.stringify(createPayload)
+      });
+      const realConv = {
+        id: result.id,
+        title: 'گفتگوی جدید',
+        messageCount: 0,
+        updatedAt: Date.now(),
+        pinned: false
+      };
+      if (tempId) {
+        const idx = state.conversations.findIndex((c) => c.id === tempId);
+        if (idx >= 0) state.conversations[idx] = realConv;
+        else state.conversations.unshift(realConv);
+        if (state.conversationId === tempId) {
+          state.conversationId = result.id;
+          try { localStorage.setItem('cp-last-conversation', result.id); } catch { /* ignore */ }
+        }
+      } else {
+        state.conversations.unshift(realConv);
+        state.activeCheckpoint = null;
+        state.contextTokens = 0;
+        renderTopTokenBadge();
+      }
+      putConvCache(result.id, {
+        conversation: realConv,
+        messages: [],
+        hasOlderMessages: false,
+        oldestSeq: null,
+        workspace: snapshotWorkspace(),
+        checkpoint: null
+      });
+      renderConversations();
+      setSync('on', 'گفتگوی جدید در D1 ذخیره شد');
+      return result.id;
+    } catch (error) {
+      if (tempId) {
+        state.conversations = state.conversations.filter((c) => c.id !== tempId);
+        if (state.conversationId === tempId) {
+          state.conversationId = prevId || state.conversations[0]?.id || null;
+        }
+        renderConversations();
+      }
+      toast('ساخت گفتگو ناموفق بود: ' + error.message, 3500);
+      setSync('', 'خطا در ذخیره‌سازی');
+      return null;
+    } finally {
+      if (state.pendingCreatePromise === task) state.pendingCreatePromise = null;
+    }
+  })();
+
+  state.pendingCreatePromise = task;
+  return task;
 }
 
 async function openConversation(id, { fresh = false } = {}) {
-  if (!fresh && id === state.conversationId && state.messages.length) return;
-  setSync('busy', 'بارگذاری گفتگو…');
-  try {
-    const data = await api(`${API.conversations}/${encodeURIComponent(id)}`);
-    state.conversationId = id;
-    state.messages = data.messages || [];
-    state.activeCheckpoint = data.checkpoint || null;
-    state.workspace = normalizeWorkspace(data.workspace || {});
-    localStorage.setItem('cp-last-conversation', id);
-    const conv = state.conversations.find((c) => c.id === id);
-    if (conv) Object.assign(conv, data.conversation || {});
-    // Estimate active context tokens immediately from visible window when opening a conversation
-    const summaryUntil = Number(data.conversation?.summaryUntil || 0);
-    const activeMsgs = state.messages.filter((m) => !summaryUntil || (Number(m.seq) || 0) > summaryUntil);
-    const summaryChars = String(data.conversation?.summary || '').length;
-    const msgChars = activeMsgs.reduce((acc, m) => acc + String(m.content || '').length + 28, 0);
-    state.contextTokens = activeMsgs.length ? Math.ceil((summaryChars + msgChars) / 3.6) : 0;
-    renderConversations();
-    renderChat();
-    renderTree();
-    renderEditor();
-    closeDiff();
-    state.turnNotices = null;
-    updateContextMeter(data.conversation || {});
-    setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
+  if (!id || String(id).startsWith('pending-')) return;
+  if (!fresh && id === state.conversationId && (state.messages.length || state.convCache.has(id)) && !state.busy) {
     setWorkspaceView('chat');
     toggleSidebar(false);
+    return;
+  }
+
+  if (state.busy && id !== state.conversationId) {
+    detachActiveTurnForNavigation();
+  }
+  if (state.openConvAbort) {
+    try { state.openConvAbort.abort(); } catch { /* ignore */ }
+    state.openConvAbort = null;
+  }
+  const reqSeq = ++state.openConvSeq;
+  const abortCtrl = new AbortController();
+  state.openConvAbort = abortCtrl;
+
+  setWorkspaceView('chat');
+  toggleSidebar(false);
+
+  const cached = !fresh ? state.convCache.get(id) : null;
+  if (cached) {
+    applyOpenedConversationData(id, cached);
+  } else {
+    state.conversationId = id;
+    renderConversations();
+    const chat = $('chat');
+    if (chat) {
+      chat.innerHTML = '<div class="conv-loading-state">✳ در حال بارگذاری سریع گفتگو…</div>';
+    }
+  }
+
+  setSync('busy', 'بارگذاری گفتگو…');
+  try {
+    const data = await api(`${API.conversations}/${encodeURIComponent(id)}?lite=1&limit=90`, {
+      signal: abortCtrl.signal
+    });
+    if (reqSeq !== state.openConvSeq) return;
+    putConvCache(id, data);
+    applyOpenedConversationData(id, data);
+    setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
   } catch (error) {
+    if (error?.aborted || reqSeq !== state.openConvSeq) return;
     toast('بازکردن گفتگو ناموفق بود: ' + error.message, 4000);
     setSync('', 'خطا در بارگذاری');
+  } finally {
+    if (state.openConvAbort === abortCtrl) state.openConvAbort = null;
+  }
+}
+
+async function loadOlderMessages() {
+  if (state.loadingOlder || !state.conversationId || !state.hasOlderMessages || state.oldestSeq === null) return;
+  state.loadingOlder = true;
+  const targetId = state.conversationId;
+  const btn = $('chat')?.querySelector('.load-older-wrap button');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'در حال دریافت پیام‌های قبلی…';
+  }
+  try {
+    const chat = $('chat');
+    const prevHeight = chat ? chat.scrollHeight : 0;
+    const data = await api(
+      `${API.conversations}/${encodeURIComponent(targetId)}?lite=1&limit=90&beforeSeq=${encodeURIComponent(state.oldestSeq)}&skipWorkspace=1`
+    );
+    if (state.conversationId !== targetId) return;
+    const older = Array.isArray(data.messages) ? data.messages : [];
+    const existingSeqs = new Set(state.messages.map((m) => m.seq));
+    const merged = [...older.filter((m) => !existingSeqs.has(m.seq)), ...state.messages];
+    state.messages = merged;
+    state.hasOlderMessages = Boolean(data.hasOlderMessages);
+    state.oldestSeq = data.oldestSeq ?? (merged.length ? merged[0].seq : null);
+    const cached = state.convCache.get(targetId);
+    if (cached) {
+      putConvCache(targetId, {
+        ...cached,
+        messages: merged,
+        hasOlderMessages: state.hasOlderMessages,
+        oldestSeq: state.oldestSeq
+      });
+    }
+    renderChat({ preserveScroll: true });
+    if (chat) {
+      chat.scrollTop = Math.max(0, chat.scrollHeight - prevHeight);
+    }
+  } catch (err) {
+    toast('دریافت پیام‌های قدیمی‌تر ناموفق بود: ' + err.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '⬆ نمایش پیام‌های قدیمی‌تر گفتگو';
+    }
+  } finally {
+    state.loadingOlder = false;
   }
 }
 
@@ -3176,8 +3411,10 @@ async function removeConversation(conv) {
   if (!confirm('گفتگو و همه‌ی پیام‌هایش از پایگاه‌داده حذف شود؟')) return;
   try {
     await api(API.state, { method: 'POST', body: JSON.stringify({ action: 'delete', id: conv.id }) });
+    state.convCache.delete(conv.id);
     state.conversations = state.conversations.filter((c) => c.id !== conv.id);
     if (state.conversationId === conv.id) {
+      if (state.busy) detachActiveTurnForNavigation();
       state.conversationId = null;
       state.messages = [];
       if (state.conversations.length) await openConversation(state.conversations[0].id);
@@ -3715,23 +3952,38 @@ function editorKey(event) {
 }
 
 async function saveEditor(notify = false) {
-  if (!state.conversationId) return;
+  if (!state.conversationId || String(state.conversationId).startsWith('pending-')) return;
+  // While the server-side agent is actively streaming & saving `live_file` updates in D1,
+  // defer background client autosave so it never collides with busy Worker isolates (avoiding 503 `ذخیره نشد`).
+  if (state.busy && !notify) {
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(() => saveEditor(false), 2500);
+    return;
+  }
   const name = state.workspace.active;
   if (name) state.workspace.files[name] = $('editor').value;
   try {
     setSync('busy', 'ذخیره در D1…');
+    const wsSnap = snapshotWorkspace();
     await api(API.state, {
       method: 'POST',
-      body: JSON.stringify({ action: 'workspace', id: state.conversationId, workspace: snapshotWorkspace() })
+      body: JSON.stringify({ action: 'workspace', id: state.conversationId, workspace: wsSnap })
     });
+    const cached = state.convCache.get(state.conversationId);
+    if (cached) cached.workspace = wsSnap;
     state.dirtyFiles.clear();
     renderTree();
     $('tabDot').className = 'dot ok';
     setSync('on', 'ذخیره شد');
     if (notify) toast('فایل در D1 ذخیره شد');
   } catch (error) {
-    setSync('', 'ذخیره نشد');
-    toast('ذخیره ناموفق: ' + error.message);
+    if (notify) {
+      setSync('', 'ذخیره نشد');
+      toast('ذخیره ناموفق: ' + error.message);
+    } else {
+      clearTimeout(state.saveTimer);
+      state.saveTimer = setTimeout(() => saveEditor(false), 4000);
+    }
   }
 }
 
@@ -3937,14 +4189,19 @@ function renderCheckpointCardHtml(ckpt) {
   if (!ckpt || !ckpt.active) return '';
   const filesCount = Array.isArray(ckpt.touchedFiles) ? ckpt.touchedFiles.length : 0;
   const stepsCount = Number(ckpt.completedSteps) || 0;
-  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed' || ckpt.reason === 'rate_limited';
+  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed';
+  const isRateLimit = ckpt.reason === 'rate_limited';
   const headline = isQuotaOrKey
-    ? '⏸ توقف به علت اتمام توکن/کلید API — نقطه دقیق کار ذخیره شد'
-    : ckpt.reason === 'step_limit'
-      ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
-      : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
-        ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
-        : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
+    ? '⏸ توقف به علت اتمام شارژ یا کلید API — نقطه دقیق کار ذخیره شد'
+    : isRateLimit
+      ? '⏳ سقف سرعت لحظه‌ای سرویس مدل (429) — پیشرفت تا همین لحظه ذخیره شد'
+      : ckpt.reason === 'user_stopped'
+        ? '⏹ توسط شما متوقف شد — تمام پیشرفت تا همین لحظه ذخیره است'
+        : ckpt.reason === 'step_limit'
+          ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
+          : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
+            ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
+            : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
   const detail = ckpt.errorMessage || 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.';
   const metaParts = [];
   if (stepsCount > 0) metaParts.push(`${faNum(stepsCount)} گام انجام‌شده`);
@@ -4043,18 +4300,31 @@ function resumeFromCheckpoint() {
   sendMessage('ادامه', { resumeCheckpoint: true });
 }
 
-function renderChat() {
+function renderChat({ preserveScroll = false } = {}) {
   const chat = $('chat');
+  if (!chat) return;
+  const prevTop = chat.scrollTop;
   chat.innerHTML = '';
   if (!state.messages.length) {
     chat.innerHTML = welcomeHtml();
+    if (state.activeCheckpoint?.active) {
+      chat.insertAdjacentHTML('beforeend', renderCheckpointCardHtml(state.activeCheckpoint));
+    }
     return;
   }
-  for (const message of state.messages) appendMessageElement(message);
+  const frag = document.createDocumentFragment();
+  if (state.hasOlderMessages) {
+    const olderWrap = document.createElement('div');
+    olderWrap.className = 'load-older-wrap';
+    olderWrap.innerHTML = '<button type="button" onclick="loadOlderMessages()">⬆ نمایش پیام‌های قدیمی‌تر گفتگو</button>';
+    frag.appendChild(olderWrap);
+  }
+  for (const message of state.messages) appendMessageElement(message, frag);
+  chat.appendChild(frag);
   if (state.activeCheckpoint?.active) {
     chat.insertAdjacentHTML('beforeend', renderCheckpointCardHtml(state.activeCheckpoint));
   }
-  chat.scrollTop = chat.scrollHeight;
+  chat.scrollTop = preserveScroll ? prevTop : chat.scrollHeight;
 }
 
 const TOOL_LABELS = {
@@ -4133,10 +4403,12 @@ function renderThinkHtml(thought, plan, open = false, meta = {}) {
   return `<details class="think-box"${open ? ' open' : ''}><summary>${esc(title)}</summary><pre>${esc(body)}</pre></details>`;
 }
 
-function appendMessageElement(message) {
+function appendMessageElement(message, batchContainer = null) {
   const chat = $('chat');
-  const welcome = chat.querySelector('.welcome');
-  if (welcome) welcome.remove();
+  if (!batchContainer) {
+    const welcome = chat.querySelector('.welcome');
+    if (welcome) welcome.remove();
+  }
   const div = document.createElement('div');
   const role = message.role === 'user' ? 'user' : 'assistant';
   div.className = 'msg ' + role;
@@ -4150,7 +4422,8 @@ function appendMessageElement(message) {
       `<summary class="tool-line done">✔ خروجی ابزار <span style="color:var(--muted)">·</span> <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(firstLine)}</span></summary>` +
       `<pre>${esc(raw.slice(0, 4000))}</pre>` +
       `</details>`;
-    chat.appendChild(div);
+    if (batchContainer) batchContainer.appendChild(div);
+    else chat.appendChild(div);
     return div;
   }
   if (role === 'user') {
@@ -4203,8 +4476,12 @@ function appendMessageElement(message) {
     acts.children[1].onclick = () => rewindTo(message.seq);
     div.appendChild(acts);
   }
-  chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
+  if (batchContainer) {
+    batchContainer.appendChild(div);
+  } else {
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
   return div;
 }
 
@@ -4779,6 +5056,10 @@ async function sendMessage(overrideText, opts = {}) {
   const text = rawInput || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
   if (!text) return;
   if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
+  if (String(state.conversationId || '').startsWith('pending-') && state.pendingCreatePromise) {
+    const resolvedId = await state.pendingCreatePromise;
+    if (!resolvedId) return;
+  }
   if (!state.conversationId) {
     const id = await newConversation(false);
     if (!id) return;
@@ -4792,12 +5073,19 @@ async function sendMessage(overrideText, opts = {}) {
     renderEditor();
   }
 
+  const turnToken = ++state.activeTurnToken;
+  const turnConvId = state.conversationId;
+  const chatAbort = new AbortController();
+  state.chatAbortController = chatAbort;
+  const isTurnCurrent = () => state.activeTurnToken === turnToken && state.conversationId === turnConvId;
+
   state.busy = true;
   toggleTopDrawer(false);
   $('chat')?.querySelectorAll('.resume-checkpoint-card').forEach((el) => el.remove());
   document.body.classList.add('is-working');
   $('sendBtn').disabled = true;
   $('sendBtn').textContent = '✳…';
+  if ($('stopTurnBtn')) $('stopTurnBtn').hidden = false;
   $('composerHint').textContent = 'در حال اجرا…';
   if (!overrideText) {
     input.value = '';
@@ -4808,12 +5096,17 @@ async function sendMessage(overrideText, opts = {}) {
     setSync('busy', 'همگام‌سازی فایل‌های مخزن GitHub…');
     try { await state.repoSyncPromise; } catch { /* non-fatal */ }
   }
+  if (!isTurnCurrent()) return;
   setSync('busy', 'درخواست به مدل…');
 
   const isSilentAutoResume = Boolean(opts.silentAutoResume);
   const autoRetryCount = Number(opts._autoRetryCount || 0);
+  const waveCount = Number(opts._waveCount || 0);
+  const priorWaveTouched = Array.isArray(opts._waveTouched) ? opts._waveTouched : [];
+  const priorWaveDeleted = Array.isArray(opts._waveDeleted) ? opts._waveDeleted : [];
   const msgCountBeforeTurn = state.messages.length;
   let scheduleAutoResumeNext = 0;
+  let nextWaveChainPayload = null;
 
   if (!isSilentAutoResume) {
     const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
@@ -4883,10 +5176,11 @@ async function sendMessage(overrideText, opts = {}) {
       response = await fetch(API.chat, {
         method: 'POST',
         credentials: 'same-origin',
+        signal: chatAbort.signal,
         headers: { 'Content-Type': 'application/json' },
         body: reqBody
       });
-      if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt === 0) {
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt === 0 && !chatAbort.signal.aborted) {
         const ct = response.headers.get('Content-Type') || '';
         if (!ct.includes('application/json')) {
           await new Promise((r) => setTimeout(r, 700));
@@ -4896,6 +5190,7 @@ async function sendMessage(overrideText, opts = {}) {
       break;
     }
 
+    if (!isTurnCurrent()) return;
     if (!response.ok) {
       let data = null;
       try { data = await response.json(); } catch { /* ignore */ }
@@ -4909,41 +5204,61 @@ async function sendMessage(overrideText, opts = {}) {
     pendingAttachments.forEach(file => { if (file.preview) URL.revokeObjectURL(file.preview); });
     pendingAttachments = [];
     renderAttachments();
-    const result = await consumeStream(response, bubble);
-    if (result.ok) {
-      await reloadCurrentConversation();
-      renderTurnNotices();
-      if (state.diffs?.length) {
-        const bubbles = $('chat').querySelectorAll('.msg.assistant');
-        const lastBubble = bubbles[bubbles.length - 1];
-        if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
-          lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
+    const result = await consumeStream(response, bubble, isTurnCurrent);
+    if (!isTurnCurrent()) return;
+    const mergedTouched = [...new Set([...priorWaveTouched, ...(result.touchedFiles || [])])];
+    const mergedDeleted = [...new Set([...priorWaveDeleted, ...(result.deletedFiles || [])])];
+
+    if (result.userStopped) {
+      await reloadCurrentConversation({ syncWorkspace: true });
+      renderActiveCheckpointBanner();
+    } else if (result.ok) {
+      if (result.waveContinue && waveCount < 8) {
+        nextWaveChainPayload = {
+          resumeCheckpoint: true,
+          silentAutoResume: true,
+          _waveCount: waveCount + 1,
+          _waveTouched: mergedTouched,
+          _waveDeleted: mergedDeleted
+        };
+      } else {
+        await reloadCurrentConversation();
+        renderTurnNotices();
+        if (state.diffs?.length) {
+          const bubbles = $('chat').querySelectorAll('.msg.assistant');
+          const lastBubble = bubbles[bubbles.length - 1];
+          if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
+            lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
+          }
+        }
+        if (state.repo && state.agentConfig?.autoCommitGh !== false && (mergedTouched.length || mergedDeleted.length)) {
+          const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
+          commitChangesAtomically(mergedTouched, mergedDeleted, '', badge).catch(() => {});
         }
       }
-      if (state.repo && state.agentConfig?.autoCommitGh !== false && (result.touchedFiles.length || result.deletedFiles.length)) {
-        const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
-        commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
-      }
-    } else if (result.clientNetworkDropped) {
-      // Browser <-> Cloudflare SSE connection blipped (e.g. VPN/mobile switch).
-      // First check if the server already finished in D1 via waitUntil; otherwise auto-resume silently!
+    } else if (result.clientNetworkDropped && !chatAbort.signal.aborted) {
       const vEl = bubble.querySelector('.claude-verb');
       if (vEl) vEl.textContent = '🔄 نوسان اینترنت تشخیص داده شد — بررسی وضعیت ذخیره در سرور…';
       let recoveredFromD1 = false;
       for (let poll = 0; poll < 3; poll += 1) {
         await new Promise((r) => setTimeout(r, 1300));
+        if (!isTurnCurrent() || chatAbort.signal.aborted) return;
         try {
-          const snap = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}`);
+          const snap = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}?lite=1&limit=90`);
+          if (!isTurnCurrent()) return;
           const snapMsgs = snap.messages || [];
           const hasAssistantReply = snapMsgs.length > msgCountBeforeTurn && snapMsgs.at(-1)?.role === 'assistant';
           if (hasAssistantReply && !snap.checkpoint?.active) {
             state.messages = snapMsgs;
+            state.hasOlderMessages = Boolean(snap.hasOlderMessages);
+            state.oldestSeq = snap.oldestSeq ?? (snapMsgs.length ? snapMsgs[0].seq : null);
             state.activeCheckpoint = null;
             if (snap.workspace) {
               state.workspace = normalizeWorkspace(snap.workspace);
               renderTree();
               renderEditor();
             }
+            putConvCache(state.conversationId, snap);
             renderChat();
             recoveredFromD1 = true;
             break;
@@ -4954,10 +5269,14 @@ async function sendMessage(overrideText, opts = {}) {
           }
         } catch { /* retry next poll */ }
       }
-      if (!recoveredFromD1) {
+      if (!recoveredFromD1 && isTurnCurrent()) {
         await reloadCurrentConversation({ syncWorkspace: true });
         const ckReason = state.activeCheckpoint?.reason || 'stream_cutoff';
-        const isHardStop = ckReason === 'quota_exhausted' || ckReason === 'auth_failed' || ckReason === 'rate_limited';
+        const isHardStop =
+          ckReason === 'quota_exhausted' ||
+          ckReason === 'auth_failed' ||
+          ckReason === 'rate_limited' ||
+          ckReason === 'user_stopped';
         if (!isHardStop && autoRetryCount < 2) {
           scheduleAutoResumeNext = autoRetryCount + 1;
         } else {
@@ -4972,45 +5291,78 @@ async function sendMessage(overrideText, opts = {}) {
           renderActiveCheckpointBanner();
         }
       }
+    } else if (result.clientNetworkDropped && chatAbort.signal.aborted) {
+      // User clicked Stop (`stopCurrentTurn`) — reload persisted checkpoint cleanly without treating as network drop!
+      await reloadCurrentConversation({ syncWorkspace: true });
+      renderActiveCheckpointBanner();
     } else if (result.resumable) {
       await reloadCurrentConversation({ syncWorkspace: true });
       const ckReason = state.activeCheckpoint?.reason || '';
-      const canAutoContinue =
-        (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
-        autoRetryCount < 1;
-      if (canAutoContinue) {
-        scheduleAutoResumeNext = autoRetryCount + 1;
+      if (ckReason === 'wave_continue' && waveCount < 8) {
+        nextWaveChainPayload = {
+          resumeCheckpoint: true,
+          silentAutoResume: true,
+          _waveCount: waveCount + 1,
+          _waveTouched: mergedTouched,
+          _waveDeleted: mergedDeleted
+        };
+      } else {
+        const canAutoContinue =
+          (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
+          autoRetryCount < 1;
+        if (canAutoContinue) {
+          scheduleAutoResumeNext = autoRetryCount + 1;
+        }
       }
     }
   } catch (error) {
-    const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
-    if (!existingText) {
-      bubble.className = 'msg assistant error';
-      bubble.textContent = 'خطا: ' + error.message;
-      state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+    if (!isTurnCurrent()) return;
+    if (chatAbort.signal.aborted || error?.name === 'AbortError') {
+      await reloadCurrentConversation({ syncWorkspace: true });
+      renderActiveCheckpointBanner();
     } else {
-      bubble.insertAdjacentHTML('beforeend', `<div class="notice bad" style="margin-top:8px">خطا: ${esc(error.message)}</div>`);
+      const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
+      if (!existingText) {
+        bubble.className = 'msg assistant error';
+        bubble.textContent = 'خطا: ' + error.message;
+        state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+      } else {
+        bubble.insertAdjacentHTML('beforeend', `<div class="notice bad" style="margin-top:8px">خطا: ${esc(error.message)}</div>`);
+      }
+      if (state.activeCheckpoint?.active) renderActiveCheckpointBanner();
     }
-    if (state.activeCheckpoint?.active) renderActiveCheckpointBanner();
   } finally {
     clearInterval(spinTimer);
+    if (state.chatAbortController === chatAbort) state.chatAbortController = null;
+    if (!isTurnCurrent()) return;
     bubble.querySelector('.claude-spinner-bar')?.remove();
     bubble.querySelector('.msg-text')?.classList.remove('stream-cursor');
     state.busy = false;
     document.body.classList.remove('is-working');
+    if ($('stopTurnBtn')) $('stopTurnBtn').hidden = true;
     renderAttachments();
     $('sendBtn').textContent = 'ارسال ↑';
     $('composerHint').textContent = '';
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
     syncAgentUi();
     loadConversations();
-    if (scheduleAutoResumeNext > 0) {
+    if (nextWaveChainPayload) {
+      setSync('busy', `🌊 انتقال خودکار به موج ${faNum((nextWaveChainPayload._waveCount || 1) + 1)}…`);
       setTimeout(() => {
-        if (!state.busy) {
+        if (!state.busy && state.conversationId === turnConvId) {
+          sendMessage('ادامه', nextWaveChainPayload);
+        }
+      }, 350);
+    } else if (scheduleAutoResumeNext > 0) {
+      setTimeout(() => {
+        if (!state.busy && state.conversationId === turnConvId) {
           sendMessage('ادامه', {
             resumeCheckpoint: true,
             silentAutoResume: true,
-            _autoRetryCount: scheduleAutoResumeNext
+            _autoRetryCount: scheduleAutoResumeNext,
+            _waveCount: waveCount,
+            _waveTouched: priorWaveTouched,
+            _waveDeleted: priorWaveDeleted
           });
         }
       }, 900);
@@ -5018,9 +5370,11 @@ async function sendMessage(overrideText, opts = {}) {
   }
 }
 
-async function consumeStream(response, bubble) {
+async function consumeStream(response, bubble, isTurnCurrent = () => true) {
   let persisted = false;
   let resumableStop = false;
+  let waveContinue = false;
+  let userStopped = false;
   let serverErrorReceived = false;
   let clientNetworkDropped = false;
   const reader = response.body.getReader();
@@ -5040,6 +5394,7 @@ async function consumeStream(response, bubble) {
   const stepPrefix = () => (currentStep > 1 ? `[گام ${faNum(currentStep)}/${faNum(currentMaxSteps)}] ` : '');
 
   const handle = (event, data) => {
+    if (!isTurnCurrent()) return;
     if (event === 'status') {
       if (Number(data.step) > 0) currentStep = Number(data.step);
       if (Number(data.maxSteps) > 0) currentMaxSteps = Number(data.maxSteps);
@@ -5047,6 +5402,10 @@ async function consumeStream(response, bubble) {
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
+      } else if (data.phase === 'rate_limit_wait') {
+        const waitSec = Math.max(1, Math.ceil((Number(data.waitMs) || 2500) / 1000));
+        setSync('busy', `مکث خودکار ${faNum(waitSec)} ثانیه برای شارژ سهمیه لحظه‌ای…`);
+        if (vEl) vEl.textContent = `${stepPrefix()}⏳ سهمیه لحظه‌ای (429) — مکث خودکار ${faNum(waitSec)} ثانیه و ادامه…`;
       } else if (data.phase === 'auto-heal') {
         setSync('busy', 'بازاتصال خودکار بدون توقف…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔄 بازاتصال خودکار به سرویس مدل بدون قطع کار (${faNum(data.attempt || 1)}/۳)…`;
@@ -5209,8 +5568,41 @@ async function consumeStream(response, bubble) {
         bubble.appendChild(acts);
       }
       persisted = true;
-      state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
-      setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
+      waveContinue = Boolean(data.waveContinue);
+      if (waveContinue) {
+        state.activeCheckpoint = null;
+        const wNum = faNum(data.waveNumber || 1);
+        const cSteps = faNum(data.cumulativeSteps || data.steps || 0);
+        textArea.innerHTML = `<span class="tiny" style="color:var(--claude-amber)">🌊 موج ${wNum} ذخیره شد (${cSteps} گام) — شروع خودکار موج بعدی با سهمیه تازه کلودفلر…</span>`;
+        setSync('busy', `موج ${wNum} ذخیره شد · شروع موج بعدی…`);
+      } else {
+        state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
+        setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
+      }
+    } else if (event === 'stopped') {
+      userStopped = true;
+      serverErrorReceived = true;
+      bubble.querySelector('.claude-spinner-bar')?.remove();
+      textArea.classList.remove('stream-cursor');
+      if (data.workspace) {
+        state.workspace = normalizeWorkspace(data.workspace);
+        for (const p of data.savedFiles || []) {
+          if (state.repo) state.dirtyFiles.add(p);
+        }
+        renderTree();
+        renderEditor();
+      }
+      const preserved = String(data.partialContent || streamedDraft || '').trim();
+      if (preserved) {
+        assistantText = preserved;
+        textArea.innerHTML = renderMarkdownish(preserved);
+      } else {
+        textArea.innerHTML = '<span class="tiny" style="color:var(--claude-amber)">⏹ توسط شما متوقف شد — پیشرفت ذخیره شد</span>';
+      }
+      if (data.checkpoint) {
+        state.activeCheckpoint = data.checkpoint;
+        resumableStop = true;
+      }
     } else if (event === 'error') {
       serverErrorReceived = true;
       bubble.querySelector('.claude-spinner-bar')?.remove();
@@ -5289,6 +5681,8 @@ async function consumeStream(response, bubble) {
   }
   return {
     ok: persisted,
+    waveContinue,
+    userStopped,
     resumable: resumableStop,
     clientNetworkDropped,
     text: assistantText,
@@ -5321,18 +5715,27 @@ function renderTurnNotices() {
  * what was persisted (server-assigned seq numbers, redacted text, tool groups).
  */
 async function reloadCurrentConversation({ syncWorkspace = false } = {}) {
-  if (!state.conversationId) return;
+  const targetId = state.conversationId;
+  if (!targetId || String(targetId).startsWith('pending-')) return;
   try {
-    const data = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}`);
+    const qs = syncWorkspace ? '?lite=1&limit=90' : '?lite=1&limit=90&skipWorkspace=1';
+    const data = await api(`${API.conversations}/${encodeURIComponent(targetId)}${qs}`);
+    if (state.conversationId !== targetId) return;
     state.messages = data.messages || [];
+    state.hasOlderMessages = Boolean(data.hasOlderMessages);
+    state.oldestSeq = data.oldestSeq ?? (state.messages.length ? state.messages[0].seq : null);
     state.activeCheckpoint = data.checkpoint || null;
     if (syncWorkspace && data.workspace) {
       state.workspace = normalizeWorkspace(data.workspace);
       renderTree();
       renderEditor();
     }
-    const conv = state.conversations.find((c) => c.id === state.conversationId);
+    const conv = state.conversations.find((c) => c.id === targetId);
     if (conv && data.conversation) Object.assign(conv, data.conversation);
+    putConvCache(targetId, {
+      ...data,
+      workspace: data.workspace !== undefined ? data.workspace : snapshotWorkspace()
+    });
     renderChat();
     updateContextMeter(data.conversation || {});
   } catch { /* keep the optimistic view */ }

@@ -546,6 +546,30 @@ const treePayload = JSON.parse(ghTreeCalls[0].init.body);
 assert.equal(treePayload.tree.length, 3, '2 touched + 1 deleted in single tree');
 assert.ok(treePayload.tree.some((e) => e.path === 'old.js' && e.sha === null), 'deleted file should have sha: null');
 
+// --- instant zero-upload New Chat + non-blocking conversation switch even while busy
+window.eval('state.dirtyFiles.clear()');
+const callsBeforeNewChat = calls.length;
+const newId = await window.newConversation(true);
+assert.equal(newId, 'c-new');
+const newChatCalls = calls.slice(callsBeforeNewChat);
+const createPost = newChatCalls.find((c) => String(c.url).endsWith('/api/state') && c.init.method === 'POST');
+assert.ok(createPost, 'expected create POST');
+const createBody = JSON.parse(createPost.init.body);
+assert.equal(createBody.copyWorkspaceFrom, 'c-new', 'clones workspace server-side without uploading files');
+assert.equal(createBody.workspace, undefined, 'does not upload multi-MB workspace on clean New Chat');
+assert.equal(
+  newChatCalls.filter((c) => String(c.url).includes('/api/state/conversations/c-new')).length,
+  0,
+  'does not re-download empty newly created conversation'
+);
+assert.ok($('chat').querySelector('.welcome'), 'shows clean welcome screen immediately');
+
+// Simulate busy turn on c-new, then switch back to c-1 -> must detach cleanly and unlock sendBtn!
+window.eval('state.busy = true; document.getElementById("sendBtn").disabled = true;');
+await window.openConversation('c-1');
+assert.equal($('sendBtn').disabled, false, 'switching conversations unlocks composer immediately');
+assert.ok($('chat').textContent.includes('چه بسازیم؟'), 'switches back to c-1 messages');
+
 // --- signed-out fallback path
 const dom2 = new JSDOM(html, {
   url: 'https://app.example.com/',
