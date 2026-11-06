@@ -13,9 +13,9 @@
 import { fail } from './util.js';
 
 const MAX_EDITS_PER_FILE = 60;
-const MAX_SEARCH_CHARS = 60_000;
-const MAX_CONTENT_CHARS = 400_000;
-const MAX_DIFF_LINES = 4_000;
+const MAX_SEARCH_CHARS = 120_000;
+const MAX_CONTENT_CHARS = 900_000;
+const MAX_DIFF_LINES = 12_000;
 
 /** Normalize newlines and drop a UTF-8 BOM. */
 export function normalizeSource(text) {

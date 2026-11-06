@@ -11,7 +11,8 @@ import { db, isSafePath } from './store.js';
 import { fail } from './util.js';
 
 const KEEP_PER_FILE = 25;
-const MAX_SNAPSHOT_CHARS = 300_000;
+const MAX_SNAPSHOT_CHARS = 850_000;
+const utf8VerEncoder = new TextEncoder();
 
 function projectOf(workspace) {
   const repo = workspace?.repo;
@@ -30,7 +31,10 @@ export async function recordVersion(env, owner, conversation, { path, content, r
   // restore. These rows have exactly the same exposure as the workspace JSON in
   // the same database, and they are never sent to the model. Secrets are instead
   // *flagged* (see scanForSecrets) so the user can remove them deliberately.
-  const safeContent = String(content ?? '').slice(0, MAX_SNAPSHOT_CHARS);
+  let safeContent = String(content ?? '').slice(0, MAX_SNAPSHOT_CHARS);
+  if (safeContent.length > 300_000 && utf8VerEncoder.encode(safeContent).byteLength > 900_000) {
+    return null;
+  }
   await database
     .prepare(
       `INSERT INTO file_versions(id,owner,conversation_id,project,path,content,reason,created_by,created_at)

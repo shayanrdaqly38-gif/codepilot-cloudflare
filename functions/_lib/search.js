@@ -7,7 +7,7 @@
 import { fail } from './util.js';
 
 const MAX_RESULTS = 120;
-const MAX_FILE_CHARS = 400_000;
+const MAX_FILE_CHARS = 900_000;
 const MAX_REGEX_LENGTH = 200;
 const REGEX_TIME_BUDGET_MS = 40;
 

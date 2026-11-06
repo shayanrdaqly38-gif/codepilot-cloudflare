@@ -652,6 +652,37 @@ assert.ok($('chat').textContent.includes('وضعیت حالت ماراتن'), '/
 window.localStorage.setItem('cp_marathon_auto', '0');
 window.cancelMarathonAuto();
 
+// --- Mobile UX, dynamic meta theme-color, code fence copy header, and smart scroll FAB
+assert.ok($('mobileViewBar'), '#mobileViewBar quick navigation bar exists');
+assert.ok($('scrollBottomBtn'), '#scrollBottomBtn floating jump button exists');
+assert.ok($('metaThemeColor'), '#metaThemeColor meta tag exists');
+
+window.applyTheme('claude-day');
+assert.equal($('metaThemeColor').getAttribute('content'), '#FAF5EE', 'claude-day syncs light browser chrome color');
+window.applyTheme('midnight');
+assert.equal($('metaThemeColor').getAttribute('content'), '#101216', 'midnight syncs dark browser chrome color');
+window.applyTheme('claude-warm');
+assert.equal($('metaThemeColor').getAttribute('content'), '#211b17', 'claude-warm syncs warm browser chrome color');
+
+// Mobile view bar switches active workspace view in 1 tap
+const mobileEditorBtn = $('mobileViewBar').querySelector('[data-workspace-view="editor"]');
+mobileEditorBtn.click();
+assert.equal(window.document.body.dataset.view, 'editor', 'mobile bar switches to editor view');
+assert.ok(mobileEditorBtn.classList.contains('active'), 'mobile editor tab marked active');
+const mobileChatBtn = $('mobileViewBar').querySelector('[data-workspace-view="chat"]');
+mobileChatBtn.click();
+assert.equal(window.document.body.dataset.view, 'chat', 'mobile bar switches back to chat view');
+
+// Enhanced markdown: code fence header + copy button + headings + bold + XSS safety
+const mdHtml = window.renderMarkdownish('## خلاصه تغییرات\nمتن **مهم** با <img src=x onerror=alert(1)>\n---\n```javascript\nconst ok = 42;\n```');
+assert.ok(mdHtml.includes('class="code-fence-wrap"'), 'code fence wrapped with header container');
+assert.ok(mdHtml.includes('data-role="copy-fence"'), 'code fence renders 1-tap copy button');
+assert.ok(mdHtml.includes('>javascript<'), 'code fence shows language badge');
+assert.ok(mdHtml.includes('<strong>مهم</strong>'), 'bold markdown rendered');
+assert.ok(mdHtml.includes('class="md-h2"'), 'h2 heading rendered');
+assert.ok(mdHtml.includes('class="md-hr"'), 'horizontal rule rendered');
+assert.ok(!mdHtml.includes('<img'), 'raw HTML tags inside markdown stay escaped');
+
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
 process.exit(0);
