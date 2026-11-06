@@ -843,6 +843,72 @@ body[data-theme="claude-day"] .palette-cmd{color:var(--claude-deep)}
 .theme-pill-btn{flex:1;min-width:110px;min-height:38px;border-radius:11px!important;font-size:12px;font-weight:600}
 .theme-pill-btn.active{border-color:var(--claude);background:var(--claude-tint);color:var(--claude-bright)}
 body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
+
+/* AI Power & Overdrive Booster Pill + 4-Axis Multi-Tier Deck */
+.power-pill{
+  display:inline-flex;align-items:center;gap:4px;padding:3px 9px!important;min-height:32px!important;min-width:34px;
+  border-radius:999px!important;font-size:11px;font-weight:700;white-space:nowrap;
+  background:var(--panel2);border:1px solid var(--line-strong);color:var(--text-soft);transition:all .2s ease;
+}
+.power-pill:hover{border-color:var(--claude-bright);color:var(--text)}
+.power-pill[data-tier="hard"]{background:rgba(244,178,102,.15);border-color:rgba(244,178,102,.55);color:var(--claude-amber)}
+.power-pill[data-tier="very-hard"]{background:rgba(232,123,82,.18);border-color:rgba(232,123,82,.65);color:var(--claude-bright)}
+.power-pill[data-tier="max"]{background:linear-gradient(135deg,rgba(232,123,82,.28),rgba(244,178,102,.22));border-color:var(--claude);color:var(--text)}
+.power-pill[data-tier="ultra-code"]{
+  background:linear-gradient(135deg,#E87B52,#D95B2B);border-color:#F7B955;color:#1b110b;
+  box-shadow:0 0 14px rgba(232,123,82,.42);
+}
+body[data-theme="claude-day"] .power-pill[data-tier="very-hard"]{color:var(--claude-deep)}
+.power-meter-card{
+  padding:10px 12px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);margin:8px 0 10px;
+}
+.power-meter-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11.5px;margin-bottom:6px}
+.power-meter-track{height:8px;border-radius:999px;background:var(--editor-bg);overflow:hidden;border:1px solid var(--line)}
+.power-meter-fill{
+  height:100%;border-radius:999px;background:linear-gradient(90deg,#82d9a0,#F4B266,#E87B52,#ff6b3d);
+  transition:width .26s cubic-bezier(.2,.8,.2,1);
+}
+.effort-keep-banner{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+  padding:8px 11px;border-radius:11px;background:rgba(232,123,82,.09);border:1px dashed rgba(232,123,82,.45);
+  font-size:11.5px;margin-bottom:10px;
+}
+.power-preset-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:6px;margin:6px 0 12px}
+.power-preset-btn{
+  min-height:34px!important;padding:5px 8px;border-radius:10px!important;font-size:11.5px;font-weight:700;
+  background:var(--panel2);border:1px solid var(--line);color:var(--text-soft);
+}
+.power-preset-btn.active{border-color:var(--claude);background:var(--claude-tint);color:var(--claude-bright)}
+.power-preset-btn[data-preset="ultra-code"].active{
+  background:linear-gradient(135deg,#E87B52,#D95B2B);border-color:#F7B955;color:#1b110b;
+}
+body[data-theme="claude-day"] .power-preset-btn.active{color:var(--claude-deep)}
+body[data-theme="claude-day"] .power-preset-btn[data-preset="ultra-code"].active{color:#fff}
+.power-axis-card{
+  padding:10px 12px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);margin-bottom:8px;
+}
+.power-axis-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.power-axis-head strong{font-size:12.5px;color:var(--text)}
+.power-axis-sub{font-size:11px;color:var(--muted)}
+.power-seg-row{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}
+.power-seg-btn{
+  min-height:32px!important;min-width:32px;padding:4px 3px!important;border-radius:8px!important;
+  font-size:10.5px;font-weight:700;background:var(--editor-bg);border:1px solid var(--line);color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.power-seg-btn.active{background:var(--claude-tint);border-color:var(--claude);color:var(--claude-bright)}
+.power-seg-btn[data-lv="ultra-code"].active{
+  background:linear-gradient(135deg,#E87B52,#D95B2B);border-color:#F7B955;color:#1b110b;
+}
+body[data-theme="claude-day"] .power-seg-btn.active{color:var(--claude-deep)}
+body[data-theme="claude-day"] .power-seg-btn[data-lv="ultra-code"].active{color:#fff}
+.power-axis-desc{font-size:11px;color:var(--claude-amber);margin-top:6px;line-height:1.5}
+body[data-theme="claude-day"] .power-axis-desc{color:var(--claude-deep)}
+@media(max-width:560px){
+  .power-seg-row{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .power-pill{padding:3px 7px!important;font-size:10.5px}
+  .mode-pill{padding:3px 7px!important;font-size:10.5px}
+}
 @media(max-width:760px){
   .chatbox{margin:0 10px 6px;padding:9px 10px}
   .claude-statusline{padding:4px 10px max(6px,env(safe-area-inset-bottom));font-size:10px}
@@ -883,6 +949,7 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
     </nav>
     <div class="drawer-tools">
       <button class="think-toggle on" id="thinkBtn" onclick="toggleTopDrawer(false);openModelModal('effort')" title="تنظیم سطح Effort واقعی مدل">🧠 تفکر</button>
+      <button id="drawerPowerBtn" onclick="toggleTopDrawer(false);openPowerModal()" title="موتور تقویت و پیشران ۴محوره هوش مصنوعی">🔥 قدرت موتور</button>
       <button id="codexSettingsBtn" onclick="toggleTopDrawer(false);openCodexModal()" title="تنظیمات پیشرفته عامل (Codex &amp; Claude Code)">🎛 عامل</button>
       <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
       <button onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
@@ -999,6 +1066,7 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
         <button type="button" class="comp-icon-btn" onclick="toggleSlashPalette()" title="دستورات اسلش (/)" aria-label="دستورات اسلش">/</button>
         <button type="button" class="comp-icon-btn" onclick="toggleMentionPalette()" title="انتخاب فایل پروژه (@)" aria-label="ارجاع به فایل">@</button>
         <button type="button" class="mode-pill" id="modeCycleBtn" data-mode="auto-edit" onclick="cycleAgentMode()" title="تغییر حالت عامل (Shift+Tab)">⚡ Auto</button>
+        <button type="button" class="power-pill" id="powerBoostBtn" data-tier="medium" onclick="openPowerModal()" title="موتور تقویت هوش مصنوعی (طول کار، دقت جزئیات، پیشرفته‌سازی، حساسیت)">🔥 قدرت</button>
         <span class="hint" id="composerHint"></span>
         <button class="primary send-pill" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
       </div>
@@ -1146,12 +1214,17 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
       </div>
       <div>
         <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps)</label>
-        <input class="field" type="number" id="cfgMaxSteps" min="4" max="36" step="2" value="16">
+        <input class="field" type="number" id="cfgMaxSteps" min="4" max="96" step="2" value="16">
       </div>
       <div>
         <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن)</label>
-        <input class="field" type="number" id="cfgContextBudget" min="8000" max="120000" step="4000" value="24000">
+        <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
       </div>
+    </div>
+
+    <div class="effort-keep-banner" style="margin-top:10px;margin-bottom:4px">
+      <span>🔥 تنظیم ۴ محور قدرت، استقامت طولانی و «اولترا کد» در پنل اختصاصی موتور:</span>
+      <button type="button" onclick="closeModal('codexModal');openPowerModal()">⚡ باز کردن موتور قدرت</button>
     </div>
 
     <label class="field-label" for="cfgSessionGoal">🎯 هدف فعال جلسه (Session Goal — اختیاری، معادل <code>/goal</code>)</label>
@@ -1176,6 +1249,49 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button type="button" onclick="closeModal('codexModal')">بستن</button>
         <button type="button" class="primary" id="saveCodexConfigBtn" onclick="saveAgentConfigFromModal()">ذخیره تنظیمات عامل</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- AI Power & Overdrive Booster Modal -->
+<div class="modal" id="powerModal">
+  <div class="modal-card" style="max-width:650px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <h2 style="margin:0;display:inline-flex;align-items:center;gap:7px">⚡ موتور تقویت و پیشران هوش مصنوعی</h2>
+      <button type="button" class="icon-btn" onclick="closeModal('powerModal')" aria-label="بستن" style="min-height:32px;min-width:32px">✕</button>
+    </div>
+
+    <div class="power-meter-card">
+      <div class="power-meter-top">
+        <strong id="powerMeterTitle">🔥 توان موتور: استاندارد</strong>
+        <span id="powerMeterSpecs" style="direction:ltr;color:var(--muted);font-family:ui-monospace,monospace">20 steps · 24K ctx</span>
+      </div>
+      <div class="power-meter-track"><div class="power-meter-fill" id="powerMeterFill" style="width:24%"></div></div>
+    </div>
+
+    <div class="effort-keep-banner">
+      <span>🧠 <b>سطح تلاش اصلی مدل (Effort — دست‌نخورده):</b> <span id="powerEffortReadout" style="color:var(--claude-bright);font-weight:700">Medium</span></span>
+      <button type="button" onclick="closeModal('powerModal');openModelModal('effort')" style="min-height:32px;padding:4px 10px;font-size:11px">تنظیم Effort اصلی</button>
+    </div>
+
+    <div style="font-size:11.5px;font-weight:700;color:var(--muted)">پروفایل یک‌کلیکی کل موتور (یا هر محور را جداگانه زیر آن تنظیم کنید):</div>
+    <div class="power-preset-row" id="powerPresetRow">
+      <button type="button" class="power-preset-btn" data-preset="low" onclick="applyPowerMasterPreset('low')">کم</button>
+      <button type="button" class="power-preset-btn" data-preset="medium" onclick="applyPowerMasterPreset('medium')">متوسط</button>
+      <button type="button" class="power-preset-btn" data-preset="hard" onclick="applyPowerMasterPreset('hard')">هارد</button>
+      <button type="button" class="power-preset-btn" data-preset="very-hard" onclick="applyPowerMasterPreset('very-hard')">خیلی هارد</button>
+      <button type="button" class="power-preset-btn" data-preset="max" onclick="applyPowerMasterPreset('max')">🔥 مکس</button>
+      <button type="button" class="power-preset-btn" data-preset="ultra-code" onclick="applyPowerMasterPreset('ultra-code')">⚡ اولترا کد</button>
+    </div>
+
+    <div id="powerAxesContainer"></div>
+
+    <div class="modal-actions" style="justify-content:space-between;margin-top:12px">
+      <button type="button" onclick="resetPowerModalToDefault()">بازنشانی به متوسط</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" onclick="closeModal('powerModal')">انصراف</button>
+        <button type="button" class="primary" id="savePowerConfigBtn" onclick="savePowerConfigFromModal()">⚡ اعمال قدرت موتور</button>
       </div>
     </div>
   </div>
@@ -1410,11 +1526,81 @@ const DEFAULT_CLIENT_AGENT_CONFIG = {
   temperature: 0.25,
   maxSteps: 16,
   contextBudget: 24000,
+  workStamina: 'medium',
+  detailThinking: 'medium',
+  ambitionLevel: 'medium',
+  humanSensitivity: 'medium',
   customInstructions: '',
   goal: '',
   theme: 'claude-warm',
   reducedMotion: false
 };
+
+const POWER_LEVELS_ORDER = ['low', 'medium', 'hard', 'very-hard', 'max', 'ultra-code'];
+
+const POWER_LEVEL_META = {
+  low: { label: 'کم', pill: '🔥 کم', rank: 0, pct: 12 },
+  medium: { label: 'متوسط', pill: '🔥 قدرت', rank: 1, pct: 26 },
+  hard: { label: 'هارد', pill: '🔥 هارد', rank: 2, pct: 50 },
+  'very-hard': { label: 'خیلی هارد', pill: '🔥 خیلی هارد', rank: 3, pct: 72 },
+  max: { label: 'مکس', pill: '🔥 مکس', rank: 4, pct: 88 },
+  'ultra-code': { label: '⚡ اولترا کد', pill: '⚡ اولترا کد', rank: 5, pct: 100 }
+};
+
+const POWER_AXES_META = [
+  {
+    key: 'workStamina',
+    title: '۱. ⏱ مدت و استقامت کار طولانی',
+    sub: 'چقدر طولانی، پیگیر و چند گام پیاپی بدون توقف کار کند',
+    descs: {
+      low: 'سریع و کوتاه (تا ۸ گام ابزار) — مناسب سوالات و اصلاحات فوری.',
+      medium: 'استقامت استاندارد (تا ۲۰ گام · بودجه ۲۴K) — متعادل برای کارهای روزمره.',
+      hard: 'کار مداوم (تا ۳۲ گام · بودجه ۳۶K) — بررسی وابستگی‌ها + تعمیر خودکار خطای سینتکس.',
+      'very-hard': 'استقامت بالا (تا ۴۴ گام · بودجه ۴۸K · تایم‌اوت ۱۶۵s) — تکمیل چندفایلی بدون توقف زودهنگام.',
+      max: 'ماراتن کامل (تا ۶۰ گام · بودجه ۶۴K · تایم‌اوت ۱۷۵s) — اجرای صفر تا صد معماری، کد و تست در یک نوبت.',
+      'ultra-code': '⚡ بی‌وقفه اولترا کد (تا ۸۰ گام · بودجه ۸۸K · تایم‌اوت ۱۸۰s) — کار سرسختانه تا تکمیل و راستی‌آزمایی ۱۰۰٪.'
+    }
+  },
+  {
+    key: 'detailThinking',
+    title: '۲. 🔬 عمق فکر روی هر جزئیات',
+    sub: 'چقدر عمیق برای تک‌تک جزئیات ریز و لبه‌های خطا فکر کند (مجزا از Effort اصلی مدل)',
+    descs: {
+      low: 'ورود مستقیم به اجرا بدون مکث تحلیلی اضافه.',
+      medium: 'تحلیل مهندسی استاندارد پیش از تغییرات چندبخشی.',
+      hard: 'برنامه‌ریزی ساختاریافته ورودی/خروجی، وابستگی‌ها و خطاها پیش از ویرایش.',
+      'very-hard': 'کالبدشکافی عمیق هر تابع، تداخل‌ها، امنیت و حالت‌های لبه‌ای قبل و بین ویرایش‌ها.',
+      max: 'واکاوی موشکافانه ریزترین جزئیات معماری، استیت، خطاهای شبکه و سازگاری موبایل/دسکتاپ.',
+      'ultra-code': '⚡ تفکر سطح معمار ارشد روی کوچک‌ترین جزئیات — شبیه‌سازی سناریوهای شکست و تضمین بی‌نقصی.'
+    }
+  },
+  {
+    key: 'ambitionLevel',
+    title: '۳. 🚀 ضریب پیشرفته‌سازی و جزئیات‌پردازی',
+    sub: 'چقدر پرجزئیات روی چیزهای کوچک کار کند یا هر چیز ساده را چند برابر پیشرفته‌تر بسازد',
+    descs: {
+      low: 'مینیمال و ساده — فقط حداقل کد خواسته‌شده بدون امکانات اضافه.',
+      medium: 'پیاده‌سازی کامل و استاندارد دقیقاً مطابق خواسته شما.',
+      hard: 'غنی‌تر از حالت عادی — اعتبارسنجی کامل، مدیریت خطا و حالت‌های خالی/لودینگ.',
+      'very-hard': 'ارتقای ۳ برابری — تبدیل درخواست‌های ساده به امکانات حرفه‌ای، پرجزئیات و روان.',
+      max: 'سطح محصول تجاری ۵ برابری — طراحی ماژولار، ریزتعاملات دقیق و پوشش همه سناریوها بدون نقص.',
+      'ultra-code': '⚡ پیشرفته‌سازی ۱۰ برابری اولترا کد — تبدیل هر ایده ساده به سیستم فوق‌پیشرفته، کامل و خیره‌کننده.'
+    }
+  },
+  {
+    key: 'humanSensitivity',
+    title: '۴. ✨ حساسیت، مرتب‌سازی و تناسب انسانی',
+    sub: 'چقدر روی مرتب‌سازی کد، نظم بصری، خوانایی و راحتی انسان حساس و وسواسی باشد',
+    descs: {
+      low: 'تمرکز صرف روی کارکرد فنی کد بدون حساسیت ظاهری.',
+      medium: 'کد تمیز، خوانا و رابط کاربری استاندارد.',
+      hard: 'حساسیت بالا روی مرتب‌سازی منظم کدها، نام‌گذاری شفاف و متن‌های طبیعی.',
+      'very-hard': 'وسواس روی نظم بخش‌ها، ترتیب منطقی توابع/استایل‌ها و تجربه راحت راست‌به‌چپ.',
+      max: 'استاندارد طلایی انسانی — کد فوق‌مرتب، دسترس‌پذیری کامل و چیدمان چشم‌نواز بدون شلوغی.',
+      'ultra-code': '⚡ کمال‌گرایی اولترا در نظم کد و تجربه انسانی — مرتب‌سازی وسواس‌گونه و کنترل کیفیت نهایی.'
+    }
+  }
+];
 
 const AGENT_MODE_META = {
   plan: { label: '🧭 Plan', short: 'Plan', fa: 'برنامه‌ریزی (بدون ویرایش)' },
@@ -2312,6 +2498,146 @@ function syncAgentUi() {
     const branchLabel = state.repo ? `${state.repo.repo}@${state.repo.branch}` : 'workspace';
     slBranch.textContent = `⑂ ${branchLabel}${dirtyCount ? ` *${dirtyCount}` : ''}`;
   }
+  syncPowerUi();
+}
+
+let powerModalDraft = null;
+
+function computeClientPowerSummary(cfg) {
+  const c = cfg || state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
+  const axes = [
+    c.workStamina || 'medium',
+    c.detailThinking || 'medium',
+    c.ambitionLevel || 'medium',
+    c.humanSensitivity || 'medium'
+  ];
+  const ranks = axes.map((lv) => POWER_LEVEL_META[lv]?.rank ?? 1);
+  const maxRank = Math.max(...ranks);
+  const topTier = POWER_LEVELS_ORDER[maxRank] || 'medium';
+  const avgPct = Math.round(
+    axes.reduce((s, lv) => s + (POWER_LEVEL_META[lv]?.pct ?? 26), 0) / axes.length
+  );
+  const stepMap = { low: 8, medium: Math.max(c.maxSteps || 20, 20), hard: 32, 'very-hard': 44, max: 60, 'ultra-code': 80 };
+  const ctxMap = { low: 16, medium: 24, hard: 36, 'very-hard': 48, max: 64, 'ultra-code': 88 };
+  const stamina = c.workStamina || 'medium';
+  const steps = Math.max(stepMap[stamina] || 20, stamina === 'low' ? 8 : (c.maxSteps || 16));
+  const ctxK = Math.max(ctxMap[stamina] || 24, Math.round((c.contextBudget || 24000) / 1000));
+  const allSame = axes.every((lv) => lv === axes[0]) ? axes[0] : null;
+  return { topTier, avgPct, steps, ctxK, allSame, axes };
+}
+
+function syncPowerUi() {
+  const cfg = state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
+  const summary = computeClientPowerSummary(cfg);
+  const btn = $('powerBoostBtn');
+  if (btn) {
+    btn.dataset.tier = summary.topTier;
+    btn.textContent =
+      summary.allSame === 'low'
+        ? '🔥 کم'
+        : (POWER_LEVEL_META[summary.topTier]?.pill || '🔥 قدرت');
+    btn.title = `موتور قدرت: استقامت ${POWER_LEVEL_META[cfg.workStamina || 'medium']?.label} · جزئیات ${POWER_LEVEL_META[cfg.detailThinking || 'medium']?.label} · پیشرفته‌سازی ${POWER_LEVEL_META[cfg.ambitionLevel || 'medium']?.label} · حساسیت ${POWER_LEVEL_META[cfg.humanSensitivity || 'medium']?.label}`;
+  }
+  const drawerBtn = $('drawerPowerBtn');
+  if (drawerBtn) {
+    drawerBtn.textContent = summary.topTier === 'medium' ? '🔥 قدرت موتور' : `🔥 قدرت: ${POWER_LEVEL_META[summary.topTier]?.label}`;
+  }
+}
+
+function renderPowerModalContent() {
+  const draft = powerModalDraft || state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
+  const summary = computeClientPowerSummary(draft);
+  const titleEl = $('powerMeterTitle');
+  if (titleEl) {
+    const tierLabel = summary.allSame
+      ? POWER_LEVEL_META[summary.allSame]?.label
+      : `ترکیبی (سقف ${POWER_LEVEL_META[summary.topTier]?.label})`;
+    titleEl.textContent = `🔥 توان موتور: ${tierLabel} (${faNum(summary.avgPct)}٪)`;
+  }
+  const specsEl = $('powerMeterSpecs');
+  if (specsEl) specsEl.textContent = `تا ${summary.steps} گام · ${summary.ctxK}K ctx`;
+  const fillEl = $('powerMeterFill');
+  if (fillEl) fillEl.style.width = `${summary.avgPct}%`;
+
+  const effortEl = $('powerEffortReadout');
+  if (effortEl) {
+    const effKey = state.thinking === false ? 'none' : (state.reasoningEffort || 'medium');
+    effortEl.textContent = EFFORT_META[effKey]?.label || effKey;
+  }
+
+  document.querySelectorAll('#powerPresetRow .power-preset-btn').forEach((b) => {
+    b.classList.toggle('active', summary.allSame === b.dataset.preset);
+  });
+
+  const container = $('powerAxesContainer');
+  if (container) {
+    container.innerHTML = POWER_AXES_META.map((axis) => {
+      const cur = draft[axis.key] || 'medium';
+      const buttons = POWER_LEVELS_ORDER.map((lv) => {
+        const active = cur === lv ? ' active' : '';
+        return `<button type="button" class="power-seg-btn${active}" data-axis="${axis.key}" data-lv="${lv}" onclick="setPowerAxisDraft('${axis.key}','${lv}')">${esc(POWER_LEVEL_META[lv].label)}</button>`;
+      }).join('');
+      return `<div class="power-axis-card">
+        <div class="power-axis-head">
+          <strong>${esc(axis.title)}</strong>
+          <span class="power-axis-sub">${esc(axis.sub)}</span>
+        </div>
+        <div class="power-seg-row">${buttons}</div>
+        <div class="power-axis-desc">${esc(axis.descs[cur] || '')}</div>
+      </div>`;
+    }).join('');
+  }
+}
+
+function openPowerModal() {
+  toggleTopDrawer(false);
+  const cfg = state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
+  powerModalDraft = {
+    workStamina: cfg.workStamina || 'medium',
+    detailThinking: cfg.detailThinking || 'medium',
+    ambitionLevel: cfg.ambitionLevel || 'medium',
+    humanSensitivity: cfg.humanSensitivity || 'medium',
+    maxSteps: cfg.maxSteps || 16,
+    contextBudget: cfg.contextBudget || 24000
+  };
+  renderPowerModalContent();
+  $('powerModal')?.classList.add('open');
+}
+
+function setPowerAxisDraft(axisKey, level) {
+  if (!POWER_LEVEL_META[level]) return;
+  if (!powerModalDraft) openPowerModal();
+  powerModalDraft[axisKey] = level;
+  renderPowerModalContent();
+}
+
+function applyPowerMasterPreset(level) {
+  if (!POWER_LEVEL_META[level]) return;
+  if (!powerModalDraft) powerModalDraft = {};
+  powerModalDraft.workStamina = level;
+  powerModalDraft.detailThinking = level;
+  powerModalDraft.ambitionLevel = level;
+  powerModalDraft.humanSensitivity = level;
+  renderPowerModalContent();
+}
+
+function resetPowerModalToDefault() {
+  applyPowerMasterPreset('medium');
+}
+
+async function savePowerConfigFromModal() {
+  if (!powerModalDraft) return closeModal('powerModal');
+  const patch = {
+    workStamina: powerModalDraft.workStamina || 'medium',
+    detailThinking: powerModalDraft.detailThinking || 'medium',
+    ambitionLevel: powerModalDraft.ambitionLevel || 'medium',
+    humanSensitivity: powerModalDraft.humanSensitivity || 'medium'
+  };
+  await persistAgentConfigPatch(patch, false);
+  closeModal('powerModal');
+  const sum = computeClientPowerSummary(state.agentConfig);
+  toast(`⚡ موتور قدرت تنظیم شد: ${POWER_LEVEL_META[sum.topTier]?.label} (تا ${faNum(sum.steps)} گام)`);
+  if ($('chat') && $('chat').querySelector('.welcome')) renderChat();
 }
 
 async function persistAgentConfigPatch(patch, showNotice = false) {
@@ -2404,8 +2730,8 @@ async function saveAgentConfigFromModal() {
     readAgentsMd: Boolean($('cfgReadAgentsMd')?.checked),
     responseStyle: $('cfgResponseStyle')?.value || 'balanced',
     temperature: Math.min(Math.max(Number($('cfgTemperature')?.value ?? 0.25), 0), 1.5),
-    maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 36),
-    contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 120000),
+    maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 96),
+    contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 160000),
     goal: String($('cfgSessionGoal')?.value || '').trim().slice(0, 600),
     customInstructions: String($('cfgCustomInstructions')?.value || '').trim().slice(0, 4000),
     reducedMotion: Boolean($('cfgReducedMotion')?.checked),
@@ -3888,6 +4214,7 @@ const CLAUDE_SPINNER_VERBS = [
 ];
 
 const SLASH_COMMANDS = [
+  { cmd: '/power', args: '[ultra|max|very-hard|hard|medium|low]', desc: 'موتور تقویت ۴محوره هوش مصنوعی (طول کار، جزئیات، پیشرفته‌سازی، حساسیت)' },
   { cmd: '/plan', args: '[درخواست]', desc: 'ورود به حالت Plan (طراحی نقشه بدون دست‌زدن به فایل‌ها)' },
   { cmd: '/suggest', args: '[درخواست]', desc: 'ورود به حالت Suggest (ارائه کد پیشنهادی بدون اعمال خودکار)' },
   { cmd: '/auto', args: '', desc: 'فعال‌سازی حالت Auto-Edit (ویرایش هوشمند خودکار فایل‌ها)' },
@@ -4100,6 +4427,30 @@ async function executeSlashCommand(rawText) {
   const rest = (m[2] || '').trim();
 
   switch (cmd) {
+    case '/power': {
+      const arg = rest.toLowerCase().trim();
+      const aliasMap = {
+        low: 'low', 'کم': 'low',
+        medium: 'medium', normal: 'medium', reset: 'medium', 'متوسط': 'medium',
+        hard: 'hard', 'هارد': 'hard',
+        'very-hard': 'very-hard', veryhard: 'very-hard', 'خیلی هارد': 'very-hard',
+        max: 'max', 'مکس': 'max',
+        ultra: 'ultra-code', 'ultra-code': 'ultra-code', ultracode: 'ultra-code', 'اولترا': 'ultra-code', 'اولترا کد': 'ultra-code'
+      };
+      if (arg && aliasMap[arg]) {
+        const lv = aliasMap[arg];
+        await persistAgentConfigPatch({
+          workStamina: lv,
+          detailThinking: lv,
+          ambitionLevel: lv,
+          humanSensitivity: lv
+        });
+        toast(`⚡ موتور قدرت روی «${POWER_LEVEL_META[lv]?.label}» قرار گرفت`);
+      } else {
+        openPowerModal();
+      }
+      return true;
+    }
     case '/plan':
       cycleAgentMode('plan');
       if (rest) return sendMessage(rest, { modeOverride: 'plan' });
@@ -4317,6 +4668,10 @@ async function sendMessage(overrideText, opts = {}) {
       networkAccess: state.agentConfig?.networkAccess !== false,
       shellAccess: state.agentConfig?.shellAccess !== false,
       temperature: state.agentConfig?.temperature ?? 0.25,
+      workStamina: state.agentConfig?.workStamina || 'medium',
+      detailThinking: state.agentConfig?.detailThinking || 'medium',
+      ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
+      humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
     let response;
@@ -4401,7 +4756,13 @@ async function consumeStream(response, bubble) {
 
   const handle = (event, data) => {
     if (event === 'status') {
-      setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
+      if (data.phase === 'auto-repair') {
+        setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
+        const vEl = bubble.querySelector('.claude-verb');
+        if (vEl) vEl.textContent = '🔧 کنترل کیفیت خودکار و رفع خطاهای کد…';
+      } else {
+        setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
+      }
     } else if (event === 'thinking_delta') {
       streamedThink += String(data.text || '');
       if (thinkArea) {

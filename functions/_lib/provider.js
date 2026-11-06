@@ -195,6 +195,16 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
 export const VALID_AGENT_MODES = ['plan', 'suggest', 'auto-edit', 'full-auto'];
 export const VALID_RESPONSE_STYLES = ['balanced', 'concise', 'explanatory', 'senior-reviewer'];
 export const VALID_THEMES = ['claude-warm', 'claude-day', 'midnight'];
+export const VALID_POWER_LEVELS = ['low', 'medium', 'hard', 'very-hard', 'max', 'ultra-code'];
+
+export const POWER_LEVEL_RANK = Object.freeze({
+  low: 0,
+  medium: 1,
+  hard: 2,
+  'very-hard': 3,
+  max: 4,
+  'ultra-code': 5
+});
 
 export const DEFAULT_AGENT_CONFIG = Object.freeze({
   mode: 'auto-edit',
@@ -208,11 +218,19 @@ export const DEFAULT_AGENT_CONFIG = Object.freeze({
   temperature: 0.25,
   maxSteps: 20,
   contextBudget: 24_000,
+  workStamina: 'medium',
+  detailThinking: 'medium',
+  ambitionLevel: 'medium',
+  humanSensitivity: 'medium',
   theme: 'claude-warm',
   reducedMotion: false,
   mascot: true,
   goal: ''
 });
+
+function normalizePowerLevel(val, fallback = 'medium') {
+  return VALID_POWER_LEVELS.includes(val) ? val : fallback;
+}
 
 export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -220,12 +238,12 @@ export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
   const responseStyle = VALID_RESPONSE_STYLES.includes(src.responseStyle) ? src.responseStyle : base.responseStyle;
   const theme = VALID_THEMES.includes(src.theme) ? src.theme : base.theme;
   const tempNum = Number(src.temperature);
-  const temperature = Number.isFinite(tempNum) ? Math.min(1, Math.max(0, Math.round(tempNum * 100) / 100)) : base.temperature;
+  const temperature = Number.isFinite(tempNum) ? Math.min(1.5, Math.max(0, Math.round(tempNum * 100) / 100)) : base.temperature;
   const stepsNum = Math.floor(Number(src.maxSteps));
-  const maxSteps = Number.isFinite(stepsNum) && stepsNum >= 4 && stepsNum <= 36 ? stepsNum : base.maxSteps;
+  const maxSteps = Number.isFinite(stepsNum) && stepsNum >= 4 && stepsNum <= 96 ? stepsNum : base.maxSteps;
   const budgetNum = Math.floor(Number(src.contextBudget));
   const contextBudget =
-    Number.isFinite(budgetNum) && budgetNum >= 6_000 && budgetNum <= 120_000 ? budgetNum : base.contextBudget;
+    Number.isFinite(budgetNum) && budgetNum >= 6_000 && budgetNum <= 160_000 ? budgetNum : base.contextBudget;
 
   return {
     mode,
@@ -242,10 +260,90 @@ export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
     temperature,
     maxSteps,
     contextBudget,
+    workStamina: normalizePowerLevel(src.workStamina, base.workStamina || 'medium'),
+    detailThinking: normalizePowerLevel(src.detailThinking, base.detailThinking || 'medium'),
+    ambitionLevel: normalizePowerLevel(src.ambitionLevel, base.ambitionLevel || 'medium'),
+    humanSensitivity: normalizePowerLevel(src.humanSensitivity, base.humanSensitivity || 'medium'),
     theme,
     reducedMotion: typeof src.reducedMotion === 'boolean' ? src.reducedMotion : base.reducedMotion,
     mascot: typeof src.mascot === 'boolean' ? src.mascot : base.mascot,
     goal: typeof src.goal === 'string' ? src.goal.slice(0, 600) : base.goal
+  };
+}
+
+/**
+ * Translate the 4 independent AI Power Engine axes (`workStamina`, `detailThinking`,
+ * `ambitionLevel`, `humanSensitivity`) + untouched `reasoningEffort` into concrete
+ * execution budgets for the server-side autonomous loop.
+ */
+export function resolvePowerExecutionPlan(agentConfig = {}, reasoningEffort = null) {
+  const cfg = normalizeAgentConfig(agentConfig, DEFAULT_AGENT_CONFIG);
+  const stamina = cfg.workStamina || 'medium';
+  const detail = cfg.detailThinking || 'medium';
+  const ambition = cfg.ambitionLevel || 'medium';
+  const sensitivity = cfg.humanSensitivity || 'medium';
+
+  const STAMINA_SPECS = {
+    low: { stepCap: 8, stepFloor: 6, maxFileEdits: 24, contextFloor: 16_000, maxTurnInputChars: 220_000, timeoutMs: 95_000 },
+    medium: { stepCap: 36, stepFloor: 16, maxFileEdits: 72, contextFloor: 24_000, maxTurnInputChars: 260_000, timeoutMs: 120_000 },
+    hard: { stepCap: 48, stepFloor: 32, maxFileEdits: 110, contextFloor: 36_000, maxTurnInputChars: 340_000, timeoutMs: 145_000 },
+    'very-hard': { stepCap: 64, stepFloor: 44, maxFileEdits: 150, contextFloor: 48_000, maxTurnInputChars: 420_000, timeoutMs: 165_000 },
+    max: { stepCap: 80, stepFloor: 60, maxFileEdits: 200, contextFloor: 64_000, maxTurnInputChars: 500_000, timeoutMs: 175_000 },
+    'ultra-code': { stepCap: 96, stepFloor: 80, maxFileEdits: 260, contextFloor: 88_000, maxTurnInputChars: 600_000, timeoutMs: 180_000 }
+  };
+  const spec = STAMINA_SPECS[stamina] || STAMINA_SPECS.medium;
+
+  let baseMaxSteps =
+    cfg.mode === 'full-auto'
+      ? Math.max(cfg.maxSteps || 24, 28)
+      : reasoningEffort === 'max' || reasoningEffort === 'xhigh'
+        ? Math.max(cfg.maxSteps || 20, 28)
+        : reasoningEffort === 'high'
+          ? Math.max(cfg.maxSteps || 20, 24)
+          : cfg.maxSteps || 20;
+
+  let maxSteps;
+  if (stamina === 'low') {
+    maxSteps = Math.min(baseMaxSteps, spec.stepCap);
+  } else if (stamina === 'medium') {
+    maxSteps = Math.min(Math.max(baseMaxSteps, 4), spec.stepCap);
+  } else {
+    maxSteps = Math.min(Math.max(baseMaxSteps, spec.stepFloor), spec.stepCap);
+  }
+
+  const detailRank = POWER_LEVEL_RANK[detail] ?? 1;
+  const ambitionRank = POWER_LEVEL_RANK[ambition] ?? 1;
+  const sensitivityRank = POWER_LEVEL_RANK[sensitivity] ?? 1;
+  const staminaRank = POWER_LEVEL_RANK[stamina] ?? 1;
+  const peakRank = Math.max(staminaRank, detailRank, ambitionRank, sensitivityRank);
+
+  const thinkingDeltaLimit = detailRank >= 4 ? 40_000 : detailRank >= 2 ? 26_000 : 16_000;
+  const thinkToolLimit = detailRank >= 4 ? 12_000 : detailRank >= 2 ? 8_000 : 6_000;
+  const autoRepairValidation =
+    (cfg.mode === 'auto-edit' || cfg.mode === 'full-auto') &&
+    (staminaRank >= 2 || sensitivityRank >= 2 || ambitionRank >= 3);
+  const timeoutMs = Math.max(
+    spec.timeoutMs,
+    detailRank >= 4 || ambitionRank >= 4 ? 175_000 : detailRank >= 2 ? 145_000 : 120_000
+  );
+
+  return {
+    maxSteps: Math.max(4, maxSteps),
+    maxFileEdits: spec.maxFileEdits,
+    contextBudget: Math.max(cfg.contextBudget || 24_000, spec.contextFloor),
+    maxTurnInputChars: spec.maxTurnInputChars,
+    timeoutMs: Math.min(timeoutMs, 180_000),
+    thinkingDeltaLimit,
+    thinkToolLimit,
+    autoRepairValidation,
+    peakRank,
+    boosted: stamina !== 'medium' || detail !== 'medium' || ambition !== 'medium' || sensitivity !== 'medium',
+    axes: {
+      workStamina: stamina,
+      detailThinking: detail,
+      ambitionLevel: ambition,
+      humanSensitivity: sensitivity
+    }
   };
 }
 

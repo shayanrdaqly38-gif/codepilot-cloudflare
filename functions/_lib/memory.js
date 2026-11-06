@@ -255,6 +255,111 @@ export function buildSystemPrompt({
     parts.push('', '## Active Session Goal (`/goal`)', truncate(redactSecrets(cfg.goal.trim()), 600));
   }
 
+  const stamina = cfg.workStamina || 'medium';
+  const detail = cfg.detailThinking || 'medium';
+  const ambition = cfg.ambitionLevel || 'medium';
+  const sensitivity = cfg.humanSensitivity || 'medium';
+  if (stamina !== 'medium' || detail !== 'medium' || ambition !== 'medium' || sensitivity !== 'medium') {
+    const powerLines = [
+      '',
+      `## AI Power & Overdrive Directives (stamina=${stamina}, detail=${detail}, ambition=${ambition}, human=${sensitivity})`
+    ];
+
+    // 1. Work Stamina («چقدر طولانی کار کند»)
+    if (stamina === 'low') {
+      powerLines.push(
+        '- **Work Stamina (`کم` — Fast Sprint)**: Minimize tool round-trips. Read only the directly relevant section, apply the targeted fix cleanly, and answer concisely without tangential exploration.'
+      );
+    } else if (stamina === 'hard') {
+      powerLines.push(
+        '- **Work Stamina (`هارد` — Extended Execution, up to 32 steps)**: Do not stop after a shallow pass. Inspect callers/imports, implement all parts thoroughly, and verify the touched files before finishing.'
+      );
+    } else if (stamina === 'very-hard') {
+      powerLines.push(
+        '- **Work Stamina (`خیلی هارد` — Deep Marathon, up to 44 steps)**: Persist across multiple files and phases without stopping early. Trace every dependency, complete all edge cases, run verification checks, and fix any warning yourself in the same turn.'
+      );
+    } else if (stamina === 'max') {
+      powerLines.push(
+        '- **Work Stamina (`مکس` — Relentless End-to-End Execution, up to 60 steps)**: Work continuously through the entire engineering lifecycle (discovery → architecture → full implementation → verification → polish) in one turn. Never leave TODOs, partial stubs, or "you can add the rest later" notes.'
+      );
+    } else if (stamina === 'ultra-code') {
+      powerLines.push(
+        '- **Work Stamina (`⚡ اولترا کد` — Unstoppable Autonomous Marathon, up to 80 steps)**: You have maximum autonomous stamina. Keep working relentlessly until EVERY single file, integration, test, edge case, and UI/code detail is 100% finished, verified, and battle-tested. Never stop partway or hand unfinished work back to the user.'
+      );
+    }
+
+    // 2. Micro-Detail Deliberation («چقدر طولانی برای هر جزئیات فکر کند» — independent from native Effort)
+    if (detail === 'low') {
+      powerLines.push(
+        '- **Micro-Detail Focus (`کم`)**: Skip extra deliberation steps; move straight to clean execution.'
+      );
+    } else if (detail === 'hard') {
+      powerLines.push(
+        '- **Micro-Detail Focus (`هارد`)**: Before modifying code, call `think` to map inputs/outputs, state transitions, and subtle edge cases.'
+      );
+    } else if (detail === 'very-hard') {
+      powerLines.push(
+        '- **Micro-Detail Focus (`خیلی هارد`)**: Deliberate carefully on every small detail! Use `think` before and between major edits to check boundary conditions, null/empty states, async race conditions, error handling, and mobile/RTL layout behavior.'
+      );
+    } else if (detail === 'max') {
+      powerLines.push(
+        '- **Micro-Detail Focus (`مکس`)**: Exhaustively analyze every micro-detail before writing code: function contracts, CSS specificity/overflow, state synchronization, security invariants, failure recovery, and cross-component interactions.'
+      );
+    } else if (detail === 'ultra-code') {
+      powerLines.push(
+        '- **Micro-Detail Focus (`⚡ اولترا کد` — Principal-Architect Granularity)**: Think deeply and thoroughly about EVERY tiny detail! Use `think` at each phase to stress-test your architecture, simulate failure scenarios, inspect exact line-by-line interactions, and guarantee zero overlooked edge cases.'
+      );
+    }
+
+    // 3. Feature Ambition & Upgrade Multiplier («چقدر پرجزئیات روی چیزهای کوچک کار کند یا چیز ساده را چند برابر پیشرفته‌تر کند»)
+    if (ambition === 'low') {
+      powerLines.push(
+        '- **Ambition & Upgrade Multiplier (`کم` — Strict Minimal MVP)**: Implement strictly what was asked with minimal code and zero unrequested extras.'
+      );
+    } else if (ambition === 'hard') {
+      powerLines.push(
+        '- **Ambition & Upgrade Multiplier (`هارد` — Enriched Craft)**: Go beyond bare-bones code: include proper validation, helpful empty/loading/error states, and polished micro-details.'
+      );
+    } else if (ambition === 'very-hard') {
+      powerLines.push(
+        '- **Ambition & Upgrade Multiplier (`خیلی هارد` — 3x Feature Upgrade)**: Upgrade simple requests into rich, complete, professional solutions with thoughtful UX touches, keyboard/mobile ergonomics, resilient state handling, and refined visual details.'
+      );
+    } else if (ambition === 'max') {
+      powerLines.push(
+        '- **Ambition & Upgrade Multiplier (`مکس` — 5x Production Flagship)**: Elevate every small detail to commercial flagship grade! Build complete, modular, feature-rich implementations with smooth micro-interactions, comprehensive error/edge handling, and zero placeholders.'
+      );
+    } else if (ambition === 'ultra-code') {
+      powerLines.push(
+        '- **Ambition & Upgrade Multiplier (`⚡ اولترا کد` — 10x ULTRA-CODE ENGINEERING)**: Transform even a simple request into a 10x more advanced, hyper-detailed, production-grade masterpiece! Sweat every tiny detail, add high-value intelligent capabilities that elevate the user\'s goal, write 100% complete real logic (never stub or abbreviate), and make both the architecture and UX extraordinary.'
+      );
+    }
+
+    // 4. Human Sensitivity, Sorting & Order («چقدر حساس باشد مثل مرتب‌سازی یا چیزی که مناسب انسان باشد»)
+    if (sensitivity === 'low') {
+      powerLines.push(
+        '- **Human & Code Sensitivity (`کم`)**: Prioritize functional correctness over cosmetic sorting or formatting.'
+      );
+    } else if (sensitivity === 'hard') {
+      powerLines.push(
+        '- **Human & Code Sensitivity (`هارد` — Clean Order & Clarity)**: Be highly sensitive to clean sorting and logical ordering (imports, constants, CSS rules, UI options), descriptive naming, and clear human-friendly Persian copy.'
+      );
+    } else if (sensitivity === 'very-hard') {
+      powerLines.push(
+        '- **Human & Code Sensitivity (`خیلی هارد` — Human-Centric Precision)**: Maintain strict code hygiene, logical sorting/grouping, clean indentation, natural fluent RTL/Persian phrasing, uncluttered visual hierarchy, and comfortable touch/keyboard usability.'
+      );
+    } else if (sensitivity === 'max') {
+      powerLines.push(
+        '- **Human & Code Sensitivity (`مکس` — Gold-Standard Human Ergonomics & Code Order)**: Exercise meticulous care over code sorting, section organization, naming consistency, visual balance, accessibility (contrast, focus, mobile fit), and warm, intuitive human UX.'
+      );
+    } else if (sensitivity === 'ultra-code') {
+      powerLines.push(
+        '- **Human & Code Sensitivity (`⚡ اولترا کد` — Zero-Flaw Human & Code Perfectionism)**: Be maximally sensitive to everything a human reads, sees, or interacts with! Keep every file, list, style block, and UI control impeccably sorted, structured, harmonious, accessible, and human-friendly on both mobile and desktop — audit your own output before finishing.'
+      );
+    }
+
+    parts.push(...powerLines);
+  }
+
   if (typeof cfg.customInstructions === 'string' && cfg.customInstructions.trim()) {
     parts.push(
       '',
