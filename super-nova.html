@@ -222,9 +222,14 @@ const input = { left: false, right: false, jump: false, jumpPressed: false, jump
 const touch = { L: false, R: false, J: false, A: false };
 function bindBtn(id, key) {
   const el = $(id);
-  el.addEventListener('pointerdown', e => { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch (err) {} touch[key] = true; });
-  el.addEventListener('pointerup', e => { e.preventDefault(); touch[key] = false; });
-  el.addEventListener('pointercancel', () => { touch[key] = false; });
+  const down = e => { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch (err) {} touch[key] = true; };
+  const up = e => { e.preventDefault(); touch[key] = false; };
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  el.addEventListener('touchstart', down, { passive: false });
+  el.addEventListener('touchend', up, { passive: false });
+  el.addEventListener('touchcancel', up);
 }
 bindBtn('btnL', 'L'); bindBtn('btnR', 'R'); bindBtn('btnJump', 'J'); bindBtn('btnAct', 'A');
 const kb = {};
@@ -1954,29 +1959,33 @@ function frame(t) {
   tick(dt);
 }
 /* ------------------------------- سیم‌کشی دکمه‌ها ------------------------------- */
+function on(id, fn) {
+  const el = $(id);
+  if (!el) { lastGlobalError = 'دکمه یافت نشد: #' + id; return; }
+  el.addEventListener('click', e => { try { fn(e); } catch (err) { lastGlobalError = err && err.message || String(err); } });
+}
 function wire() {
-  $('mPlay').addEventListener('click', () => {
+  on('mPlay', () => {
     const i = Math.min(SAVE.unlocked, LEVELS.length - 1);
     startLevel(G && G.levelIdx < i ? G.levelIdx : i);
   });
-  $('mSelect').addEventListener('click', () => { buildSelect(); showOv('ovlSelect'); });
-  $('mHelp').addEventListener('click', () => showOv('ovlHelp'));
-  $('hBack').addEventListener('click', () => showOv('ovlMenu'));
-  $('selBack').addEventListener('click', () => showOv('ovlMenu'));
-  $('pResume').addEventListener('click', togglePause);
-  $('pRestart').addEventListener('click', () => { paused = false; startLevel(G.levelIdx); });
-  $('pExit').addEventListener('click', () => { paused = false; exitToMenu(); });
-  $('pSound').addEventListener('click', toggleSound);
-  $('pMusic').addEventListener('click', toggleMusic);
-  $('cAgain').addEventListener('click', () => startLevel(G.levelIdx));
-  const nxt = $('cNext');
-  if (nxt) nxt.addEventListener('click', () => startLevel(Math.min(G.levelIdx + 1, LEVELS.length - 1)));
-  $('oAgain').addEventListener('click', () => startLevel(G.levelIdx));
-  $('oMenu').addEventListener('click', exitToMenu);
-  $('wAgain').addEventListener('click', () => startLevel(0));
-  $('wMenu').addEventListener('click', exitToMenu);
-  $('btnSound').addEventListener('click', toggleSound);
-  $('btnPause').addEventListener('click', togglePause);
+  on('mSelect', () => { buildSelect(); showOv('ovlSelect'); });
+  on('mHelp', () => showOv('ovlHelp'));
+  on('hBack', () => showOv('ovlMenu'));
+  on('selBack', () => showOv('ovlMenu'));
+  on('pResume', togglePause);
+  on('pRestart', () => { paused = false; startLevel(G.levelIdx); });
+  on('pExit', () => { paused = false; exitToMenu(); });
+  on('pSound', toggleSound);
+  on('pMusic', toggleMusic);
+  on('cAgain', () => startLevel(G.levelIdx));
+  on('cNext', () => startLevel(Math.min(G.levelIdx + 1, LEVELS.length - 1)));
+  on('oAgain', () => startLevel(G.levelIdx));
+  on('oMenu', exitToMenu);
+  on('wAgain', () => startLevel(0));
+  on('wMenu', exitToMenu);
+  on('btnSound', toggleSound);
+  on('btnPause', togglePause);
   window.addEventListener('keydown', e => {
     if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') togglePause();
     if (e.key === 'm' || e.key === 'M') toggleSound();
