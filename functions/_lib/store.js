@@ -398,18 +398,33 @@ export async function deleteMemory(env, owner, key, { scope = 'global', project 
 
 /* ---------------------------------- usage --------------------------------- */
 
-export async function recordUsage(env, owner, { inputChars = 0, outputChars = 0 }) {
+export async function recordUsage(
+  env,
+  owner,
+  { inputChars = 0, outputChars = 0, promptTokens = 0, completionTokens = 0, reasoningTokens = 0 }
+) {
   const day = new Date().toISOString().slice(0, 10);
   await (await db(env))
     .prepare(
-      `INSERT INTO usage_daily(owner,day,requests,input_chars,output_chars)
-       VALUES(?,?,1,?,?)
+      `INSERT INTO usage_daily(owner,day,requests,input_chars,output_chars,prompt_tokens,completion_tokens,reasoning_tokens)
+       VALUES(?,?,1,?,?,?,?,?)
        ON CONFLICT(owner,day) DO UPDATE SET
          requests=requests+1,
          input_chars=input_chars+excluded.input_chars,
-         output_chars=output_chars+excluded.output_chars`
+         output_chars=output_chars+excluded.output_chars,
+         prompt_tokens=prompt_tokens+excluded.prompt_tokens,
+         completion_tokens=completion_tokens+excluded.completion_tokens,
+         reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens`
     )
-    .bind(owner, day, safeInt(inputChars, 0), safeInt(outputChars, 0))
+    .bind(
+      owner,
+      day,
+      safeInt(inputChars, 0),
+      safeInt(outputChars, 0),
+      safeInt(promptTokens, 0),
+      safeInt(completionTokens, 0),
+      safeInt(reasoningTokens, 0)
+    )
     .run()
     .catch(() => {});
 }
@@ -417,7 +432,9 @@ export async function recordUsage(env, owner, { inputChars = 0, outputChars = 0 
 export async function getUsage(env, owner) {
   const database = await db(env);
   const rows = await database
-    .prepare('SELECT day,requests,input_chars,output_chars FROM usage_daily WHERE owner=? ORDER BY day DESC LIMIT 30')
+    .prepare(
+      'SELECT day,requests,input_chars,output_chars,prompt_tokens,completion_tokens,reasoning_tokens FROM usage_daily WHERE owner=? ORDER BY day DESC LIMIT 30'
+    )
     .bind(owner)
     .all();
   return rows.results || [];

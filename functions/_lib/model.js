@@ -268,6 +268,349 @@ const LIVE_MODELS_TTL_MS = 5 * 60 * 1000;
 
 // Keyed by normalized base URL so switching providers never mixes model lists.
 const liveModelsByEndpoint = new Map();
+const liveQuotaByKey = new Map();
+const latestRateLimitByEndpoint = new Map();
+const QUOTA_TTL_MS = 60_000;
+
+export function extractRateLimitHeaders(headers) {
+  if (!headers || typeof headers.get !== 'function') return null;
+  const pickNum = (names) => {
+    for (const name of names) {
+      const raw = headers.get(name);
+      if (raw !== null && raw !== undefined && raw !== '') {
+        const num = Number(String(raw).trim());
+        if (Number.isFinite(num) && num >= 0) return num;
+      }
+    }
+    return null;
+  };
+  const remainingTokens = pickNum([
+    'x-ratelimit-remaining-tokens',
+    'anthropic-ratelimit-tokens-remaining',
+    'anthropic-ratelimit-input-tokens-remaining',
+    'llm-provider-x-ratelimit-remaining-tokens',
+    'x-remaining-tokens',
+    'x-tokens-remaining',
+    'x-quota-remaining'
+  ]);
+  const limitTokens = pickNum([
+    'x-ratelimit-limit-tokens',
+    'anthropic-ratelimit-tokens-limit',
+    'anthropic-ratelimit-input-tokens-limit',
+    'x-token-limit',
+    'x-quota-limit'
+  ]);
+  const remainingRequests = pickNum([
+    'x-ratelimit-remaining-requests',
+    'anthropic-ratelimit-requests-remaining',
+    'x-remaining-requests'
+  ]);
+  const resetTokens =
+    headers.get('x-ratelimit-reset-tokens') || headers.get('anthropic-ratelimit-tokens-reset') || null;
+
+  if (remainingTokens === null && limitTokens === null && remainingRequests === null) return null;
+  return {
+    remainingTokens,
+    limitTokens,
+    remainingRequests,
+    resetTokens: resetTokens ? String(resetTokens).slice(0, 40) : null,
+    at: Date.now()
+  };
+}
+
+function parseQuotaFromObject(raw, sourceLabel = 'provider') {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : raw;
+  const info = obj.info && typeof obj.info === 'object' ? obj.info : obj;
+
+  // 1. Explicit unlimited flag or huge sentinel limit (OneAPI / NewAPI / Tooken)
+  if (
+    obj.unlimited_quota === true ||
+    obj.is_unlimited === true ||
+    obj.unlimited === true ||
+    (typeof obj.hard_limit_usd === 'number' && obj.hard_limit_usd >= 99_999_999)
+  ) {
+    return { supported: true, unlimited: true, source: sourceLabel };
+  }
+
+  // 2. DeepSeek `/user/balance` format (`balance_infos: [{ currency, total_balance }]`)
+  if (Array.isArray(obj.balance_infos) && obj.balance_infos.length > 0) {
+    const b = obj.balance_infos.find((x) => x?.currency === 'USD') || obj.balance_infos[0];
+    const bal = Number(b?.total_balance);
+    if (Number.isFinite(bal)) {
+      return {
+        supported: true,
+        unlimited: false,
+        remainingBalance: bal,
+        currency: String(b.currency || 'USD'),
+        source: sourceLabel
+      };
+    }
+  }
+
+  // 3. Explicit token count fields (`remaining_tokens`, `tokens_remaining`, `available_tokens`, `remain_quota`, etc.)
+  const remTok = Number(
+    obj.remaining_tokens ??
+      obj.tokens_remaining ??
+      obj.available_tokens ??
+      obj.token_balance ??
+      obj.left_tokens ??
+      obj.remain_tokens
+  );
+  const limTok = Number(obj.token_limit ?? obj.max_tokens_quota ?? obj.total_tokens_limit ?? obj.tokens_limit);
+  const usedTok = Number(obj.tokens_used ?? obj.used_tokens ?? obj.total_tokens_used);
+  if (Number.isFinite(remTok) && remTok >= 0) {
+    return {
+      supported: true,
+      unlimited: false,
+      remainingTokens: Math.floor(remTok),
+      ...(Number.isFinite(limTok) && limTok > 0 ? { limitTokens: Math.floor(limTok) } : {}),
+      ...(Number.isFinite(usedTok) && usedTok >= 0 ? { usedTokens: Math.floor(usedTok) } : {}),
+      source: sourceLabel
+    };
+  }
+  if (Number.isFinite(limTok) && limTok > 0 && Number.isFinite(usedTok) && usedTok >= 0) {
+    return {
+      supported: true,
+      unlimited: false,
+      remainingTokens: Math.max(0, Math.floor(limTok - usedTok)),
+      limitTokens: Math.floor(limTok),
+      usedTokens: Math.floor(usedTok),
+      source: sourceLabel
+    };
+  }
+
+  // 4. OpenRouter `/credits` (`total_credits`, `total_usage`) or `/key` (`limit`, `limit_remaining`, `usage`)
+  if (typeof obj.total_credits === 'number' && typeof obj.total_usage === 'number') {
+    return {
+      supported: true,
+      unlimited: false,
+      remainingBalance: Math.max(0, Number((obj.total_credits - obj.total_usage).toFixed(4))),
+      limitBalance: obj.total_credits,
+      usedBalance: obj.total_usage,
+      currency: 'USD',
+      source: sourceLabel
+    };
+  }
+  if (obj.limit !== undefined && (typeof obj.limit_remaining === 'number' || obj.limit === null)) {
+    if (obj.limit === null && typeof obj.usage === 'number') {
+      return {
+        supported: true,
+        unlimited: true,
+        usedBalance: obj.usage,
+        currency: 'USD',
+        source: sourceLabel
+      };
+    }
+    if (typeof obj.limit_remaining === 'number') {
+      return {
+        supported: true,
+        unlimited: false,
+        remainingBalance: Math.max(0, Number(obj.limit_remaining.toFixed(4))),
+        ...(typeof obj.limit === 'number' ? { limitBalance: obj.limit } : {}),
+        ...(typeof obj.usage === 'number' ? { usedBalance: obj.usage } : {}),
+        currency: 'USD',
+        source: sourceLabel
+      };
+    }
+  }
+
+  // 5. LiteLLM `/key/info` (`max_budget`, `spend`)
+  if (typeof info.max_budget === 'number' && info.max_budget > 0) {
+    const spend = Number(info.spend) || 0;
+    return {
+      supported: true,
+      unlimited: false,
+      remainingBalance: Math.max(0, Number((info.max_budget - spend).toFixed(4))),
+      limitBalance: info.max_budget,
+      usedBalance: spend,
+      currency: 'USD',
+      source: sourceLabel
+    };
+  }
+
+  // 6. NewAPI / OneAPI `/api/usage/token` (`total_granted`, `total_used`, `total_available`)
+  if (typeof obj.total_available === 'number' && obj.total_available >= 0) {
+    // Values >= 10,000 in OneAPI/NewAPI `/api/usage/token` are raw token-quota units (500,000 = $1 ~ 500k tokens);
+    // smaller decimals in `/dashboard/billing/credit_grants` are USD credits.
+    const isQuotaUnits = obj.total_available >= 10_000 || (typeof obj.total_granted === 'number' && obj.total_granted >= 10_000);
+    if (isQuotaUnits) {
+      return {
+        supported: true,
+        unlimited: false,
+        remainingTokens: Math.floor(obj.total_available),
+        ...(typeof obj.total_granted === 'number' ? { limitTokens: Math.floor(obj.total_granted) } : {}),
+        ...(typeof obj.total_used === 'number' ? { usedTokens: Math.floor(obj.total_used) } : {}),
+        remainingBalance: Number((obj.total_available / 500_000).toFixed(2)),
+        currency: 'USD',
+        source: sourceLabel
+      };
+    }
+    return {
+      supported: true,
+      unlimited: false,
+      remainingBalance: Number(obj.total_available.toFixed(4)),
+      ...(typeof obj.total_granted === 'number' ? { limitBalance: obj.total_granted } : {}),
+      ...(typeof obj.total_used === 'number' ? { usedBalance: obj.total_used } : {}),
+      currency: 'USD',
+      source: sourceLabel
+    };
+  }
+
+  // 7. Generic balance fields (`remaining_balance`, `credit_balance`, `balance`, `credits`)
+  const genericBal = Number(obj.remaining_balance ?? obj.credit_balance ?? obj.balance ?? obj.credits);
+  if (Number.isFinite(genericBal) && genericBal >= 0) {
+    return {
+      supported: true,
+      unlimited: false,
+      remainingBalance: Number(genericBal.toFixed(4)),
+      currency: String(obj.currency || 'USD'),
+      source: sourceLabel
+    };
+  }
+
+  return null;
+}
+
+export function getCachedProviderQuota(env = {}) {
+  const endpoint = modelEndpoint(env);
+  const baseUrl = endpoint.replace(/\/chat\/completions$/, '');
+  const cacheKey = `${baseUrl}:${String(env.MODEL_API_KEY || '').slice(0, 10)}`;
+  const cached = liveQuotaByKey.get(cacheKey);
+  const rateLimit = latestRateLimitByEndpoint.get(baseUrl) || null;
+  if (cached && cached.until > Date.now()) {
+    return { ...cached.data, rateLimit };
+  }
+  return rateLimit ? { supported: false, rateLimit } : null;
+}
+
+/**
+ * Query the active API provider's real remaining token / credit quota endpoints
+ * (`tooken.club`, OneAPI/NewAPI, OpenRouter, DeepSeek, LiteLLM, OpenAI billing).
+ */
+export async function fetchProviderQuota(env, { force = false } = {}) {
+  if (!env?.MODEL_API_KEY) {
+    return { supported: false, reason: 'no_api_key', rateLimit: null };
+  }
+  const endpoint = modelEndpoint(env);
+  const baseUrl = endpoint.replace(/\/chat\/completions$/, '');
+  const cacheKey = `${baseUrl}:${String(env.MODEL_API_KEY).slice(0, 10)}`;
+  const rateLimit = latestRateLimitByEndpoint.get(baseUrl) || null;
+
+  if (!force) {
+    const cached = liveQuotaByKey.get(cacheKey);
+    if (cached && cached.until > Date.now()) {
+      return { ...cached.data, rateLimit };
+    }
+  }
+
+  let originUrl = baseUrl;
+  try {
+    originUrl = new URL(baseUrl).origin;
+  } catch {
+    originUrl = baseUrl;
+  }
+
+  const headers = {
+    Authorization: `Bearer ${env.MODEL_API_KEY}`,
+    Accept: 'application/json'
+  };
+  const safeGetJson = async (url) => {
+    const res = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(4_500) });
+    if (!res.ok) return null;
+    return res.json().catch(() => null);
+  };
+
+  let result = null;
+  const lowerBase = baseUrl.toLowerCase();
+
+  if (lowerBase.includes('openrouter.ai')) {
+    const [creditsJson, keyJson] = await Promise.all([
+      safeGetJson(`${baseUrl}/credits`).catch(() => null),
+      safeGetJson(`${baseUrl}/key`).catch(() => null)
+    ]);
+    result = parseQuotaFromObject(keyJson, 'openrouter-key') || parseQuotaFromObject(creditsJson, 'openrouter-credits');
+    if (result && creditsJson?.data && typeof creditsJson.data.total_credits === 'number') {
+      const remCredits = Math.max(0, Number((creditsJson.data.total_credits - (creditsJson.data.total_usage || 0)).toFixed(4)));
+      if (result.unlimited) {
+        result.unlimited = false;
+        result.remainingBalance = remCredits;
+        result.limitBalance = creditsJson.data.total_credits;
+        result.usedBalance = creditsJson.data.total_usage || 0;
+      }
+    }
+  } else if (lowerBase.includes('deepseek.com')) {
+    const dsJson = await safeGetJson(`${originUrl}/user/balance`).catch(() => null);
+    result = parseQuotaFromObject(dsJson, 'deepseek-balance');
+  } else {
+    // Universal probe for `tooken.club`, OneAPI/NewAPI, LiteLLM, and OpenAI-compatible gateways
+    const now = new Date();
+    const start = new Date(now.getTime() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const end = new Date(now.getTime() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+    const [tokenUsageJson, subJson, billUsageJson, creditGrantsJson, keyInfoJson] = await Promise.all([
+      safeGetJson(`${originUrl}/api/usage/token`).catch(() => null),
+      safeGetJson(`${baseUrl}/dashboard/billing/subscription`).catch(() => null),
+      safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`).catch(() => null),
+      safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`).catch(() => null),
+      safeGetJson(`${originUrl}/key/info`).catch(() => null)
+    ]);
+
+    result = parseQuotaFromObject(tokenUsageJson, 'token-quota');
+
+    if (!result && subJson && typeof subJson === 'object') {
+      if (subJson.unlimited_quota === true || (typeof subJson.hard_limit_usd === 'number' && subJson.hard_limit_usd >= 99_999_999)) {
+        result = {
+          supported: true,
+          unlimited: true,
+          ...(typeof billUsageJson?.total_usage === 'number'
+            ? { usedBalance: Number((billUsageJson.total_usage / 100).toFixed(4)), currency: 'USD' }
+            : {}),
+          source: 'billing-subscription'
+        };
+      } else if (typeof subJson.hard_limit_usd === 'number' && subJson.hard_limit_usd > 0) {
+        const usedUsd = typeof billUsageJson?.total_usage === 'number' ? billUsageJson.total_usage / 100 : 0;
+        const remUsd = Math.max(0, Number((subJson.hard_limit_usd - usedUsd).toFixed(4)));
+        result = {
+          supported: true,
+          unlimited: false,
+          remainingBalance: remUsd,
+          limitBalance: Number(subJson.hard_limit_usd.toFixed(4)),
+          usedBalance: Number(usedUsd.toFixed(4)),
+          currency: 'USD',
+          source: 'billing-subscription'
+        };
+      } else {
+        result = parseQuotaFromObject(subJson, 'billing-subscription');
+      }
+    }
+
+    if (!result) {
+      result =
+        parseQuotaFromObject(creditGrantsJson, 'credit-grants') ||
+        parseQuotaFromObject(keyInfoJson, 'key-info');
+    }
+  }
+
+  const rawFinal = result || { supported: false, unlimited: false, source: 'none' };
+  const finalData = {
+    ...rawFinal,
+    ...(typeof rawFinal.remainingBalance === 'number' && rawFinal.remainingUsd === undefined
+      ? { remainingUsd: rawFinal.remainingBalance }
+      : {}),
+    ...(typeof rawFinal.limitBalance === 'number' && rawFinal.limitUsd === undefined
+      ? { limitUsd: rawFinal.limitBalance }
+      : {}),
+    ...(typeof rawFinal.usedBalance === 'number' && rawFinal.usedUsd === undefined
+      ? { usedUsd: rawFinal.usedBalance }
+      : {})
+  };
+  liveQuotaByKey.set(cacheKey, {
+    until: Date.now() + QUOTA_TTL_MS,
+    data: finalData
+  });
+  return { ...finalData, rateLimit };
+}
 
 function normalizeEffortToken(raw) {
   const s = String(raw || '').trim().toLowerCase();
@@ -1299,11 +1642,17 @@ export async function callModel(env, payload) {
               0
           ) || 0;
 
+        const rateLimit = extractRateLimitHeaders(response.headers);
+        if (rateLimit) {
+          latestRateLimitByEndpoint.set(baseUrl, rateLimit);
+        }
+
         return {
           model: String(data.model || model),
           finishReason: String(choice.finish_reason || 'stop'),
           reasoning: cleanReasoning,
           reasoningEffort: currentVariant.effort,
+          rateLimit,
           message: {
             role: 'assistant',
             content: cleanContent,

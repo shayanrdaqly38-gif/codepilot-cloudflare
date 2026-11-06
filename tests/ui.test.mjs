@@ -51,6 +51,8 @@ const sse = [
       validation: [{ path: 'app.js', ok: true, errors: [], warnings: ['فایل خالی است'] }],
       commands: [{ command: 'ls', mode: 'virtual', ok: true }],
       sandbox: false,
+      turnTokens: { promptTokens: 1400, completionTokens: 600, reasoningTokens: 300, totalTokens: 2000 },
+      rateLimit: { remainingTokens: 98000, limitTokens: 100000 },
       context: { summaryUntil: 0, recentMessages: 3, estimatedTokens: 4200 }
     }
   ]
@@ -111,6 +113,33 @@ function mockFetch(url, init = {}) {
         via: 'schema-enum'
       }
     });
+  }
+  if (path.startsWith('/api/state/usage') && (!init.method || init.method === 'GET')) {
+    return jsonResponse({
+      ok: true,
+      days: [{ day: '2026-11-06', requests: 3, prompt_tokens: 4000, completion_tokens: 1200, reasoning_tokens: 500 }],
+      totals: {
+        requests: 3,
+        promptTokens: 4000,
+        completionTokens: 1200,
+        reasoningTokens: 500,
+        totalTokens: 5200
+      },
+      tokenCap: db.tokenCap ?? null,
+      quota: db.mockQuota || {
+        supported: true,
+        unlimited: false,
+        source: 'tooken.club/api/usage/token',
+        remainingTokens: 750_000,
+        limitTokens: 1_000_000,
+        usedTokens: 250_000
+      }
+    });
+  }
+  if (path === '/api/state/usage' && init.method === 'POST') {
+    const body = JSON.parse(init.body || '{}');
+    db.tokenCap = body.tokenCap ?? null;
+    return jsonResponse({ ok: true, tokenCap: db.tokenCap });
   }
   if (path === '/api/state' && (!init.method || init.method === 'GET')) {
     return jsonResponse({
@@ -402,6 +431,23 @@ assert.ok($('effortOptionsList').querySelector('[data-effort="xhigh"]'), 'auto-d
 assert.equal($('effortOptionsList').querySelector('[data-effort="max"]'), null, 'max excluded per auto-discovered levels');
 window.closeModal('modelModal');
 window.closeModal('settingsModal');
+
+// --- top-bar live remaining tokens pill (#tokenQuotaBtn) & quota inspector (#quotaModal)
+assert.ok($('tokenQuotaBtn'), 'top header must display #tokenQuotaBtn');
+assert.equal($('tokenQuotaText').textContent, '🪙 750K', 'shows live remaining tokens from provider API');
+window.openQuotaModal();
+assert.ok($('quotaModal').classList.contains('open'));
+assert.ok($('quotaModalBody').textContent.includes('750,000 tok'));
+assert.ok($('quotaModalBody').textContent.includes('tooken.club/api/usage/token'));
+
+// Fallback to manual tokenCap when provider does not expose balance endpoint
+db.mockQuota = { supported: false, reason: 'no_balance_endpoint' };
+await window.refreshProviderQuota({ live: true, force: true, silent: true });
+$('tokenCapInput').value = '100000';
+await window.saveTokenCap(false);
+assert.equal($('tokenQuotaText').textContent, '🪙 94.8K', 'deducts 5,200 used tokens from 100,000 manual cap');
+await window.saveTokenCap(true);
+window.closeModal('quotaModal');
 
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));

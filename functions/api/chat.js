@@ -691,7 +691,11 @@ export async function onRequestPost({ request, env }) {
       let finalText = '';
       let usedModel = '';
       let appliedEffort = reasoningEffort;
+      let totalPromptTokens = 0;
+      let totalCompletionTokens = 0;
       let totalReasoningTokens = 0;
+      let lastPromptTokens = 0;
+      let latestRateLimit = null;
       let steps = 0;
 
       (async () => {
@@ -767,7 +771,13 @@ export async function onRequestPost({ request, env }) {
             });
             usedModel = result.model;
             if (result.reasoningEffort !== undefined) appliedEffort = result.reasoningEffort;
+            if (result.rateLimit) latestRateLimit = result.rateLimit;
+            const stepPromptTokens = Number(result.usage?.prompt_tokens) || 0;
+            const stepCompletionTokens = Number(result.usage?.completion_tokens) || 0;
             const stepReasoningTokens = Number(result.usage?.reasoning_tokens) || 0;
+            if (stepPromptTokens > 0) lastPromptTokens = stepPromptTokens;
+            totalPromptTokens += stepPromptTokens;
+            totalCompletionTokens += stepCompletionTokens;
             totalReasoningTokens += stepReasoningTokens;
 
             if (result.reasoning || stepReasoningTokens > 0) {
@@ -882,7 +892,13 @@ export async function onRequestPost({ request, env }) {
             0
           );
           const totalInputChars = estimateMessagesTextChars(messages);
-          await recordUsage(env, identity.owner, { inputChars: totalInputChars, outputChars });
+          await recordUsage(env, identity.owner, {
+            inputChars: totalInputChars,
+            outputChars,
+            promptTokens: totalPromptTokens,
+            completionTokens: totalCompletionTokens,
+            reasoningTokens: totalReasoningTokens
+          });
           await env.DB.prepare(
             'UPDATE conversations SET last_model=?, message_count=?, last_message_at=?, updated_at=? WHERE id=? AND owner=?'
           )
@@ -891,11 +907,23 @@ export async function onRequestPost({ request, env }) {
 
           const latest = await getConversation(env, identity.owner, conversation.id);
           const validation = turn.validation.filter((entry) => !entry.ok || entry.warnings.length);
+          const effectiveContextTokens = lastPromptTokens > 0 ? lastPromptTokens : Math.ceil(totalInputChars / 2);
           send('done', {
             content: finalText,
             model: usedModel,
             reasoningEffort: appliedEffort,
             reasoningTokens: totalReasoningTokens,
+            turnTokens: {
+              prompt: totalPromptTokens,
+              completion: totalCompletionTokens,
+              reasoning: totalReasoningTokens,
+              total: totalPromptTokens + totalCompletionTokens + totalReasoningTokens,
+              promptTokens: totalPromptTokens,
+              completionTokens: totalCompletionTokens,
+              reasoningTokens: totalReasoningTokens,
+              totalTokens: totalPromptTokens + totalCompletionTokens + totalReasoningTokens
+            },
+            ...(latestRateLimit ? { rateLimit: latestRateLimit } : {}),
             modelReasoning: getModelReasoningSpec(effectiveModelId, effectiveEnv),
             conversation: conversationView(latest),
             touchedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
@@ -916,7 +944,7 @@ export async function onRequestPost({ request, env }) {
             context: {
               summaryUntil: working.summaryUntil,
               recentMessages: working.recent.length,
-              estimatedTokens: Math.ceil(totalInputChars / 2)
+              estimatedTokens: effectiveContextTokens
             }
           });
         } catch (error) {

@@ -221,7 +221,26 @@ export async function resolveEffectiveEnv(env, owner) {
   };
 }
 
-/* ---------------- Persistent Per-Provider Capability Discovery Cache ---------------- */
+export async function getUserTokenCap(env, owner) {
+  const settings = await readUserSettingsObj(env, owner);
+  const cap = Number(settings.tokenCap);
+  return Number.isFinite(cap) && cap > 0 ? Math.floor(cap) : null;
+}
+
+export async function saveUserTokenCap(env, owner, rawCap) {
+  const settings = await readUserSettingsObj(env, owner);
+  if (rawCap === null || rawCap === undefined || rawCap === '' || Number(rawCap) <= 0) {
+    delete settings.tokenCap;
+  } else {
+    const num = Math.floor(Number(rawCap));
+    if (!Number.isFinite(num) || num < 100 || num > 1_000_000_000_000) {
+      fail('مقدار سقف توکن معتبر نیست.', 400, 'bad_token_cap');
+    }
+    settings.tokenCap = num;
+  }
+  await writeUserSettingsObj(env, owner, settings);
+  return getUserTokenCap(env, owner);
+}
 
 async function capsMetaKey(baseUrl) {
   const norm = effectiveBaseUrlFromEnv({ MODEL_BASE_URL: baseUrl }).toLowerCase();
