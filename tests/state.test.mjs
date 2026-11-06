@@ -287,11 +287,17 @@ test('usage endpoint tracks exact prompt/completion/reasoning tokens, live provi
   // Query GET /api/state/usage?live=1&refresh=1 with mocked upstream quota
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    if (String(url) === 'https://tooken.club/api/usage/token') {
+    if (String(url) === 'https://tooken.club/v1/balance') {
       return new Response(
-        JSON.stringify({ data: { total_available: 420_000, total_granted: 500_000, total_used: 80_000 } }),
+        JSON.stringify({ remaining_tokens: 420_000, token_limit: 500_000, tokens_used: 80_000, currency: 'RUB' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
+    }
+    if (String(url) === 'https://tooken.club/v1/usage') {
+      return new Response(JSON.stringify({ total_tokens: 80_000 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
     return originalFetch(url, init);
   };
