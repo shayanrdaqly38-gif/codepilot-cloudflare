@@ -49,6 +49,7 @@ canvas{display:block;width:100%;height:100%;background:#0d1020}
 .tpad{position:absolute;bottom:16px;display:flex;gap:12px;align-items:flex-end;pointer-events:auto}
 .tpad.left{left:14px;transform:scaleX(-1)}
 .tpad.right{right:14px}
+#dev{position:absolute;right:12px;top:46px;z-index:30;pointer-events:none;background:rgba(5,8,18,.8);border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:8px 10px;font:11px/1.55 ui-monospace,Consolas,monospace;color:#9fe8ff;white-space:pre;min-width:200px;max-width:46vw;opacity:.95}
 .tbtn{width:clamp(58px,16vw,78px);height:clamp(58px,16vw,78px);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:clamp(24px,7vw,32px);
  background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.18),rgba(255,255,255,.05) 60%,rgba(0,0,0,.22));border:2px solid rgba(255,255,255,.25);
  color:#fff;box-shadow:0 8px 18px rgba(0,0,0,.35);touch-action:none;-webkit-user-select:none;user-select:none}
@@ -86,6 +87,7 @@ canvas{display:block;width:100%;height:100%;background:#0d1020}
     <div id="hudHint"></div>
     <div id="banner"></div>
     <div id="toast"></div>
+    <div id="dev" class="hidden"></div>
 
     <!-- منوی اصلی -->
     <div class="ovl show" id="ovlMenu">
@@ -233,6 +235,13 @@ window.addEventListener('keydown', e => {
   else if (k === 'p' || k === 'P' || k === 'Escape') { togglePause(); }
   else if (k === 'm' || k === 'M') { toggleSound(); }
   else if (k === 'r' || k === 'R') { if (state === 'play') restartLevel(); }
+  else if (k === '0') { toggleDev(); }
+  else if (k === '9') { godMode = !godMode; toast(godMode ? '🧙 حالت خدا فعال شد' : 'حالت خدا غیرفعال'); }
+  else if (k === '8') { if (state === 'play') respawnPlayer(); }
+  else if (k === '7') { if (G) { G.run.score += 1000; sfx.coin(); } }
+  else if (k === '6') { if (G && G.run.hearts < 5) { G.run.hearts++; sfx.onup(); } }
+  else if (k === '5') { if (state === 'play' && level.exit) { const p = G.player; p.x = level.exit.x * TS - 20; p.y = level.exit.y * TS + 2; p.vx = 0; } }
+  else if (k === '4') { freezeTime = !freezeTime; toast(freezeTime ? '⏸ زمان قفل شد' : 'زمان جاری'); }
 });
 window.addEventListener('keyup', e => {
   const k = e.key;
@@ -786,7 +795,7 @@ class Player {
   }
   hurt(fromX) {
     if (this.invT > 0 || this.dead || this.win) return;
-    if (this.starT > 0) return;
+    if (this.starT > 0 || godMode) return;
     if (this.shieldB) {
       this.shieldB = false; this.invT = 1.2;
       sfx.breakShield(); rings(this.x + this.w / 2, this.y + this.h / 2, '#6dff8a');
@@ -1569,7 +1578,7 @@ function updateRun(dt) {
   G.time = (G.time || 0) + dt;
   const p = G.player;
   if (!p.dead && !p.win) {
-    G.run.timeLeft -= dt;
+    if (!freezeTime) G.run.timeLeft -= dt;
     if (G.run.timeLeft <= 0) { G.run.timeLeft = 0; p.die('زمان تمام شد!'); }
   }
   // بلوک‌های خردشونده
@@ -1758,6 +1767,28 @@ function banner(msg, sub) {
   el.innerHTML = sub ? `<div class="bSub">${sub}</div><div>${msg}</div>` : `<div>${msg}</div>`;
   el.classList.add('show'); bannerT = 2.4;
 }
+let devOn = false, godMode = false, freezeTime = false;
+let devFps = 0, devFpsAcc = 0, devFrames = 0;
+function toggleDev() {
+  devOn = !devOn;
+  const el = $('dev'); if (el) el.classList.toggle('show', devOn);
+  if (devOn) refreshDevPanel();
+}
+function refreshDevPanel() {
+  const el = $('dev'); if (!el || !devOn) return;
+  const p = G && G.player;
+  const boss = G && G.boss;
+  const lines = [
+    `FPS: ${devFps.toFixed(1)} | STATE: ${state}`,
+    `pos: ${p ? Math.round(p.x) : '-'},${p ? Math.round(p.y) : '-'} v: ${p ? Math.round(p.vx) : '-'},${p ? Math.round(p.vy) : '-'}`,
+    `ground: ${p ? p.grounded : '-'} inv: ${p ? p.invT.toFixed(2) : '-'} star: ${p ? p.starT.toFixed(1) : '-'}`,
+    `hearts: ${G ? G.run.hearts : '-'} lives: ${G ? G.run.lives : '-'} coins: ${G ? G.run.coins : '-'}`,
+    `score: ${G ? fmt(G.run.score) : '-'} time: ${G ? G.run.timeLeft.toFixed(0) : '-'}`,
+    `enemies: ${G ? G.enemies.filter(e => !e.dead).length : '-'}`,
+    `boss: ${boss && G.bossFight ? boss.hp + '/' + boss.maxHp : '-'} god: ${godMode} freeze: ${freezeTime}`
+  ];
+  el.textContent = lines.join('\n');
+}
 function rebuildLevel() {
   const def = level._def;
   level.pads.forEach(p => { p.anim = 0; });
@@ -1895,6 +1926,9 @@ function render() {
   else drawMenuBackdrop();
 }
 function tick(dt) {
+  devFpsAcc += dt; devFrames++;
+  if (devFpsAcc >= 1) { devFps = devFrames / devFpsAcc; devFpsAcc = 0; devFrames = 0; }
+  refreshDevPanel();
   if (state === 'play' && !paused) {
     const p = G.player;
     updateRun(dt);
@@ -1971,24 +2005,17 @@ window.__NOVA_TEST__ = {
       hp: G && G.boss ? G.boss.hp : 0, exitOpen: G ? G.exitOpen : false
     };
   },
-  startLevel, tick, togglePause, exitToMenu, respawnPlayer, levelClear, G, input, level, LEVELS, parseLevel
+  startLevel, tick, togglePause, exitToMenu, respawnPlayer, levelClear, G, input, level, LEVELS, parseLevel,
+  stepFrames(n, dt) { for (let i = 0; i < n; i++) tick(dt === undefined ? 1 / 60 : dt); }
 };
 
 /* --------------------------- تکمیل توابع و موسیقی --------------------------- */
 const nowMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
-</script>
-</body>
-</html>
-
 function midiHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 music.setSong = function(st) { this.setState(String(st)); };
 music.pause = function() { if (this.timer) { clearInterval(this.timer); this.timer = null; this.on = false; } };
 music.resume = function() { this.refresh(); };
-Object.assign(sfx, {
-  cp() { [523, 659, 784, 1047].forEach((f, i) => tone({ f0: f, dur: 0.12, type: 'triangle', vol: 0.12, at: i * 0.06 })); },
-  onup() { [392, 523, 659, 784].forEach((f, i) => tone({ f0: f, dur: 0.12, type: 'square', vol: 0.1, at: i * 0.05 })); },
-  breakShield() { tone({ f0: 900, f1: 300, dur: 0.25, type: 'sawtooth', vol: 0.14 }); noiseBurst(0.15, 0.1); }
-});
+// (sfx extras defined inside the main script block)
 let crumbles = [], fallers = [];
 function showBanner(msg, sub) { banner(msg, sub); }
 function drawMenuBackdrop() {
@@ -2338,6 +2365,9 @@ function drawFx() {
   });
   ctx.globalAlpha = 1;
 }
+</script>
+</body>
+</html>
 
 
 
