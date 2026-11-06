@@ -27,6 +27,7 @@
 | محدودیت مصرف | سقف درخواست در دقیقه/روز به‌ازای هر حساب (`rate_limits`) |
 | تست | +۳۰ تست بک‌اند (SQLite واقعی + Access جعلی) و تست دودی رابط کاربری |
 | UI | استریم SSE، ترمینال مجازی، کاوشگر فایل، تنظیمات حافظه، خروجی JSON و حذف داده |
+| توقف پاسخ | دکمه «⏹ توقف» هنگام تولید (مشابه ChatGPT): POST /api/chat/stop استریم مدل را لغو می‌کند، متن جزئی ذخیره می‌شود و ادامه از همان نقطه با «ادامه» ممکن است |
 | دانلود اشیاء | هر فایل تولیدشده با هینت نام در fence (مثلاً ```html portfolio.html) خودکار به آرتیفکت تبدیل می‌شود؛ کارت دانلود، پیش‌نمایش sandbox، کپی محتوا/لینک و بسته ZIP کل گفتگو — همه owner-scoped در D1 |
 
 ## حالت ماراتن (کار مستمر)
@@ -48,6 +49,7 @@ wrangler.toml                           اتصال D1 و متغیرهای غیر
 functions/api/auth.js                   GET/POST /api/auth
 functions/api/config.js                 GET /api/config
 functions/api/chat.js                   POST /api/chat  (SSE، حلقه‌ی ابزار)
+functions/api/chat/stop.js             POST /api/chat/stop (توقف تولید فعال — مثل دکمه توقف ChatGPT)
 functions/api/state/index.js            GET/POST /api/state (bootstrap، export، delete)
 functions/api/state/conversations/index.js
 functions/api/state/conversations/[id].js
