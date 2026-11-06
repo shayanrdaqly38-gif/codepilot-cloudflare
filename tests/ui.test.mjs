@@ -586,6 +586,18 @@ await wait(300);
 assert.ok(dom2.window.document.getElementById('chat').textContent.includes('ورود امن لازم است'));
 assert.equal(dom2.window.document.getElementById('sendBtn').disabled, true);
 
+// --- marathon auto-continue: بعد از اتمام هر چرخه، بدون دخالت کاربر «ادامه» فرستاده می‌شود
+window.localStorage.setItem('cp_marathon_auto', '1');
+window.__CP_MARATHON_DELAY = 25; // سرعت‌بخشی تست (پیش‌فرض واقعی: ۳۵۰۰ms)
+window.startMarathon();
+await wait(900);
+const autoChatText = $('chat').textContent;
+assert.ok(autoChatText.includes('ادامه'), 'auto-continue did not fire; chat=' + autoChatText.slice(0, 300));
+assert.ok($('marathonStatus').textContent.includes('⏳ ادامهٔ خودکار'), 'status counter missing: ' + $('marathonStatus').textContent);
+// خاموش‌کردن خودکار تا چرخه‌های بعدی در تست‌های بعدی اجرا نشوند
+window.localStorage.setItem('cp_marathon_auto', '0');
+window.cancelMarathonAuto();
+
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
 process.exit(0);

@@ -1050,6 +1050,10 @@ body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
         <span>🚀 حالت ماراتن</span>
         <button type="button" class="marathon-toggle" id="marathonToggle" role="switch" aria-checked="false">خاموش</button>
       </div>
+      <label class="marathon-field" style="display:flex;align-items:center;gap:6px;margin:6px 0 0;padding:0 4px">
+        <input type="checkbox" id="marathonAuto" checked>
+        <span>ادامهٔ خودکار پس از هر چرخه</span>
+      </label>
       <div class="marathon-body" id="marathonBody" hidden>
         <label class="marathon-field">هدف کار مستمر
           <select id="marathonGoalSel">
@@ -3120,6 +3124,7 @@ function putConvCache(id, entry) {
 }
 
 function detachActiveTurnForNavigation() {
+  cancelMarathonAuto();
   if (!state.busy && !state.chatAbortController) return;
   const prevConvId = state.conversationId;
   state.activeTurnToken += 1;
@@ -3145,6 +3150,7 @@ function detachActiveTurnForNavigation() {
 }
 
 async function stopCurrentTurn() {
+  cancelMarathonAuto();
   const convId = state.conversationId;
   if (state.chatAbortController) {
     try { state.chatAbortController.abort(); } catch { /* ignore */ }
@@ -5055,6 +5061,7 @@ async function sendMessage(overrideText, opts = {}) {
   const attachments = pendingAttachments.map(({id,name,type,size}) => ({id,name,type,size}));
   const text = rawInput || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
   if (!text) return;
+  if (!opts._autoContinue) cancelMarathonAuto();
   if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
   if (String(state.conversationId || '').startsWith('pending-') && state.pendingCreatePromise) {
     const resolvedId = await state.pendingCreatePromise;
@@ -5107,9 +5114,10 @@ async function sendMessage(overrideText, opts = {}) {
   const msgCountBeforeTurn = state.messages.length;
   let scheduleAutoResumeNext = 0;
   let nextWaveChainPayload = null;
+  let turnClean = true;
 
   if (!isSilentAutoResume) {
-    const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
+    const userMessage = { role: 'user', content: text, attachments, created_at: Date.now(), autoContinue: Boolean(opts._autoContinue) };
     state.messages.push(userMessage);
     appendMessageElement(userMessage);
   }
@@ -5316,6 +5324,7 @@ async function sendMessage(overrideText, opts = {}) {
       }
     }
   } catch (error) {
+    turnClean = false;
     if (!isTurnCurrent()) return;
     if (chatAbort.signal.aborted || error?.name === 'AbortError') {
       await reloadCurrentConversation({ syncWorkspace: true });
@@ -5366,6 +5375,8 @@ async function sendMessage(overrideText, opts = {}) {
           });
         }
       }, 900);
+    } else if (turnClean && !chatAbort.signal.aborted && state.conversationId === turnConvId) {
+      scheduleMarathonAutoContinue();
     }
   }
 }
@@ -6582,8 +6593,60 @@ function setMarathonSelect(id, value) {
   if (el.selectedIndex < 0) el.selectedIndex = 0;
 }
 
+const MARATHON_AUTO_KEY = 'cp_marathon_auto';
+const MARATHON_AUTO_MAX = 30;
+let marathonAutoTurnCount = 0;
+let marathonAutoTimer = null;
+let marathonAutoConvId = null;
+let marathonAutoDelayMs = 3500;
+
+function getMarathonAutoEnabled() {
+  return localStorage.getItem(MARATHON_AUTO_KEY) !== '0';
+}
+
+function persistMarathonAuto(on) {
+  localStorage.setItem(MARATHON_AUTO_KEY, on ? '1' : '0');
+  const cb = $('marathonAuto');
+  if (cb) cb.checked = on;
+}
+
+function cancelMarathonAuto() {
+  if (marathonAutoTimer) {
+    clearTimeout(marathonAutoTimer);
+    marathonAutoTimer = null;
+  }
+  marathonAutoConvId = null;
+}
+
+function scheduleMarathonAutoContinue() {
+  cancelMarathonAuto();
+  const s = getMarathonState();
+  if (!s.active || !getMarathonAutoEnabled()) return;
+  if (marathonAutoTurnCount >= MARATHON_AUTO_MAX) {
+    toast(`⏹ ادامهٔ خودکار پس از ${faNum(MARATHON_AUTO_MAX)} چرخه متوقف شد`);
+    return;
+  }
+  if (state.busy || state.chatAbortController) return;
+  const lastMsg = state.messages[state.messages.length - 1];
+  if (!lastMsg || lastMsg.role !== 'assistant') return;
+  marathonAutoTurnCount += 1;
+  marathonAutoConvId = state.conversationId;
+  const st = $('marathonStatus');
+  if (st) st.textContent = `⏳ ادامهٔ خودکار ${faNum(marathonAutoTurnCount)}/${faNum(MARATHON_AUTO_MAX)}…`;
+  const delayMs = (window.__CP_MARATHON_DELAY | 0) > 0 ? (window.__CP_MARATHON_DELAY | 0) : marathonAutoDelayMs;
+  marathonAutoTimer = setTimeout(() => {
+    marathonAutoTimer = null;
+    if (state.busy || state.chatAbortController) return;
+    if (!getMarathonState().active) return;
+    if (state.conversationId !== marathonAutoConvId) return;
+    sendMessage('ادامه', { marathon: getMarathonState(), _autoContinue: true });
+  }, delayMs);
+}
+
 function renderMarathonUI() {
   const s = getMarathonState();
+  const autoEl = $('marathonAuto');
+  if (autoEl) autoEl.checked = getMarathonAutoEnabled();
   const toggle = $('marathonToggle');
   const body = $('marathonBody');
   if (toggle) {
@@ -6628,12 +6691,17 @@ function startMarathon() {
   const goal = (goalSel && goalSel.value) || DEFAULT_MARATHON.goal;
   const durationH = Number((durSel && durSel.value) || 0);
   const s = persistMarathon({ active: true, goal, durationH, startedAt: Date.now() });
+  marathonAutoTurnCount = 0;
+  cancelMarathonAuto();
+  if (localStorage.getItem(MARATHON_AUTO_KEY) === null) persistMarathonAuto(true);
   renderMarathonUI();
   toast('🚀 ماراتن فعال شد: ' + goal);
-  sendMessage('🚀 حالت ماراتن را فعال می‌کنم. هدف: ' + goal + '. بدون مکث قدم‌به‌قدم کار کن، تست و تأیید انجام بده و طبق قانون ماراتن تا فرمان «توقف» ادامه بده.', { marathon: s });
+  sendMessage('🚀 حالت ماراتن را فعال می‌کنم. هدف: ' + goal + '. بدون مکث قدم‌به‌قدم کار کن، تست و تأیید انجام بده و طبق قانون ماراتن تا فرمان «توقف» ادامه بده.', { marathon: s, _autoContinue: true });
 }
 
 function stopMarathon(reason = 'manual') {
+  cancelMarathonAuto();
+  marathonAutoTurnCount = 0;
   persistMarathon({ active: false, startedAt: null });
   renderMarathonUI();
   const cmd = reason === 'end'
@@ -6652,6 +6720,20 @@ $('marathonToggle').addEventListener('click', () => {
 });
 $('marathonStart').addEventListener('click', startMarathon);
 $('marathonStop').addEventListener('click', () => stopMarathon('manual'));
+const marathonAutoEl = $('marathonAuto');
+if (marathonAutoEl) {
+  marathonAutoEl.addEventListener('change', () => {
+    const on = marathonAutoEl.checked;
+    persistMarathonAuto(on);
+    if (!on) {
+      cancelMarathonAuto();
+      toast('⏸ ادامهٔ خودکار خاموش شد');
+    } else if (getMarathonState().active) {
+      marathonAutoTurnCount = 0;
+      toast('🔁 ادامهٔ خودکار روشن شد');
+    }
+  });
+}
 setInterval(renderMarathonUI, 30000);
 renderMarathonUI();
 
