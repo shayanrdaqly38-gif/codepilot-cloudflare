@@ -1729,12 +1729,12 @@ async function api(path, options = {}) {
   if (init.body && !init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
   let res;
   let data = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       res = await fetch(path, init);
     } catch {
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 500));
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
         continue;
       }
       throw new Error('ارتباط با سرور برقرار نشد.');
@@ -1744,8 +1744,8 @@ async function api(path, options = {}) {
     if (type.includes('application/json')) {
       try { data = await res.json(); } catch { data = null; }
     }
-    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt === 0) {
-      await new Promise((r) => setTimeout(r, 600));
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 650 * (attempt + 1)));
       continue;
     }
     break;
@@ -3672,6 +3672,13 @@ function editorKey(event) {
 
 async function saveEditor(notify = false) {
   if (!state.conversationId) return;
+  // While the server-side agent is actively streaming & saving `live_file` updates in D1,
+  // defer background client autosave so it never collides with busy Worker isolates (avoiding 503 `ذخیره نشد`).
+  if (state.busy && !notify) {
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(() => saveEditor(false), 2500);
+    return;
+  }
   const name = state.workspace.active;
   if (name) state.workspace.files[name] = $('editor').value;
   try {
@@ -3686,8 +3693,14 @@ async function saveEditor(notify = false) {
     setSync('on', 'ذخیره شد');
     if (notify) toast('فایل در D1 ذخیره شد');
   } catch (error) {
-    setSync('', 'ذخیره نشد');
-    toast('ذخیره ناموفق: ' + error.message);
+    if (notify) {
+      setSync('', 'ذخیره نشد');
+      toast('ذخیره ناموفق: ' + error.message);
+    } else {
+      // Quietly schedule one delayed retry for background autosave instead of flashing scary 503 errors
+      clearTimeout(state.saveTimer);
+      state.saveTimer = setTimeout(() => saveEditor(false), 4000);
+    }
   }
 }
 
@@ -3893,14 +3906,17 @@ function renderCheckpointCardHtml(ckpt) {
   if (!ckpt || !ckpt.active) return '';
   const filesCount = Array.isArray(ckpt.touchedFiles) ? ckpt.touchedFiles.length : 0;
   const stepsCount = Number(ckpt.completedSteps) || 0;
-  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed' || ckpt.reason === 'rate_limited';
+  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed';
+  const isRateLimit = ckpt.reason === 'rate_limited';
   const headline = isQuotaOrKey
-    ? '⏸ توقف به علت اتمام توکن/کلید API — نقطه دقیق کار ذخیره شد'
-    : ckpt.reason === 'step_limit'
-      ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
-      : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
-        ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
-        : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
+    ? '⏸ توقف به علت اتمام شارژ یا کلید API — نقطه دقیق کار ذخیره شد'
+    : isRateLimit
+      ? '⏳ سقف سرعت لحظه‌ای سرویس مدل (429) — پیشرفت تا همین لحظه ذخیره شد'
+      : ckpt.reason === 'step_limit'
+        ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
+        : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
+          ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
+          : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
   const detail = ckpt.errorMessage || 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.';
   const metaParts = [];
   if (stepsCount > 0) metaParts.push(`${faNum(stepsCount)} گام انجام‌شده`);
@@ -4768,8 +4784,12 @@ async function sendMessage(overrideText, opts = {}) {
 
   const isSilentAutoResume = Boolean(opts.silentAutoResume);
   const autoRetryCount = Number(opts._autoRetryCount || 0);
+  const waveCount = Number(opts._waveCount || 0);
+  const priorWaveTouched = Array.isArray(opts._waveTouched) ? opts._waveTouched : [];
+  const priorWaveDeleted = Array.isArray(opts._waveDeleted) ? opts._waveDeleted : [];
   const msgCountBeforeTurn = state.messages.length;
   let scheduleAutoResumeNext = 0;
+  let nextWaveChainPayload = null;
 
   if (!isSilentAutoResume) {
     const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
@@ -4861,19 +4881,33 @@ async function sendMessage(overrideText, opts = {}) {
     pendingAttachments = [];
     renderAttachments();
     const result = await consumeStream(response, bubble);
+    const mergedTouched = [...new Set([...priorWaveTouched, ...(result.touchedFiles || [])])];
+    const mergedDeleted = [...new Set([...priorWaveDeleted, ...(result.deletedFiles || [])])];
+
     if (result.ok) {
-      await reloadCurrentConversation();
-      renderTurnNotices();
-      if (state.diffs?.length) {
-        const bubbles = $('chat').querySelectorAll('.msg.assistant');
-        const lastBubble = bubbles[bubbles.length - 1];
-        if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
-          lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
+      if (result.waveContinue && waveCount < 8) {
+        // Multi-Wave Chaining: wave finished cleanly below Cloudflare's 50-subrequest ceiling -> spin up next wave!
+        nextWaveChainPayload = {
+          resumeCheckpoint: true,
+          silentAutoResume: true,
+          _waveCount: waveCount + 1,
+          _waveTouched: mergedTouched,
+          _waveDeleted: mergedDeleted
+        };
+      } else {
+        await reloadCurrentConversation();
+        renderTurnNotices();
+        if (state.diffs?.length) {
+          const bubbles = $('chat').querySelectorAll('.msg.assistant');
+          const lastBubble = bubbles[bubbles.length - 1];
+          if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
+            lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
+          }
         }
-      }
-      if (state.repo && state.agentConfig?.autoCommitGh !== false && (result.touchedFiles.length || result.deletedFiles.length)) {
-        const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
-        commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
+        if (state.repo && state.agentConfig?.autoCommitGh !== false && (mergedTouched.length || mergedDeleted.length)) {
+          const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
+          commitChangesAtomically(mergedTouched, mergedDeleted, '', badge).catch(() => {});
+        }
       }
     } else if (result.clientNetworkDropped) {
       // Browser <-> Cloudflare SSE connection blipped (e.g. VPN/mobile switch).
@@ -4926,11 +4960,21 @@ async function sendMessage(overrideText, opts = {}) {
     } else if (result.resumable) {
       await reloadCurrentConversation({ syncWorkspace: true });
       const ckReason = state.activeCheckpoint?.reason || '';
-      const canAutoContinue =
-        (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
-        autoRetryCount < 1;
-      if (canAutoContinue) {
-        scheduleAutoResumeNext = autoRetryCount + 1;
+      if (ckReason === 'wave_continue' && waveCount < 8) {
+        nextWaveChainPayload = {
+          resumeCheckpoint: true,
+          silentAutoResume: true,
+          _waveCount: waveCount + 1,
+          _waveTouched: mergedTouched,
+          _waveDeleted: mergedDeleted
+        };
+      } else {
+        const canAutoContinue =
+          (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
+          autoRetryCount < 1;
+        if (canAutoContinue) {
+          scheduleAutoResumeNext = autoRetryCount + 1;
+        }
       }
     }
   } catch (error) {
@@ -4955,13 +4999,23 @@ async function sendMessage(overrideText, opts = {}) {
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
     syncAgentUi();
     loadConversations();
-    if (scheduleAutoResumeNext > 0) {
+    if (nextWaveChainPayload) {
+      setSync('busy', `🌊 انتقال خودکار به موج ${faNum((nextWaveChainPayload._waveCount || 1) + 1)}…`);
+      setTimeout(() => {
+        if (!state.busy) {
+          sendMessage('ادامه', nextWaveChainPayload);
+        }
+      }, 350);
+    } else if (scheduleAutoResumeNext > 0) {
       setTimeout(() => {
         if (!state.busy) {
           sendMessage('ادامه', {
             resumeCheckpoint: true,
             silentAutoResume: true,
-            _autoRetryCount: scheduleAutoResumeNext
+            _autoRetryCount: scheduleAutoResumeNext,
+            _waveCount: waveCount,
+            _waveTouched: priorWaveTouched,
+            _waveDeleted: priorWaveDeleted
           });
         }
       }, 900);
@@ -4972,6 +5026,7 @@ async function sendMessage(overrideText, opts = {}) {
 async function consumeStream(response, bubble) {
   let persisted = false;
   let resumableStop = false;
+  let waveContinue = false;
   let serverErrorReceived = false;
   let clientNetworkDropped = false;
   const reader = response.body.getReader();
@@ -4998,6 +5053,10 @@ async function consumeStream(response, bubble) {
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
+      } else if (data.phase === 'rate_limit_wait') {
+        const waitSec = Math.max(1, Math.ceil((Number(data.waitMs) || 2500) / 1000));
+        setSync('busy', `مکث خودکار ${faNum(waitSec)} ثانیه برای شارژ سهمیه لحظه‌ای…`);
+        if (vEl) vEl.textContent = `${stepPrefix()}⏳ سهمیه لحظه‌ای (429) — مکث خودکار ${faNum(waitSec)} ثانیه و ادامه…`;
       } else if (data.phase === 'auto-heal') {
         setSync('busy', 'بازاتصال خودکار بدون توقف…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔄 بازاتصال خودکار به سرویس مدل بدون قطع کار (${faNum(data.attempt || 1)}/۳)…`;
@@ -5160,8 +5219,17 @@ async function consumeStream(response, bubble) {
         bubble.appendChild(acts);
       }
       persisted = true;
-      state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
-      setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
+      waveContinue = Boolean(data.waveContinue);
+      if (waveContinue) {
+        state.activeCheckpoint = null; // Automatic wave handoff — do not display manual pause banner!
+        const wNum = faNum(data.waveNumber || 1);
+        const cSteps = faNum(data.cumulativeSteps || data.steps || 0);
+        textArea.innerHTML = `<span class="tiny" style="color:var(--claude-amber)">🌊 موج ${wNum} ذخیره شد (${cSteps} گام) — شروع خودکار موج بعدی با سهمیه تازه کلودفلر…</span>`;
+        setSync('busy', `موج ${wNum} ذخیره شد · شروع موج بعدی…`);
+      } else {
+        state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
+        setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
+      }
     } else if (event === 'error') {
       serverErrorReceived = true;
       bubble.querySelector('.claude-spinner-bar')?.remove();
@@ -5240,6 +5308,7 @@ async function consumeStream(response, bubble) {
   }
   return {
     ok: persisted,
+    waveContinue,
     resumable: resumableStop,
     clientNetworkDropped,
     text: assistantText,

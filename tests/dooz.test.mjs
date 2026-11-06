@@ -40,7 +40,7 @@ function setup(type) {
     activeElement: null,
     getElementById: id => els[id] ??= makeEl(() => { doc.activeElement = els[id]; }),
     querySelector: sel => sel === '.game' ? gameEl : null,
-    createElement: () => makeEl(() => { doc.activeElement = null; }),
+    createElement: () => makeEl((el) => { doc.activeElement = el; }),
     addEventListener(ev, fn) { this._listeners[ev] ??= []; this._listeners[ev].push(fn); },
     _listeners: {},
     fullscreenElement: null, webkitFullscreenElement: null,
@@ -85,7 +85,11 @@ for (const type of scenarios) {
   const { doc, els, gameEl, ls } = setup(type);
   FakeAudioContext.osc = 0;
   const vib = [];
-  globalThis.navigator = { vibrate: ms => { vib.push(ms); } };
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { vibrate: (ms) => { vib.push(ms); } },
+    configurable: true,
+    writable: true
+  });
 
   const fn = new Function('document', 'localStorage',
     code + '\n;globalThis.__h={isFs,toggleFs,syncFsBtn,fsBtn,soundBtn,sfx,buzz,play,cells,newRound};');

@@ -160,6 +160,7 @@ export async function saveTurnCheckpoint(env, owner, conversationId, data = {}) 
     errorCode: String(data.errorCode || '').slice(0, 48),
     errorMessage: truncate(redactSecrets(String(data.errorMessage || ''), secrets), 320),
     completedSteps: (Number(prev?.completedSteps) || 0) + (Number(data.stepsCompleted) || 0),
+    waveNumber: Number(data.waveNumber) || (Number(prev?.waveNumber) || 0),
     resumeCount: (Number(prev?.resumeCount) || 0) + (prev ? 1 : 0),
     touchedFiles: mergedTouched,
     deletedFiles: mergedDeleted,
