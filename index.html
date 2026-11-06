@@ -192,6 +192,16 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .think-toggle.on{background:#1b2436;border-color:#3d5a8a;color:#9ec5ff}
 .think-toggle.max{background:#2b1f12;border-color:#8a5a22;color:#f6ba6f}
 .think-toggle.disabled{opacity:.55;cursor:not-allowed;background:#14161c;border-color:#252831;color:#727b8c}
+/* Live Top-Bar Remaining Tokens Pill + Quota Inspector */
+.token-pill{display:inline-flex;align-items:center;gap:6px;background:#192331;border:1px solid #324763;color:#dce8fa;padding:5px 10px;border-radius:999px!important;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;direction:ltr}
+.token-pill:hover{border-color:#74a4f2;background:#1f2d42;color:#fff}
+.tok-dot{width:7px;height:7px;border-radius:999px;background:#7ee2a8;box-shadow:0 0 6px #7ee2a8aa;flex:none}
+.tok-dot.warn{background:#f5b14c;box-shadow:0 0 6px #f5b14caa}
+.tok-dot.low{background:#ff7b72;box-shadow:0 0 6px #ff7b72aa}
+.quota-meter{height:8px;border-radius:999px;background:#141820;border:1px solid #2b3342;overflow:hidden;margin-top:8px;direction:ltr}
+.quota-meter > i{display:block;height:100%;background:linear-gradient(90deg,#59c98d,#6ba3ff);border-radius:999px;transition:width .25s ease}
+.quota-meter > i.warn{background:linear-gradient(90deg,#f5b14c,#f59e42)}
+.quota-meter > i.low{background:linear-gradient(90deg,#ff7b72,#ef4444)}
 /* Claude & tooken.club style Bottom Sheet / Modal */
 #modelModal .sheet-card{background:#161618;border:1px solid #2a2a2e;border-radius:24px;max-width:460px;width:100%;padding:18px 16px 20px;color:#f2f2f5;box-shadow:0 24px 64px #000b}
 @media(max-width:760px){#modelModal.open{align-items:flex-end;padding:0}#modelModal .sheet-card{max-width:100%;border-radius:24px 24px 0 0;border-bottom:0;padding-bottom:max(20px,env(safe-area-inset-bottom))}}
@@ -297,6 +307,10 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
   <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
   <div class="top-actions">
     <button id="fullscreenButton" onclick="toggleFullscreen()" title="تمام‌صفحه" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
+    <button class="token-pill" id="tokenQuotaBtn" onclick="openQuotaModal()" title="توکن‌های باقی‌مانده و سهمیه زنده API">
+      <span class="tok-dot" id="tokenQuotaDot"></span>
+      <span id="tokenQuotaText">🪙 —</span>
+    </button>
     <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
     <button onclick="openModelModal()" title="انتخاب مدل هوش مصنوعی">✦ مدل</button>
     <button class="utility" onclick="openSettings()" title="تنظیمات و حافظه" aria-label="تنظیمات و حافظه">⚙</button>
@@ -575,6 +589,26 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
   </div>
 </div>
 
+<!-- Live Remaining Tokens & Quota Inspector Modal -->
+<div class="modal" id="quotaModal">
+  <div class="modal-card sheet-card" style="max-width:480px">
+    <div class="sheet-head">
+      <button class="sheet-icon-btn" onclick="closeModal('quotaModal')" aria-label="بستن">✕</button>
+      <h2>توکن‌های باقی‌مانده و مصرف</h2>
+      <button class="sheet-icon-btn" id="refreshQuotaModalBtn" onclick="refreshProviderQuota({ live: true, force: true })" title="استعلام زنده موجودی از API">↻</button>
+    </div>
+    <div id="quotaModalBody" style="direction:rtl;text-align:right"></div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid #2b2c33;direction:rtl;text-align:right">
+      <label class="field-label" for="tokenCapInput" style="font-size:11.5px;color:#a7abb6">سقف بسته توکن دستی (اختیاری — برای کسر خودکار در سرویس‌های فاقد اندپوینت موجودی):</label>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <input class="field" id="tokenCapInput" type="number" min="0" step="1000" style="direction:ltr;text-align:left;margin:0;flex:1" placeholder="مثلاً 10000000 (۱۰ میلیون توکن)">
+        <button class="primary" onclick="saveTokenCap(false)" style="white-space:nowrap">ذخیره</button>
+        <button onclick="saveTokenCap(true)" style="white-space:nowrap">حذف</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -612,6 +646,7 @@ const API = {
   models: '/api/models',
   run: '/api/run',
   state: '/api/state',
+  usage: '/api/state/usage',
   conversations: '/api/state/conversations',
   versions: '/api/state/versions',
   search: '/api/state/search',
@@ -672,6 +707,12 @@ const state = {
   effortByModel: {},
   contextTokens: 0,
   contextBudget: 24000,
+  providerQuota: null,
+  rateLimit: null,
+  usageTotals: null,
+  usageDays: [],
+  tokenCap: null,
+  lastTurnTokens: null,
   busy: false,
   dirtyFiles: new Set(),
   saveTimer: null,
@@ -1248,6 +1289,7 @@ function syncModelState() {
   }
   renderFeaturedSheet();
   renderEffortSheet();
+  if (typeof renderTopTokenBadge === 'function') renderTopTokenBadge();
 }
 
 function setReasoningEffort(level, silent = false) {
@@ -1520,6 +1562,7 @@ async function boot() {
   }
 
   state.ready = true;
+  refreshProviderQuota({ live: true, silent: true }).catch(() => {});
 
   const last = localStorage.getItem('cp-last-conversation');
   if (last && state.conversations.some((c) => c.id === last)) {
@@ -1705,7 +1748,12 @@ async function newConversation(open = true) {
     };
     state.conversations.unshift(conv);
     renderConversations();
-    if (open) await openConversation(result.id, { fresh: true });
+    if (open) {
+      await openConversation(result.id, { fresh: true });
+    } else {
+      state.contextTokens = 0;
+      renderTopTokenBadge();
+    }
     setSync('on', 'گفتگوی جدید در D1 ذخیره شد');
     return result.id;
   } catch (error) {
@@ -1726,6 +1774,12 @@ async function openConversation(id, { fresh = false } = {}) {
     localStorage.setItem('cp-last-conversation', id);
     const conv = state.conversations.find((c) => c.id === id);
     if (conv) Object.assign(conv, data.conversation || {});
+    // Estimate active context tokens immediately from visible window when opening a conversation
+    const summaryUntil = Number(data.conversation?.summaryUntil || 0);
+    const activeMsgs = state.messages.filter((m) => !summaryUntil || (Number(m.seq) || 0) > summaryUntil);
+    const summaryChars = String(data.conversation?.summary || '').length;
+    const msgChars = activeMsgs.reduce((acc, m) => acc + String(m.content || '').length + 28, 0);
+    state.contextTokens = activeMsgs.length ? Math.ceil((summaryChars + msgChars) / 3.6) : 0;
     renderConversations();
     renderChat();
     renderTree();
@@ -1782,6 +1836,301 @@ function updateContextMeter(conv) {
   $('ctxLabel').textContent = 'زمینه ' + faNum(Math.round(used * 100)) + '٪';
   if (conv && conv.summaryUntil) {
     $('ctxLabel').title = 'خلاصه‌ی حافظه تا پیام ' + conv.summaryUntil;
+  }
+  renderTopTokenBadge();
+}
+
+/* -------------------- live remaining tokens & quota ---------------------- */
+
+function formatShortTokens(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000_000) return (v / 1_000_000_000).toFixed(2).replace(/\.?0+$/, '') + 'B';
+  if (abs >= 1_000_000) return (v / 1_000_000).toFixed(v >= 10_000_000 ? 1 : 2).replace(/\.?0+$/, '') + 'M';
+  if (abs >= 10_000) return (v / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return Math.round(v).toLocaleString('en-US');
+}
+
+function getActiveModelContextMax() {
+  const meta = getModelMeta(activeModelId());
+  if (meta && Number.isFinite(meta.maxInputTokens) && meta.maxInputTokens > 0) {
+    return meta.maxInputTokens;
+  }
+  return state.contextBudget || 128_000;
+}
+
+function computeRemainingSummary() {
+  const maxCtx = getActiveModelContextMax();
+  const usedCtx = Math.max(0, Number(state.contextTokens) || 0);
+  const ctxRemaining = Math.max(0, maxCtx - usedCtx);
+  const ctxRatio = maxCtx > 0 ? ctxRemaining / maxCtx : 1;
+
+  const q = state.providerQuota;
+  const rl = state.rateLimit;
+  const cap = Number.isFinite(state.tokenCap) && state.tokenCap > 0 ? state.tokenCap : null;
+  const totalUsed = Number(state.usageTotals?.totalTokens || 0);
+
+  // Priority 1: Live account remaining tokens from provider API (e.g. Tooken / OneAPI / LiteLLM)
+  if (q && q.supported && !q.unlimited && Number.isFinite(q.remainingTokens)) {
+    const ratio = Number.isFinite(q.limitTokens) && q.limitTokens > 0 ? q.remainingTokens / q.limitTokens : 1;
+    return {
+      mode: 'provider_tokens',
+      badge: `🪙 ${formatShortTokens(q.remainingTokens)}`,
+      ratio,
+      tooltip: `باقی‌مانده حساب سرویس (${q.source || 'API'}): ${Math.round(q.remainingTokens).toLocaleString('en-US')} توکن · توکن آزاد گفتگو: ${formatShortTokens(ctxRemaining)}`,
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
+
+  // Priority 2: Live account remaining USD / credit balance from provider API (OpenRouter, DeepSeek, Billing)
+  if (q && q.supported && !q.unlimited && Number.isFinite(q.remainingUsd)) {
+    const cur = q.currency === 'CNY' ? '¥' : '$';
+    const ratio = Number.isFinite(q.limitUsd) && q.limitUsd > 0 ? q.remainingUsd / q.limitUsd : (q.remainingUsd > 1 ? 1 : 0.2);
+    return {
+      mode: 'provider_usd',
+      badge: `🪙 ${cur}${q.remainingUsd.toFixed(2)} · ${formatShortTokens(ctxRemaining)}`,
+      ratio: Math.min(ratio, ctxRatio),
+      tooltip: `اعتبار باقی‌مانده API (${q.source || 'API'}): ${cur}${q.remainingUsd.toFixed(4)} · توکن آزاد گفتگو: ${Math.round(ctxRemaining).toLocaleString('en-US')} از ${Math.round(maxCtx).toLocaleString('en-US')}`,
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
+
+  // Priority 3: User-configured manual token package cap minus tracked D1 usage
+  if (cap) {
+    const remCap = Math.max(0, cap - totalUsed);
+    const ratio = remCap / cap;
+    return {
+      mode: 'manual_cap',
+      badge: `🪙 ${formatShortTokens(remCap)}`,
+      ratio,
+      tooltip: `باقی‌مانده از سقف بسته توکن: ${remCap.toLocaleString('en-US')} از ${cap.toLocaleString('en-US')} توکن · توکن آزاد گفتگو: ${formatShortTokens(ctxRemaining)}`,
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
+
+  // Priority 4: Live response header x-ratelimit-remaining-tokens (TPM / quota window)
+  if (rl && Number.isFinite(rl.remainingTokens)) {
+    const ratio = Number.isFinite(rl.limitTokens) && rl.limitTokens > 0 ? rl.remainingTokens / rl.limitTokens : ctxRatio;
+    return {
+      mode: 'ratelimit_tokens',
+      badge: `🪙 ${formatShortTokens(rl.remainingTokens)}`,
+      ratio,
+      tooltip: `سهمیه لحظه‌ای هدر API: ${Math.round(rl.remainingTokens).toLocaleString('en-US')} توکن · توکن آزاد گفتگو: ${formatShortTokens(ctxRemaining)}`,
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
+
+  // Priority 5: Active model's live remaining context window tokens (always exact & real for every model)
+  return {
+    mode: 'context_window',
+    badge: `🪙 ${formatShortTokens(ctxRemaining)}`,
+    ratio: ctxRatio,
+    tooltip: `توکن باقی‌مانده پنجره مدل (${activeModelId()}): ${Math.round(ctxRemaining).toLocaleString('en-US')} از ${Math.round(maxCtx).toLocaleString('en-US')} توکن (کلیک برای جزئیات و استعلام API)`,
+    ctxRemaining,
+    maxCtx,
+    ctxRatio
+  };
+}
+
+function renderTopTokenBadge() {
+  const btn = $('tokenQuotaBtn');
+  const txt = $('tokenQuotaText');
+  const dot = $('tokenQuotaDot');
+  if (!btn || !txt || !dot) return;
+
+  const summary = computeRemainingSummary();
+  txt.textContent = summary.badge;
+  btn.title = summary.tooltip;
+  dot.className = summary.ratio <= 0.1 ? 'tok-dot low' : summary.ratio <= 0.28 ? 'tok-dot warn' : 'tok-dot';
+
+  const modal = $('quotaModal');
+  if (modal && modal.classList.contains('open')) {
+    renderQuotaModalBody();
+  }
+}
+
+function renderQuotaModalBody() {
+  const body = $('quotaModalBody');
+  if (!body) return;
+  const summary = computeRemainingSummary();
+  const q = state.providerQuota;
+  const rl = state.rateLimit;
+  const totals = state.usageTotals || {
+    requests: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0
+  };
+  const cap = Number.isFinite(state.tokenCap) && state.tokenCap > 0 ? state.tokenCap : null;
+  const activeHost = state.provider?.activeHost || 'tooken.club';
+
+  // Section 1: Provider Account Balance / Quota
+  let providerHtml = '';
+  if (!q) {
+    providerHtml = `<div style="font-size:12px;color:#9aa1ae">در حال بررسی اندپوینت سهمیه <code style="direction:ltr">${esc(activeHost)}</code>…</div>`;
+  } else if (q.supported && q.unlimited) {
+    providerHtml = `<div style="font-size:13px;color:#7ee2a8;font-weight:700">♾ نامحدود (Unlimited Key)</div>
+      <div style="font-size:11px;color:#8e95a2;margin-top:4px">منبع: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · مصرف ثبت‌شده در کلید: ${Math.round(q.usedTokens).toLocaleString('en-US')} توکن` : ''}</div>`;
+  } else if (q.supported && Number.isFinite(q.remainingTokens)) {
+    const pct = Number.isFinite(q.limitTokens) && q.limitTokens > 0
+      ? Math.max(0, Math.min(100, Math.round((q.remainingTokens / q.limitTokens) * 100)))
+      : 100;
+    const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
+    providerHtml = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+        <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${Math.round(q.remainingTokens).toLocaleString('en-US')} tok</span>
+        <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(q.limitTokens) ? `از ${Math.round(q.limitTokens).toLocaleString('en-US')}` : 'موجودی کلید'}</span>
+      </div>
+      <div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>
+      <div style="font-size:11px;color:#8e95a2;margin-top:6px">منبع زنده: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · مصرف‌شده: ${Math.round(q.usedTokens).toLocaleString('en-US')} توکن` : ''}</div>`;
+  } else if (q.supported && Number.isFinite(q.remainingUsd)) {
+    const cur = q.currency === 'CNY' ? '¥' : '$';
+    const pct = Number.isFinite(q.limitUsd) && q.limitUsd > 0
+      ? Math.max(0, Math.min(100, Math.round((q.remainingUsd / q.limitUsd) * 100)))
+      : 100;
+    providerHtml = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+        <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${cur}${q.remainingUsd.toFixed(4)}</span>
+        <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(q.limitUsd) ? `از ${cur}${q.limitUsd.toFixed(2)}` : 'اعتبار فعال'}</span>
+      </div>
+      <div class="quota-meter"><i style="width:${pct}%"></i></div>
+      <div style="font-size:11px;color:#8e95a2;margin-top:6px">منبع زنده: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedUsd) ? ` · مصرف‌شده: ${cur}${q.usedUsd.toFixed(4)}` : ''}</div>`;
+  } else {
+    providerHtml = `<div style="font-size:12px;color:#b8c0cf;line-height:1.7">
+      درگاه <code style="direction:ltr">${esc(activeHost)}</code> اندپوینت عمومی مانده‌حساب کلید را بازنگرداند؛ بنابراین توکن آزاد پنجره مدل و شمارنده دقیق مصرف توکن در D1 فعال است. (در صورت داشتن سقف بسته، در پایین وارد کنید تا خودکار کسر شود.)
+    </div>`;
+  }
+
+  // Rate limit header snippet if returned by completion endpoint
+  const rlHtml = rl && (Number.isFinite(rl.remainingTokens) || Number.isFinite(rl.remainingRequests))
+    ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #2b3342;font-size:11.5px;color:#9fb4d6;direction:ltr;text-align:left">
+        Rate-Limit Header → ${Number.isFinite(rl.remainingTokens) ? `Tokens left: <b>${Math.round(rl.remainingTokens).toLocaleString('en-US')}</b>${Number.isFinite(rl.limitTokens) ? ` / ${Math.round(rl.limitTokens).toLocaleString('en-US')}` : ''}` : ''}
+        ${Number.isFinite(rl.remainingRequests) ? ` · Req left: <b>${rl.remainingRequests}</b>` : ''}
+      </div>`
+    : '';
+
+  // Manual cap bar if set
+  let capHtml = '';
+  if (cap) {
+    const rem = Math.max(0, cap - totals.totalTokens);
+    const pct = Math.max(0, Math.min(100, Math.round((rem / cap) * 100)));
+    const cls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
+    capHtml = `
+      <div class="spec-box" style="margin-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px">
+          <span style="color:#cfd5e2;font-weight:600">📦 باقی‌مانده از سقف بسته تعریفی شما</span>
+          <b style="direction:ltr;color:#7ee2a8">${rem.toLocaleString('en-US')} / ${cap.toLocaleString('en-US')}</b>
+        </div>
+        <div class="quota-meter"><i class="${cls}" style="width:${pct}%"></i></div>
+      </div>`;
+  }
+
+  // Context window remaining tokens for active model
+  const ctxPct = Math.max(0, Math.min(100, Math.round(summary.ctxRatio * 100)));
+  const ctxCls = ctxPct <= 10 ? 'low' : ctxPct <= 28 ? 'warn' : '';
+
+  // Last turn token breakdown if present
+  const turn = state.lastTurnTokens;
+  const turnHtml = turn && turn.totalTokens > 0
+    ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${turn.totalTokens.toLocaleString('en-US')}</b> توکن (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر مجزا: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''})</div>`
+    : '';
+
+  body.innerHTML = `
+    <div class="spec-box" style="margin-top:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:700;color:#dce6f7">🔌 سهمیه حساب API (<span style="direction:ltr">${esc(activeHost)}</span>)</span>
+        <span style="font-size:10.5px;color:#7f8a9c">${state.provider?.usingCustom ? 'API اختصاصی' : 'API پیش‌فرض'}</span>
+      </div>
+      ${providerHtml}
+      ${rlHtml}
+    </div>
+    ${capHtml}
+    <div class="spec-box" style="margin-top:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px">
+        <span style="color:#dce6f7;font-weight:700">🧠 ظرفیت باقی‌مانده پنجره مدل فعلی</span>
+        <code style="direction:ltr;font-size:11px;color:#9cc2ff">${esc(activeModelId())}</code>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px">
+        <span style="font-size:16px;font-weight:700;color:#eef2ff;direction:ltr">${Math.round(summary.ctxRemaining).toLocaleString('en-US')} free</span>
+        <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">مصرف گفتگو: ${Math.round(state.contextTokens || 0).toLocaleString('en-US')} / ${Math.round(summary.maxCtx).toLocaleString('en-US')}</span>
+      </div>
+      <div class="quota-meter"><i class="${ctxCls}" style="width:${ctxPct}%"></i></div>
+    </div>
+    <div class="spec-box" style="margin-top:10px">
+      <div style="font-size:12px;font-weight:700;color:#dce6f7;margin-bottom:6px">📊 کل مصرف ثبت‌شده حساب شما (۳۰ روز اخیر در D1)</div>
+      <div class="spec-row"><span>مجموع کل توکن‌ها</span><b style="direction:ltr">${Number(totals.totalTokens || 0).toLocaleString('en-US')}</b></div>
+      <div class="spec-row"><span>توکن‌های ورودی (Prompt)</span><b style="direction:ltr">${Number(totals.promptTokens || 0).toLocaleString('en-US')}</b></div>
+      <div class="spec-row"><span>توکن‌های خروجی (Completion)</span><b style="direction:ltr">${Number(totals.completionTokens || 0).toLocaleString('en-US')}</b></div>
+      <div class="spec-row"><span>توکن‌های تفکر مجزا (Reasoning)</span><b style="direction:ltr">${Number(totals.reasoningTokens || 0).toLocaleString('en-US')}</b></div>
+      <div class="spec-row"><span>تعداد درخواست‌ها</span><b style="direction:ltr">${Number(totals.requests || 0).toLocaleString('en-US')}</b></div>
+      ${turnHtml}
+    </div>
+  `;
+}
+
+async function refreshProviderQuota({ live = true, force = false, silent = false } = {}) {
+  const rBtn = $('refreshQuotaModalBtn');
+  if (rBtn) rBtn.textContent = '…';
+  try {
+    const qs = live ? `?live=1${force ? '&refresh=1' : ''}` : '';
+    const data = await api(API.usage + qs);
+    if (data) {
+      if (data.totals) state.usageTotals = data.totals;
+      if (Array.isArray(data.days)) state.usageDays = data.days;
+      if (data.tokenCap !== undefined) state.tokenCap = data.tokenCap;
+      if (data.quota) state.providerQuota = data.quota;
+      const capInput = $('tokenCapInput');
+      if (capInput && document.activeElement !== capInput) {
+        capInput.value = state.tokenCap ? String(state.tokenCap) : '';
+      }
+      renderTopTokenBadge();
+      if (!silent && force) {
+        toast(data.quota?.supported ? '✔ موجودی زنده از API بروزرسانی شد' : '✔ آمار توکن‌ها بروزرسانی شد');
+      }
+    }
+  } catch (err) {
+    if (!silent) toast('خطا در دریافت وضعیت توکن‌ها: ' + err.message);
+  } finally {
+    if (rBtn) rBtn.textContent = '↻';
+  }
+}
+
+function openQuotaModal() {
+  const capInput = $('tokenCapInput');
+  if (capInput) capInput.value = state.tokenCap ? String(state.tokenCap) : '';
+  renderQuotaModalBody();
+  $('quotaModal')?.classList.add('open');
+  refreshProviderQuota({ live: true, force: false, silent: true }).catch(() => {});
+}
+
+async function saveTokenCap(clear = false) {
+  const input = $('tokenCapInput');
+  const rawVal = clear ? null : Number(input?.value || 0);
+  if (!clear && (!Number.isFinite(rawVal) || rawVal <= 0)) {
+    toast('لطفاً یک سقف توکن معتبر وارد کنید یا دکمه حذف را بزنید');
+    return;
+  }
+  try {
+    const res = await api(API.usage, {
+      method: 'POST',
+      body: JSON.stringify({ tokenCap: clear ? null : Math.round(rawVal) })
+    });
+    state.tokenCap = res.tokenCap ?? null;
+    if (input) input.value = state.tokenCap ? String(state.tokenCap) : '';
+    renderTopTokenBadge();
+    toast(clear ? 'سقف دستی توکن حذف شد' : `✔ سقف بسته روی ${state.tokenCap.toLocaleString('en-US')} توکن تنظیم شد`);
+  } catch (err) {
+    toast('خطا در ذخیره سقف توکن: ' + err.message);
   }
 }
 
@@ -2589,6 +2938,26 @@ async function consumeStream(response, bubble) {
         applyDiscoveredReasoningToState(activeModelId(), data.modelReasoning);
       }
       syncShellBadge();
+      if (data.turnTokens && typeof data.turnTokens === 'object') {
+        state.lastTurnTokens = data.turnTokens;
+        const turnTotal = Number(data.turnTokens.totalTokens || 0);
+        if (turnTotal > 0) {
+          if (!state.usageTotals) {
+            state.usageTotals = { requests: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0, totalTokens: 0 };
+          }
+          state.usageTotals.requests = (state.usageTotals.requests || 0) + 1;
+          state.usageTotals.promptTokens = (state.usageTotals.promptTokens || 0) + (data.turnTokens.promptTokens || 0);
+          state.usageTotals.completionTokens = (state.usageTotals.completionTokens || 0) + (data.turnTokens.completionTokens || 0);
+          state.usageTotals.reasoningTokens = (state.usageTotals.reasoningTokens || 0) + (data.turnTokens.reasoningTokens || 0);
+          state.usageTotals.totalTokens = (state.usageTotals.totalTokens || 0) + turnTotal;
+          if (state.providerQuota && Number.isFinite(state.providerQuota.remainingTokens)) {
+            state.providerQuota.remainingTokens = Math.max(0, state.providerQuota.remainingTokens - turnTotal);
+          }
+        }
+      }
+      if (data.rateLimit && typeof data.rateLimit === 'object') {
+        state.rateLimit = data.rateLimit;
+      }
       if (data.context && Number.isFinite(data.context.estimatedTokens)) {
         state.contextTokens = data.context.estimatedTokens;
       }
@@ -2597,7 +2966,10 @@ async function consumeStream(response, bubble) {
         $('ctxLabel').title =
           'خلاصه تا پیام ' + faNum(data.context?.summaryUntil || 0) + ' · ' +
           faNum(data.context?.recentMessages || 0) + ' پیام اخیر در زمینه';
+      } else {
+        renderTopTokenBadge();
       }
+      refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
       if (assistantText) {
         bubble.querySelectorAll('.msg-actions').forEach((el) => el.remove());
         const acts = document.createElement('div');
@@ -2964,6 +3336,10 @@ async function saveProviderConfig() {
     syncModelState();
     renderModelList();
     syncProviderSettingsForm();
+    state.providerQuota = null;
+    state.rateLimit = null;
+    renderTopTokenBadge();
+    refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
     const activeSpec = inferClientReasoningSpec(activeModelId());
     if (activeSpec.needsDiscovery) {
       discoverModelReasoning(activeModelId(), false).catch(() => {});
@@ -2988,6 +3364,10 @@ async function resetProviderConfig() {
     syncModelState();
     renderModelList();
     syncProviderSettingsForm();
+    state.providerQuota = null;
+    state.rateLimit = null;
+    renderTopTokenBadge();
+    refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
     toast('به API پیش‌فرض سرور بازگردانده شد');
   } catch (error) {
     toast('خطا: ' + error.message);
