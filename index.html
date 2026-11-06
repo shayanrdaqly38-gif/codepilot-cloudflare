@@ -1244,8 +1244,14 @@ body[data-theme="claude-day"] .msg.user.auto-cycle{color:var(--claude-deep);back
       <p id="apiConnectionStatus" class="tiny" style="margin:6px 0 10px">می‌توانید از پیش‌فرض سرور استفاده کنید یا هر آدرس و کلید API سازگار با OpenAI را وارد کنید؛ مدل‌ها و سطوح استدلال هر مدل به‌صورت خودکار شناسایی می‌شوند.</p>
       <label class="field-label" for="providerBaseUrlInput">آدرس سرویس (Base URL)</label>
       <input class="field" id="providerBaseUrlInput" style="direction:ltr;text-align:left" placeholder="https://tooken.club/v1 یا https://openrouter.ai/api/v1">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://openrouter.ai/api/v1')">⚡ OpenRouter</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://tooken.club/v1')">Tooken</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://api.openai.com/v1')">OpenAI</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://api.deepseek.com/v1')">DeepSeek</button>
+      </div>
       <label class="field-label" for="providerApiKeyInput">کلید API اختصاصی (رمزنگاری AES-GCM در D1 — اختیاری اگر روی سرور تنظیم شده)</label>
-      <input class="field" id="providerApiKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="sk-... / tc_live_...">
+      <input class="field" id="providerApiKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="sk-or-v1-... / sk-... / tc_live_...">
       <label class="field-label" for="providerDefaultModelInput">مدل پیش‌فرض (اختیاری — در صورت خالی بودن خودکار از لیست مدل‌ها انتخاب می‌شود)</label>
       <input class="field" id="providerDefaultModelInput" style="direction:ltr;text-align:left" placeholder="claude-sonnet-5-5">
       <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px;margin-top:8px">
@@ -1502,11 +1508,12 @@ body[data-theme="claude-day"] .msg.user.auto-cycle{color:var(--claude-deep);back
     <!-- View 3: More models / Grid + manual model ID + quick API link -->
     <div class="sheet-view" id="sheetViewMore">
       <div class="sheet-head">
-        <button class="sheet-icon-btn" onclick="refreshLiveModels()" title="دریافت لیست زنده از /v1/models">↻</button>
+        <button class="sheet-icon-btn" id="refreshModelsMoreBtn" onclick="refreshLiveModels()" title="دریافت لیست زنده از /v1/models">↻</button>
         <h2>All models</h2>
         <button class="sheet-icon-btn" onclick="openModelSheetView('main')" aria-label="بازگشت">→</button>
       </div>
-      <div id="modelGrid" class="model-grid" style="max-height:44vh"></div>
+      <input class="field" id="modelGridSearchInput" style="direction:ltr;text-align:left;margin:0 0 8px;min-height:34px;font-size:12px" placeholder="🔎 Search models (claude, gpt, gemini, deepseek, free…)" oninput="renderModelList()">
+      <div id="modelGrid" class="model-grid" style="max-height:42vh"></div>
       <label class="field-label" for="customModelInput" style="margin-top:10px">افزودن مستقیم هر شناسه‌ی مدل جدید (تشخیص خودکار سطوح استدلال):</label>
       <div style="display:flex;gap:8px;align-items:center">
         <input class="field" id="customModelInput" style="direction:ltr;text-align:left;margin:0" placeholder="مثلاً claude-opus-5-5 یا o3-mini یا مدل جدید" onkeydown="if(event.key==='Enter'){event.preventDefault();applyCustomModel()}">
@@ -1892,16 +1899,57 @@ const TIER_LABELS = {
   custom: 'دلخواه'
 };
 
+function cleanClientCredential(val, isKey = false) {
+  let s = String(val || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, '').trim();
+  if (
+    s.length >= 2 &&
+    ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  if (isKey) {
+    s = s.replace(/^bearer\s+/i, '').trim();
+  }
+  return s;
+}
+
+const PROVIDER_PRESETS = {
+  openrouter: { url: 'https://openrouter.ai/api/v1', modelPlaceholder: 'anthropic/claude-sonnet-4' },
+  tooken: { url: 'https://tooken.club/v1', modelPlaceholder: 'claude-sonnet-5-5' },
+  openai: { url: 'https://api.openai.com/v1', modelPlaceholder: 'gpt-5' },
+  deepseek: { url: 'https://api.deepseek.com/v1', modelPlaceholder: 'deepseek-reasoner' }
+};
+
+function fillProviderPreset(presetOrUrl) {
+  const key = String(presetOrUrl || '').trim().toLowerCase();
+  const preset = PROVIDER_PRESETS[key];
+  const url = preset ? preset.url : String(presetOrUrl || '').trim();
+  const inp = $('providerBaseUrlInput');
+  if (inp) inp.value = url;
+  const defInp = $('providerDefaultModelInput');
+  if (defInp && !defInp.value) {
+    defInp.placeholder = preset?.modelPlaceholder || (url.includes('openrouter.ai') ? 'anthropic/claude-sonnet-4' : 'claude-sonnet-5-5');
+  }
+  $('providerApiKeyInput')?.focus();
+}
+
 function inferProvider(id) {
-  const s = String(id || '').toLowerCase();
-  if (s.startsWith('claude')) return 'Anthropic';
-  if (s.startsWith('gpt') || /^o[134]/.test(s)) return 'OpenAI';
-  if (s.startsWith('deepseek')) return 'DeepSeek';
-  if (s.startsWith('gemini')) return 'Google';
-  if (s.startsWith('grok')) return 'xAI';
-  if (s.startsWith('kimi')) return 'Moonshot';
-  if (s.startsWith('glm')) return 'Zhipu';
-  return 'Provider';
+  const raw = String(id || '').toLowerCase();
+  const slashIdx = raw.indexOf('/');
+  const vendor = slashIdx > 0 ? raw.slice(0, slashIdx) : '';
+  const s = slashIdx > 0 ? raw.slice(slashIdx + 1) : raw;
+  if (vendor === 'anthropic' || s.startsWith('claude')) return 'Anthropic';
+  if (vendor === 'openai' || s.startsWith('gpt') || /^o[134]/.test(s)) return 'OpenAI';
+  if (vendor === 'deepseek' || s.startsWith('deepseek')) return 'DeepSeek';
+  if (vendor === 'google' || s.startsWith('gemini')) return 'Google';
+  if (vendor === 'x-ai' || s.startsWith('grok')) return 'xAI';
+  if (vendor === 'moonshotai' || s.startsWith('kimi')) return 'Moonshot';
+  if (vendor === 'z-ai' || s.startsWith('glm')) return 'Zhipu';
+  if (vendor === 'qwen' || s.startsWith('qwen')) return 'Qwen';
+  if (vendor === 'meta-llama' || s.startsWith('llama')) return 'Meta';
+  if (vendor === 'mistralai' || s.startsWith('mistral') || s.startsWith('codestral')) return 'Mistral';
+  if (vendor === 'openrouter') return 'OpenRouter';
+  return vendor ? vendor.charAt(0).toUpperCase() + vendor.slice(1) : 'Provider';
 }
 
 const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -2199,7 +2247,7 @@ function applySearchedOrCustomModel() {
     selectModel(exact.id, false);
     return;
   }
-  if (/^[a-zA-Z0-9._:/-]{2,120}$/.test(q)) {
+  if (/^[a-zA-Z0-9._:@/-]{2,120}$/.test(q)) {
     if (!state.availableModels.some((m) => m.id === q)) {
       state.availableModels.unshift(getModelMeta(q));
     }
@@ -2251,7 +2299,9 @@ function renderFeaturedSheet() {
   const moreCount = $('moreModelsCountVal');
   if (moreCount) moreCount.innerHTML = `&lt; ${fullList.length}`;
 
-  let rowsHtml = filtered
+  const visibleCap = q ? 150 : 100;
+  const visible = filtered.length > visibleCap ? filtered.slice(0, visibleCap) : filtered;
+  let rowsHtml = visible
     .map((m) => {
       const isAct = m.id === activeId;
       const title = m.title || m.id;
@@ -2274,8 +2324,11 @@ function renderFeaturedSheet() {
       </div>`;
     })
     .join('');
+  if (filtered.length > visible.length) {
+    rowsHtml += `<div class="sheet-caption" style="padding:8px 12px;text-align:center">نمایش ${visible.length} مدل برتر از ${filtered.length} مدل — نام مدل را در کادر بالا تایپ کنید تا همه‌ی نتایج نمایش داده شوند.</div>`;
+  }
 
-  if (q && /^[a-zA-Z0-9._:/-]{2,120}$/.test(state.modelFilter) && !fullList.some((m) => m.id.toLowerCase() === q)) {
+  if (q && /^[a-zA-Z0-9._:@/-]{2,120}$/.test(state.modelFilter) && !fullList.some((m) => m.id.toLowerCase() === q)) {
     const rawNew = state.modelFilter.trim();
     rowsHtml += `<div class="sheet-item" role="button" tabindex="0" onclick="applySearchedOrCustomModel()">
       <span class="sheet-check">+</span>
@@ -2469,9 +2522,22 @@ function renderModelList() {
   const grid = $('modelGrid');
   if (!grid) return;
   const activeId = activeModelId();
-  const list = state.availableModels.length
+  const fullList = state.availableModels.length
     ? state.availableModels
     : [getModelMeta(activeId)];
+  const query = String($('modelGridSearchInput')?.value || state.modelFilter || '').trim().toLowerCase();
+  const filtered = query
+    ? fullList.filter((m) =>
+        m.id.toLowerCase().includes(query) ||
+        String(m.title || '').toLowerCase().includes(query) ||
+        String(m.subtitle || '').toLowerCase().includes(query)
+      )
+    : fullList;
+  const list = query ? filtered.slice(0, 150) : filtered.slice(0, 120);
+  if (!list.length) {
+    grid.innerHTML = `<div class="tiny" style="padding:14px;text-align:center;color:var(--muted)">مدلی با عبارت «${esc(query)}» در لیست یافت نشد — می‌توانید شناسه دقیق آن را در کادر پایین وارد کنید.</div>`;
+    return;
+  }
   grid.innerHTML = list
     .map((m) => {
       const isAct = m.id === activeId;
@@ -2529,9 +2595,9 @@ function selectModel(id, closeAfter = false) {
 }
 
 function applyCustomModel() {
-  const val = ($('customModelInput')?.value || '').trim();
+  const val = cleanClientCredential($('customModelInput')?.value || '');
   if (!val) return toast('شناسه‌ی مدل را وارد کنید');
-  if (!/^[a-zA-Z0-9._:/-]{2,120}$/.test(val)) return toast('شناسه‌ی مدل معتبر نیست');
+  if (!/^[a-zA-Z0-9._:@/-]{2,160}$/.test(val)) return toast('شناسه‌ی مدل معتبر نیست');
   if (!state.availableModels.some((m) => m.id === val)) {
     state.availableModels.unshift(getModelMeta(val));
   }
@@ -2979,6 +3045,9 @@ async function boot() {
       syncModelState();
       syncShellBadge();
       renderTerminalIntro();
+      if (state.provider?.usingCustom && config.modelsSource === 'catalog') {
+        refreshLiveModels(true).catch(() => {});
+      }
     }
     state.conversations = snapshot.conversations || [];
     state.memory = snapshot.memory || [];
@@ -4332,8 +4401,8 @@ async function swapTokenAndResumeNow(btn) {
   const card = btn?.closest?.('.resume-checkpoint-card');
   const keyInput = card?.querySelector?.('.ckpt-key-input');
   const urlInput = card?.querySelector?.('.ckpt-url-input');
-  const apiKey = (keyInput?.value || '').trim();
-  const baseUrl = (urlInput?.value || '').trim();
+  const apiKey = cleanClientCredential(keyInput?.value || '').replace(/^bearer\s+/i, '').trim();
+  const baseUrl = cleanClientCredential(urlInput?.value || '');
   if (!apiKey) {
     toast('لطفاً ابتدا کلید/توکن جدید API را وارد کنید');
     keyInput?.focus();
@@ -4345,13 +4414,13 @@ async function swapTokenAndResumeNow(btn) {
   try {
     const res = await api(API.config, {
       method: 'POST',
-      body: JSON.stringify({ apiKey, ...(baseUrl ? { baseUrl } : {}) })
+      body: JSON.stringify({ apiKey, skipModels: true, ...(baseUrl ? { baseUrl } : {}) })
     });
     state.provider = res.provider || null;
     state.defaultModel = res.model || state.defaultModel;
-    if (Array.isArray(res.models)) {
+    if (Array.isArray(res.models) && res.models.length) {
       state.availableModels = res.models;
-      if (state.selectedModel && res.models.length && !res.models.some((m) => m.id === state.selectedModel)) {
+      if (state.selectedModel && !res.models.some((m) => m.id === state.selectedModel)) {
         state.selectedModel = '';
         try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
       }
@@ -4362,6 +4431,7 @@ async function swapTokenAndResumeNow(btn) {
     state.providerQuota = null;
     state.rateLimit = null;
     renderTopTokenBadge();
+    refreshLiveModels(true).catch(() => {});
     refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
     toast('✔ توکن جدید ثبت شد — در حال ادامه دقیق از نقطه قطع‌شدن…');
     await sendMessage('ادامه', { resumeCheckpoint: true });
@@ -6176,41 +6246,73 @@ function syncProviderSettingsForm() {
 
 async function saveProviderConfig() {
   const btn = $('saveProviderBtn');
-  const baseUrl = ($('providerBaseUrlInput')?.value || '').trim();
-  const apiKey = ($('providerApiKeyInput')?.value || '').trim();
-  const defaultModel = ($('providerDefaultModelInput')?.value || '').trim();
-  if (btn) btn.textContent = 'در حال اتصال و شناسایی مدل‌ها…';
+  const baseUrl = cleanClientCredential($('providerBaseUrlInput')?.value || '');
+  const apiKey = cleanClientCredential($('providerApiKeyInput')?.value || '').replace(/^bearer\s+/i, '').trim();
+  const defaultModel = cleanClientCredential($('providerDefaultModelInput')?.value || '');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'در حال ذخیره امن کلید در D1…';
+  }
   try {
+    // Phase 1: Fast atomic D1 save (`skipModels: true`) — immune to multi-MB `/models` 503 CPU spikes!
     const res = await api(API.config, {
       method: 'POST',
-      body: JSON.stringify({ baseUrl, apiKey, defaultModel })
+      body: JSON.stringify({ baseUrl, apiKey, defaultModel, skipModels: true })
     });
     state.provider = res.provider || null;
     state.defaultModel = res.model || state.defaultModel;
-    if (Array.isArray(res.models)) {
+    if (Array.isArray(res.models) && res.models.length) {
       state.availableModels = res.models;
-      // If previous selectedModel doesn't exist on the new API, switch cleanly to the new API's defaultModel
-      if (state.selectedModel && res.models.length && !res.models.some((m) => m.id === state.selectedModel)) {
+      if (state.selectedModel && !res.models.some((m) => m.id === state.selectedModel)) {
         state.selectedModel = '';
         try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
       }
     }
     syncModelState();
+    renderFeaturedSheet();
     renderModelList();
     syncProviderSettingsForm();
     state.providerQuota = null;
     state.rateLimit = null;
     renderTopTokenBadge();
+    runDiagnostics('settingsDiagBox').catch(() => {});
     refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
+
+    // Phase 2: Hydrate full live `/v1/models` catalog in its own dedicated Worker request
+    if (btn) btn.textContent = '✔ کلید ذخیره شد — دریافت فهرست مدل‌ها…';
+    let loadedCount = (res.models || []).length;
+    try {
+      const liveData = await api(API.models + '?refresh=1');
+      if (Array.isArray(liveData.models) && liveData.models.length) {
+        state.availableModels = liveData.models;
+        loadedCount = liveData.models.length;
+        if (liveData.defaultModel && !defaultModel) {
+          state.defaultModel = liveData.defaultModel;
+        }
+        if (state.selectedModel && !liveData.models.some((m) => m.id === state.selectedModel)) {
+          state.selectedModel = '';
+          try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
+        }
+        syncModelState();
+        renderFeaturedSheet();
+        renderModelList();
+      }
+    } catch {
+      // Key is already safely persisted in D1 and fallback models are active!
+    }
+
     const activeSpec = inferClientReasoningSpec(activeModelId());
     if (activeSpec.needsDiscovery) {
       discoverModelReasoning(activeModelId(), false).catch(() => {});
     }
-    toast(`✔ سرویس ذخیره شد · ${faNum((res.models || []).length)} مدل بارگذاری شد`);
+    toast(`✔ کلید و سرویس ذخیره شد · ${faNum(loadedCount)} مدل آماده است`);
   } catch (error) {
     toast('خطا در ذخیره تنظیمات API: ' + error.message);
   } finally {
-    if (btn) btn.textContent = 'ذخیره و شناسایی خودکار مدل‌ها';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'ذخیره و شناسایی خودکار مدل‌ها';
+    }
   }
 }
 
