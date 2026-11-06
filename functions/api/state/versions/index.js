@@ -7,7 +7,12 @@
 
 import { route, methodNotAllowed } from '../../../_lib/api.js';
 import { fail } from '../../../_lib/util.js';
-import { conversationView, getConversation, safeWorkspace } from '../../../_lib/store.js';
+import {
+  conversationView,
+  getConversation,
+  hydrateConversationWorkspace,
+  persistConversationWorkspace
+} from '../../../_lib/store.js';
 import { getVersion, listVersions, recentPaths, recordVersion } from '../../../_lib/versions.js';
 import { diffStats, diffLines, truncateDiff, unifiedDiff } from '../../../_lib/patch.js';
 import { validateFile } from '../../../_lib/validate.js';
@@ -57,7 +62,7 @@ export async function onRequestPost({ request, env }) {
       const version = await getVersion(env, identity.owner, String(data.versionId || ''));
       if (version.path !== path) fail('این نسخه متعلق به فایل دیگری است.', 400, 'bad_version');
 
-      const workspace = safeWorkspace(JSON.parse(conversation.workspace || '{}'));
+      const workspace = await hydrateConversationWorkspace(env, conversation);
       const before = String(workspace.files[path] ?? '');
       if (before === version.content) fail('فایل همین حالا در همین نسخه است.', 409, 'no_change');
 
@@ -65,9 +70,7 @@ export async function onRequestPost({ request, env }) {
       workspace.files[path] = version.content;
       workspace.active = path;
 
-      await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=?, revision=revision+1 WHERE id=? AND owner=?')
-        .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
-        .run();
+      await persistConversationWorkspace(env, identity.owner, conversation.id, workspace, { bumpRevision: true });
 
       const diff = unifiedDiff(before, version.content, { path });
       const stats = diffStats(diffLines(before, version.content));
