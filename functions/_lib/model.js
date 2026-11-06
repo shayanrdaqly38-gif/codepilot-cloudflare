@@ -2313,7 +2313,7 @@ function parseHybridTextPayload(rawText, onDelta) {
   return { kind: 'unreadable', data: null, preview: cleaned.slice(0, 120) };
 }
 
-async function consumeChatSseResponse(response, onDelta) {
+async function consumeChatSseResponse(response, onDelta, signal = null) {
   const reader = response.body?.getReader?.();
   if (!reader) return { kind: 'empty', data: null };
   const dec = new TextDecoder();
@@ -2322,11 +2322,29 @@ async function consumeChatSseResponse(response, onDelta) {
   let rawFallback = '';
   let streamInterrupted = false;
   let streamErrObj = null;
+  const onAbort = () => {
+    streamInterrupted = true;
+    try { reader.cancel(); } catch { /* ignore */ }
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
 
   try {
+    let chunkReads = 0;
     while (true) {
+      if (signal?.aborted) {
+        streamInterrupted = true;
+        try { await reader.cancel(); } catch { /* ignore */ }
+        break;
+      }
       const { value, done } = await reader.read();
       if (done) break;
+      chunkReads += 1;
+      if (chunkReads % 16 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
       const chunkText = dec.decode(value, { stream: true });
       if (rawFallback.length < 96_000) rawFallback += chunkText;
       buf += chunkText;
@@ -2346,6 +2364,10 @@ async function consumeChatSseResponse(response, onDelta) {
   } catch (err) {
     streamInterrupted = true;
     streamErrObj = err;
+  } finally {
+    if (signal) {
+      try { signal.removeEventListener('abort', onAbort); } catch { /* ignore */ }
+    }
   }
   if (buf.trim()) acc.handleLine(buf);
 
@@ -2677,13 +2699,22 @@ export async function callModel(env, payload) {
 
       let response;
       try {
+        if (payload.signal?.aborted) {
+          const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+          stopErr.status = 499;
+          stopErr.code = 'turn_stopped';
+          throw stopErr;
+        }
         if (env?._subreq && typeof env._subreq.count === 'number') {
           env._subreq.count += 1;
         }
+        const combinedSignal = payload.signal
+          ? AbortSignal.any([payload.signal, AbortSignal.timeout(timeout)])
+          : AbortSignal.timeout(timeout);
         response = await fetch(endpoint, {
           method: 'POST',
           redirect: 'manual',
-          signal: AbortSignal.timeout(timeout),
+          signal: combinedSignal,
           headers: {
             Authorization: `Bearer ${env.MODEL_API_KEY}`,
             'Content-Type': 'application/json',
@@ -2693,6 +2724,12 @@ export async function callModel(env, payload) {
         });
       } catch (error) {
         lastStatus = 0;
+        if (error?.code === 'turn_stopped' || payload.signal?.aborted) {
+          const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+          stopErr.status = 499;
+          stopErr.code = 'turn_stopped';
+          throw stopErr;
+        }
         if (/too many subrequests|subrequest limit/i.test(String(error?.message || ''))) {
           fail(
             'سقف درخواست‌های یک موج کلودفلر پر شد؛ موج بعدی در حال ادامه است.',
@@ -2720,7 +2757,7 @@ export async function callModel(env, payload) {
         const ct = String(response.headers?.get?.('content-type') || '').toLowerCase();
         let parsedOutcome;
         if (ct.includes('text/event-stream')) {
-          parsedOutcome = await consumeChatSseResponse(response, payload.onDelta);
+          parsedOutcome = await consumeChatSseResponse(response, payload.onDelta, payload.signal || null);
         } else {
           let rawBodyText = '';
           try {
@@ -2733,6 +2770,16 @@ export async function callModel(env, payload) {
 
         const snap = parsedOutcome?.snap || null;
         const data = parsedOutcome?.data || null;
+
+        if (payload.signal?.aborted) {
+          const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+          stopErr.status = 499;
+          stopErr.code = 'turn_stopped';
+          if (snap?.rawContent) stopErr.partialContent = stripSecrets(snap.rawContent, secrets);
+          if (snap?.rawReasoning) stopErr.partialReasoning = stripSecrets(snap.rawReasoning, secrets);
+          if (snap?.rawToolCalls?.length) stopErr.partialToolCalls = snap.rawToolCalls;
+          throw stopErr;
+        }
 
         // 1. Inline error returned inside a 200 JSON or mid-SSE stream (e.g. quota exhausted mid-generation)
         const inlineErrRaw = snap?.inlineError || parsedOutcome?.error || (data?.error && !data?.choices?.length ? data.error : null);

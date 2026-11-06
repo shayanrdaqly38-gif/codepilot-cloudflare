@@ -5,7 +5,7 @@
 // results even if the local editor is mid-edit.
 
 import { route, methodNotAllowed } from '../../../_lib/api.js';
-import { getConversation, safeWorkspace } from '../../../_lib/store.js';
+import { getConversation, hydrateConversationWorkspace } from '../../../_lib/store.js';
 import { searchWorkspace } from '../../../_lib/search.js';
 
 export async function onRequestPost({ request, env }) {
@@ -14,7 +14,7 @@ export async function onRequestPost({ request, env }) {
     env,
     async ({ identity, data }) => {
       const conversation = await getConversation(env, identity.owner, String(data?.conversationId || ''));
-      const workspace = safeWorkspace(JSON.parse(conversation.workspace || '{}'));
+      const workspace = await hydrateConversationWorkspace(env, conversation);
       const result = searchWorkspace(workspace.files, data?.query, {
         regex: Boolean(data?.regex),
         caseSensitive: Boolean(data?.caseSensitive),

@@ -4,9 +4,16 @@ import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 const CREATE = [
+  `CREATE TABLE IF NOT EXISTS workspace_files (
+    conversation_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, path)
+  )`,
   `CREATE TABLE IF NOT EXISTS uploads (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
     size INTEGER NOT NULL, chunks INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0,
@@ -143,6 +150,17 @@ export function ensureSchema(env) {
 }
 
 async function bootstrap(env) {
+  // Fast-path for already-bootstrapped production D1 databases: avoids ~28 DDL/PRAGMA
+  // round-trips and a full-table `messages` scan on every cold Cloudflare Worker isolate!
+  try {
+    const ver = await env.DB.prepare("SELECT value FROM meta WHERE key='schema_version'").first();
+    if (ver && String(ver.value) === String(SCHEMA_VERSION)) {
+      return;
+    }
+  } catch {
+    // `meta` table doesn't exist yet on a fresh or v0 database — proceed with full bootstrap.
+  }
+
   await env.DB.batch(CREATE.map((sql) => env.DB.prepare(sql)));
 
   for (const [table, columns] of Object.entries(COLUMNS)) {
@@ -164,7 +182,7 @@ async function bootstrap(env) {
     await env.DB.prepare(sql).run().catch(() => {});
   }
 
-  // Backfill role for rows written by the prototype (body holds the JSON message).
+  // Backfill role only when upgrading from legacy v1 schema.
   await env.DB.prepare(
     `UPDATE messages SET role = COALESCE(json_extract(body,'$.role'),'') WHERE role = ''`
   ).run().catch(() => {});
