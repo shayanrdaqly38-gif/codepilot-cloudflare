@@ -84,7 +84,8 @@ export async function onRequestGet({ request, env }) {
     if (url.searchParams.get('probe') === '1') {
       let identity = null;
       try {
-        identity = await authenticate(request, env);
+        const authRes = await authenticate(request, env);
+        identity = authRes?.identity || null;
       } catch {
         identity = null;
       }

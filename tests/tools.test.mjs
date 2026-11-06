@@ -1196,3 +1196,140 @@ test('extractRateLimitHeaders & fetchProviderQuota discover live remaining token
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Zro (zro.moonmath.ai) /api/cli/status quota, /api/cli/models catalog, SSE streaming, and custom-provider model resolution', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+  const providerLib = await import(`${root}/_lib/provider.js`);
+  const env = makeEnv(keys);
+
+  // 1. Custom non-Tooken provider with blank defaultModel must NOT force claude-sonnet-5-5!
+  await providerLib.saveUserProviderConfig(env, 'zro-user', {
+    baseUrl: 'https://zro.moonmath.ai/v1',
+    apiKey: 'zro_test_key_1234567890',
+    defaultModel: ''
+  });
+  const effEnv = await providerLib.resolveEffectiveEnv(env, 'zro-user');
+  assert.equal(effEnv.MODEL_NAME, '', 'custom provider without defaultModel must leave MODEL_NAME empty instead of claude-sonnet-5-5');
+
+  const originalFetch = globalThis.fetch;
+  let zroPlanMode = 'free';
+  const chatBodies = [];
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u === 'https://zro.moonmath.ai/api/cli/status') {
+      if (zroPlanMode === 'free') {
+        return new Response(
+          JSON.stringify({
+            plan: 'free',
+            freeUsage: {
+              remainingPercent: 40,
+              usedUsd: 0.6,
+              limitUsd: 1.0,
+              windowResetsAt: '2026-11-06T22:00:00Z'
+            },
+            activity30d: {
+              requests: 18,
+              inputTokens: 42000,
+              outputTokens: 9000,
+              cacheReadInputTokens: 31000
+            }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          billing: { plan: 'pro' },
+          spendQuota: { remainingUsd: 12.5, limitUsd: 20, usedUsd: 7.5 },
+          usagePacks: { remainingUsd: 5.0 },
+          activity30d: { totalTokens: 120000, cacheReadInputTokens: 50000 }
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://zro.moonmath.ai/v1/models') {
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'deepseek-v4-flash-0731', owned_by: 'zro' },
+            { id: 'deepseek-v4.1-flash', owned_by: 'zro' }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://zro.moonmath.ai/api/cli/models') {
+      return new Response(
+        JSON.stringify({
+          default: 'deepseek-v4.1-flash',
+          models: [
+            {
+              id: 'deepseek-v4.1-flash',
+              label: 'DeepSeek V4.1 Flash',
+              contextWindow: 163840,
+              maxOutputTokens: 32768,
+              reasoning: { levels: ['none', 'low', 'high', 'max'], defaultEffort: 'high' }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u === 'https://zro.moonmath.ai/v1/chat/completions') {
+      const body = JSON.parse(init.body);
+      chatBodies.push(body);
+      assert.equal(body.stream, true, 'Zro upstream requests should stream SSE to avoid gateway timeouts');
+      const ssePayload = [
+        'data: ' + JSON.stringify({ model: 'deepseek-v4.1-flash', choices: [{ delta: { reasoning_content: 'گام اول تحلیل... ' } }] }),
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: 'سلام ' } }] }),
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: 'از Zro!' }, finish_reason: 'stop' }], usage: { prompt_tokens: 45, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 20 } } }),
+        'data: [DONE]',
+        ''
+      ].join('\n\n');
+      return new Response(ssePayload, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }
+    return new Response('not found', { status: 404 });
+  };
+
+  try {
+    // 2. Zro Free 40% quota parsing
+    const qFree = await modelLib.fetchProviderQuota(effEnv, { force: true });
+    assert.equal(qFree.supported, true);
+    assert.equal(qFree.plan, 'free');
+    assert.equal(qFree.remainingPercent, 40);
+    assert.equal(qFree.windowResetsAt, '2026-11-06T22:00:00Z');
+    assert.equal(qFree.providerUsage.cacheReadTokens, 31000);
+
+    // 3. Zro Paid + Usage Packs parsing
+    zroPlanMode = 'pro';
+    const qPro = await modelLib.fetchProviderQuota(
+      { ...effEnv, MODEL_API_KEY: 'zro_pro_key_999999999' },
+      { force: true }
+    );
+    assert.equal(qPro.supported, true);
+    assert.equal(qPro.plan, 'pro');
+    assert.equal(qPro.remainingBalance, 17.5);
+    assert.equal(qPro.packsRemainingUsd, 5.0);
+
+    // 4. Merged /v1/models + /api/cli/models puts deepseek-v4.1-flash first with exact 4 effort levels
+    const catalog = await modelLib.fetchProviderModels(effEnv, { force: true });
+    assert.equal(catalog[0].id, 'deepseek-v4.1-flash');
+    assert.deepEqual(catalog[0].reasoning.levels, ['none', 'low', 'high', 'max']);
+
+    // 5. callModel with no explicit model resolves deepseek-v4.1-flash (NOT claude-sonnet-5-5!) and streams deltas
+    const deltas = [];
+    const chatRes = await modelLib.callModel(effEnv, {
+      messages: [{ role: 'user', content: 'سلام' }],
+      onDelta: (d) => deltas.push(d)
+    });
+    assert.equal(chatBodies[0].model, 'deepseek-v4.1-flash');
+    assert.equal(chatRes.message.content, 'سلام از Zro!');
+    assert.match(chatRes.reasoning, /گام اول تحلیل/);
+    assert.equal(chatRes.usage.reasoning_tokens, 20);
+    assert.ok(deltas.some((d) => d.type === 'content' && d.text === 'سلام '));
+    assert.ok(deltas.some((d) => d.type === 'reasoning'));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
