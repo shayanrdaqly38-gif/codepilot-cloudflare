@@ -4,7 +4,7 @@ import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const CREATE = [
   `CREATE TABLE IF NOT EXISTS uploads (
@@ -109,7 +109,11 @@ const COLUMNS = {
   messages: [['role', "TEXT NOT NULL DEFAULT ''"]],
   users: [['settings', "TEXT NOT NULL DEFAULT '{}'"]],
   memories: [],
-  usage_daily: [],
+  usage_daily: [
+    ['prompt_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+    ['completion_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+    ['reasoning_tokens', 'INTEGER NOT NULL DEFAULT 0']
+  ],
   rate_limits: [],
   file_versions: [],
   meta: []
