@@ -402,6 +402,7 @@ const LEVELS = [
     arc: [ { x: 20, y: 10, n: 4, h: 2 }, { x: 68, y: 10, n: 5, h: 3 }, { x: 110, y: 9, n: 4, h: 2 } ],
     pickup: [ { x: 13, y: 6, t: 'R' } ],
     enemy: [ { x: 18, y: 9, t: 'E' }, { x: 24, y: 9, t: 'J' }, { x: 43, y: 9, t: 'E' }, { x: 61, y: 9, t: 'Q' }, { x: 79, y: 7, t: 'U' }, { x: 96, y: 9, t: 'E' }, { x: 104, y: 8, t: 'J' } ],
+    pad: [ { x: 54, y: 11 }, { x: 106, y: 9 } ],
     spawn: { x: 3, y: 9 }, cp: { x: 66, y: 9 }, exit: { x: 116, y: 6 }
   } },
   { id: 1, world: 1, name: 'خط راه‌آهن ابری', kind: 'stage', time: 160, theme: 1, data: {
@@ -415,6 +416,7 @@ const LEVELS = [
     arc: [ { x: 5, y: 10, n: 4, h: 2 }, { x: 42, y: 8, n: 3, h: 2 }, { x: 116, y: 8, n: 4, h: 2 } ],
     pickup: [ { x: 36, y: 6, t: 'D' }, { x: 81, y: 6, t: 'F' } ],
     enemy: [ { x: 6, y: 9, t: 'E' }, { x: 34, y: 8, t: 'J' }, { x: 56, y: 9, t: 'U' }, { x: 84, y: 8, t: 'E' }, { x: 110, y: 9, t: 'E' }, { x: 124, y: 9, t: 'J' } ],
+    pad: [ { x: 40, y: 9 }, { x: 112, y: 9 } ],
     spawn: { x: 3, y: 9 }, cp: { x: 56, y: 9 }, exit: { x: 126, y: 8 }
   } },
   { id: 2, world: 1, name: 'نگهبان گروم', kind: 'boss', time: 180, theme: 1, data: {
@@ -437,6 +439,7 @@ const LEVELS = [
     arc: [ { x: 10, y: 10, n: 4, h: 2 }, { x: 64, y: 8, n: 4, h: 2 }, { x: 104, y: 8, n: 5, h: 2 } ],
     pickup: [ { x: 33, y: 6, t: 'T' }, { x: 100, y: 6, t: 'H' } ],
     enemy: [ { x: 12, y: 9, t: 'E' }, { x: 37, y: 9, t: 'J' }, { x: 58, y: 8, t: 'Q' }, { x: 76, y: 9, t: 'E' }, { x: 86, y: 7, t: 'U' }, { x: 106, y: 9, t: 'J' } ],
+    pad: [ { x: 28, y: 11 }, { x: 76, y: 11 } ],
     spawn: { x: 3, y: 9 }, cp: { x: 56, y: 9 }, exit: { x: 116, y: 8 }
   } },
   { id: 4, world: 2, name: 'چاه درخشش', kind: 'stage', time: 165, theme: 2, data: {
@@ -450,6 +453,7 @@ const LEVELS = [
     arc: [ { x: 7, y: 12, n: 3, h: 2 }, { x: 41, y: 12, n: 5, h: 3 }, { x: 79, y: 12, n: 4, h: 2 } ],
     pickup: [ { x: 60, y: 10, t: 'R' } ],
     enemy: [ { x: 9, y: 12, t: 'J' }, { x: 35, y: 12, t: 'E' }, { x: 53, y: 12, t: 'Q' }, { x: 82, y: 12, t: 'E' }, { x: 102, y: 12, t: 'J' } ],
+    pad: [ { x: 18, y: 13 }, { x: 42, y: 13 }, { x: 92, y: 13 } ],
     spawn: { x: 3, y: 12 }, cp: { x: 45, y: 12 }, exit: { x: 106, y: 11 }
   } },
   { id: 5, world: 2, name: 'سورا، مار آسمانی', kind: 'boss', time: 200, theme: 2, data: {
@@ -500,8 +504,8 @@ const LEVELS = [
 /* ------------------------------ پارسینگ و فیزیک ------------------------------ */
 const TS = 40;
 const EPS = 0.01;
-const G = 0, S = 1, O = 2, CR = 3, Q = 4, QP = 5, USED = 6, SPK = 7, LAVA = 8; // کدهای شبکه
-const CODE_TILE = { '#': S, '=': S, 'B': S, '1': O, 'X': CR, '?': Q, 'q': QP, '*': USED };
+const G = 0, S = 1, O = 2, CR = 3, Q = 4, QP = 5, USED = 6, SPK = 7, LAVA = 8, CONV_R = 9, CONV_L = 10; // کدهای شبکه
+const CODE_TILE = { '#': S, '=': S, 'B': S, '1': O, 'X': CR, '?': Q, 'q': QP, '*': USED, 'C': CONV_R, 'c': CONV_L };
 function parseLevel(idx) {
   const def = LEVELS[idx];
   const d = def.data;
@@ -571,7 +575,7 @@ function moveBody(e, dx, dy) {
     const T = Math.floor(e.y / TS), B = Math.floor((e.y + e.h - EPS) / TS);
     for (let ty = T; ty <= B; ty++) for (let tx = L; tx <= R; tx++) {
       const c = solidAt(tx, ty);
-      if (c === S || c === CR || c === Q || c === QP || c === USED || (c === O && sy > 0 && prevBottom <= ty * TS)) {
+      if (c === S || c === CR || c === Q || c === QP || c === USED || c === CONV_R || c === CONV_L || (c === O && sy > 0 && prevBottom <= ty * TS)) {
         if (sy > 0) { e.y = ty * TS - e.h - EPS; grounded = true; }
         else if (sy < 0) { e.y = (ty + 1) * TS + EPS; ceiling = true; ceilTile = { tx, ty, c }; }
         break;
@@ -748,7 +752,7 @@ class Player {
     // پرچم
     if (level.cp && G.cp && !G.cp.active) {
       const cc = { x: G.cp.x * TS, y: G.cp.y * TS, w: 40, h: 80 };
-      if (aabbHit(this, cc)) { G.cp.active = true; sfx.cp(); pop(cc.x, cc.y - 10, '✓ پرچم', '#6dff8a'); }
+      if (aabbHit(this, cc)) { level.cp.active = true; sfx.cp(); pop(cc.x, cc.y - 10, '✓ پرچم', '#6dff8a'); }
     }
     // دروازه
     if (level.exit && G.exitOpen) {
@@ -1041,6 +1045,18 @@ function drawTiles(ctx) {
         ctx.fillRect(px, py + 16, TS, TS - 16);
         ctx.fillStyle = '#ffd23f';
         ctx.beginPath(); ctx.arc(px + TS / 2, py + 20, 5 + ph * 2, 0, TAU); ctx.fill();
+        continue;
+      }
+      if (c === CONV_R || c === CONV_L) {
+        ctx.fillStyle = '#3b4a6b'; ctx.fillRect(px, py + 22, TS, 18);
+        ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(px, py + 22, TS, 4);
+        const dir = c === CONV_R ? 1 : -1;
+        ctx.fillStyle = '#9fb4e8';
+        for (let i = 1; i < 4; i++) {
+          const ax = px + i * 13 + (dir > 0 ? 2 : 6);
+          ctx.beginPath();
+          ctx.moveTo(ax, py + 40); ctx.lineTo(ax - dir * 5, py + 30); ctx.lineTo(ax + dir * 4, py + 30); ctx.closePath(); ctx.fill();
+        }
         continue;
       }
       if (c === 0 || c === 2) {
@@ -1550,6 +1566,7 @@ function tryBumpBlocks(p) {
   for (let tx = l; tx <= r; tx++) if (solidAt(tx, ty) === Q || solidAt(tx, ty) === QP) blockBump(tx, ty);
 }
 function updateRun(dt) {
+  G.time = (G.time || 0) + dt;
   const p = G.player;
   if (!p.dead && !p.win) {
     G.run.timeLeft -= dt;
@@ -1588,6 +1605,18 @@ function updateRun(dt) {
         p.x = dst.x * TS + 6; p.y = dst.y * TS + 2; p.vx = 0;
         tp.cd = 0.8; dst.cd = 0.8;
         sfx.portal(); rings(p.x + p.w / 2, p.y + p.h / 2, '#7df9ff');
+      }
+    }
+  }
+  // نوار نقاله
+  if (p.grounded && !p.dead) {
+    const ty = Math.floor((p.y + p.h - EPS) / TS);
+    if (ty >= 0 && ty < levelH) {
+      for (let tx = Math.floor(p.x / TS); tx <= Math.floor((p.x + p.w - EPS) / TS); tx++) {
+        if (tx < 0 || tx >= levelW) continue;
+        const cc = grid[ty][tx];
+        if (cc === CONV_R) p.vx += 150 * dt;
+        else if (cc === CONV_L) p.vx -= 150 * dt;
       }
     }
   }
@@ -1756,8 +1785,10 @@ function startLevel(idx) {
   const def = LEVELS[idx];
   level = parseLevel(idx);
   level._def = def;
+  if (!level.cp) level.cp = { x: def.spawn.x, y: def.spawn.y, active: false };
+  if (level.cp.active === undefined) level.cp.active = false;
   level.enemies = def.enemy.map(e => spawnEnemy(e.t, e.x, e.y));
-  level.pads = (def.pad || []).map(pd => ({ x: pd.x * TS, y: pd.y * TS, anim: 0 }));
+  level.pads = (def.pad || []).map(pd => ({ x: pd.x, y: pd.y, anim: 0 }));
   G = {
     levelIdx: idx,
     run: { score: 0, coins: 0, hearts: 3, lives: 3, timeLeft: def.time },
@@ -1940,7 +1971,7 @@ window.__NOVA_TEST__ = {
       hp: G && G.boss ? G.boss.hp : 0, exitOpen: G ? G.exitOpen : false
     };
   },
-  startLevel, tick, togglePause, exitToMenu, respawnPlayer, levelClear, G, input, level
+  startLevel, tick, togglePause, exitToMenu, respawnPlayer, levelClear, G, input, level, LEVELS, parseLevel
 };
 
 /* --------------------------- تکمیل توابع و موسیقی --------------------------- */
