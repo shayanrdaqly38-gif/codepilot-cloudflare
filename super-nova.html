@@ -521,7 +521,7 @@ const LEVELS = [
 /* ------------------------------ پارسینگ و فیزیک ------------------------------ */
 const TS = 40;
 const EPS = 0.01;
-const G = 0, S = 1, O = 2, CR = 3, Q = 4, QP = 5, USED = 6, SPK = 7, LAVA = 8, CONV_R = 9, CONV_L = 10; // کدهای شبکه
+const G_GRID = 0, S = 1, O = 2, CR = 3, Q = 4, QP = 5, USED = 6, SPK = 7, LAVA = 8, CONV_R = 9, CONV_L = 10; // کدهای شبکه
 const CODE_TILE = { '#': S, '=': S, 'B': S, '1': O, 'X': CR, '?': Q, 'q': QP, '*': USED, 'C': CONV_R, 'c': CONV_L };
 function parseLevel(idx) {
   const def = LEVELS[idx];
@@ -558,7 +558,7 @@ function parseLevel(idx) {
   if (d.boss) boss = d.boss;
   return { idx, def, theme: THEMES[def.theme], w, h, grid, coins, pickups, enemies, tps, pads, spawn, cp, exit, boss };
 }
-let level = null, levelW = 0, levelH = 0, grid = null;
+let G = null, level = null, levelW = 0, levelH = 0, grid = null;
 function solidAt(tx, ty) {
   if (tx < 0 || tx >= levelW || ty < 0 || ty >= levelH) return 0;
   return grid[ty][tx];
@@ -1347,9 +1347,6 @@ Object.assign(sfx, {
 function rings(x, y, color) {
   for (let i = 0; i < 2; i++) addPart({ x, y, vx: 0, vy: 0, life: 0.45, max: 0.45, size: 7 + i * 5, color, grav: 0, type: 'ring' });
 }
-const projs = [];
-const crumbles = [];
-
 /* ------------------------------- پایهٔ باس ------------------------------- */
 class BossBase {
   constructor(level) {
@@ -1760,7 +1757,7 @@ function updateRun(dt) {
 
 /* ------------------------------- جریان و رابط ------------------------------- */
 let state = 'menu', paused = false;
-let G = null, level = null;
+
 const ovlIds = ['ovlMenu', 'ovlSelect', 'ovlPause', 'ovlClear', 'ovlOver', 'ovlWin', 'ovlHelp'];
 function showOv(v) {
   ovlIds.forEach(id => { const el = $(id); if (el) el.classList.toggle('show', id === v); });
@@ -2026,7 +2023,6 @@ window.__NOVA_TEST__ = {
 
 /* --------------------------- تکمیل توابع و موسیقی --------------------------- */
 const nowMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
-function midiHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 music.setSong = function(st) { this.setState(String(st)); };
 music.pause = function() { if (this.timer) { clearInterval(this.timer); this.timer = null; this.on = false; } };
 music.resume = function() { this.refresh(); };
@@ -2380,6 +2376,7 @@ function drawFx() {
   });
   ctx.globalAlpha = 1;
 }
+})();
 </script>
 </body>
 </html>
