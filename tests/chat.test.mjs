@@ -566,4 +566,228 @@ test('AI Power Engine scales maxSteps across 6 tiers, preserves untouched reason
   }
 });
 
+test('resilient model parser + live checkpoint resume: recovers mislabelled SSE, saves mid-stream progress on quota exhaustion, swaps token, and resumes from exact point on «ادامه»', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+  const configApi = await import(`${root}/api/config.js`);
+  const ckptLib = await import(`${root}/_lib/checkpoint.js`);
+
+  assert.equal(ckptLib.isResumePrompt('ادامه'), true);
+  assert.equal(ckptLib.isResumePrompt('ادامه بده!'), true);
+  assert.equal(ckptLib.isResumePrompt('/continue'), true);
+  assert.equal(ckptLib.isResumePrompt('یک ماشین حساب جدید بساز'), false);
+
+  const original = globalThis.fetch;
+  try {
+    // Part A: Mislabelled SSE (`Content-Type: application/json` with raw `data: {...}` body) + transient empty body retry
+    let probeCall = 0;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      probeCall += 1;
+      if (probeCall === 1) {
+        // Transient empty 200 body -> should auto-retry instead of throwing model_bad_response!
+        return new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // Second attempt returns raw SSE frames despite Content-Type: application/json!
+      const ssePayload = [
+        'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"سلام "}}]}',
+        'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"دنیا!"},"finish_reason":"stop"}]}',
+        'data: [DONE]'
+      ].join('\n\n');
+      return new Response(ssePayload, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const hybridRes = await modelLib.callModel(env, {
+      model: 'claude-sonnet-5-5',
+      messages: [{ role: 'user', content: 'تست' }]
+    });
+    assert.equal(probeCall, 2, 'auto-retried after transient empty 200 response');
+    assert.equal(hybridRes.message.content, 'سلام دنیا!', 'parsed SSE frames inside application/json cleanly');
+
+    // Part B: Mid-turn quota exhaustion after live file write + partial streamed text -> swap API token -> type «ادامه»!
+    const resumeConv = await (
+      await stateApi.onRequestPost(
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+      )
+    ).json();
+
+    let chatCallIdx = 0;
+    const seenAuthHeaders = [];
+    const seenWireBodies = [];
+
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      if (String(url).endsWith('/models')) {
+        return new Response(JSON.stringify({ data: [{ id: 'claude-sonnet-5-5' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      seenAuthHeaders.push(init.headers.Authorization);
+      seenWireBodies.push(JSON.parse(init.body));
+      chatCallIdx += 1;
+
+      if (chatCallIdx === 1) {
+        // Step 1: Agent writes part1.js
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: '',
+                  tool_calls: [
+                    {
+                      id: 'tc_part1',
+                      type: 'function',
+                      function: {
+                        name: 'write_file',
+                        arguments: JSON.stringify({ path: 'part1.js', content: 'export const part1 = "ready";\n' })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (chatCallIdx === 2) {
+        // Step 2: Agent streams partial text/code AND mid-stream hits quota exhaustion!
+        const midDropSse = [
+          'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"بخش اول ساخته شد؛ شروع بخش دوم: const magic = "}}]}',
+          'data: {"error":{"message":"Insufficient quota: token balance exhausted","code":"insufficient_quota"}}'
+        ].join('\n\n');
+        return new Response(midDropSse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+
+      if (chatCallIdx === 3) {
+        // Resumed Turn Step 1 (with NEW API token!): Agent writes part2.js without redoing part1.js
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: '',
+                  tool_calls: [
+                    {
+                      id: 'tc_part2',
+                      type: 'function',
+                      function: {
+                        name: 'write_file',
+                        arguments: JSON.stringify({ path: 'part2.js', content: 'export const magic = 777;\n' })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'هر دو بخش از نقطه قطع‌شدن کامل شدند.' } }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
+
+    // Turn 1: Interrupted mid-flight when quota runs out
+    const turn1Res = await chat.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: resumeConv.id, message: 'یک ماژول دوقسمتی کامل بساز' }
+        }),
+        env
+      )
+    );
+    const turn1Events = await parseSse(turn1Res);
+    assert.ok(
+      turn1Events.some((e) => e.name === 'live_file' && e.data?.path === 'part1.js'),
+      'emits live_file SSE immediately when part1.js is written'
+    );
+    const errEvt = turn1Events.find((e) => e.name === 'error');
+    assert.ok(errEvt, 'emits resumable error event on mid-stream quota exhaustion');
+    assert.equal(errEvt.data.resumable, true);
+    assert.equal(errEvt.data.reason, 'quota_exhausted');
+    assert.match(errEvt.data.partialContent, /const magic =/);
+    assert.deepEqual(errEvt.data.savedFiles, ['part1.js']);
+
+    // Verify D1 conversation snapshot has BOTH part1.js AND the active checkpoint AND partial text!
+    const snapMid = await (
+      await oneConv.onRequestGet({
+        ...ctx(req(`/api/state/conversations/${resumeConv.id}`, { headers: { Cookie: cookie } }), env),
+        params: { id: resumeConv.id }
+      })
+    ).json();
+    assert.equal(snapMid.workspace.files['part1.js'], 'export const part1 = "ready";\n');
+    assert.ok(snapMid.checkpoint?.active, 'checkpoint is persisted in D1');
+    assert.equal(snapMid.checkpoint.originalGoal, 'یک ماژول دوقسمتی کامل بساز');
+    assert.match(snapMid.checkpoint.partialTextTail, /const magic =/);
+    assert.ok(snapMid.messages.some((m) => m.role === 'assistant' && m.content.includes('const magic =')));
+
+    // User replaces exhausted API token with a brand-new token via /api/config
+    const newToken = 'sk-fresh-replacement-token-9999';
+    const swapRes = await (
+      await configApi.onRequestPost(
+        ctx(
+          req('/api/config', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: { apiKey: newToken }
+          }),
+          env
+        )
+      )
+    ).json();
+    assert.equal(swapRes.ok, true);
+
+    // User simply writes «ادامه»!
+    const turn2Res = await chat.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: resumeConv.id, message: 'ادامه' }
+        }),
+        env
+      )
+    );
+    const turn2Events = await parseSse(turn2Res);
+    const done2 = turn2Events.find((e) => e.name === 'done');
+    assert.ok(done2, 'resumed turn finishes cleanly with done');
+    assert.equal(done2.data.resumedFromCheckpoint, true);
+    assert.equal(done2.data.workspace.files['part1.js'], 'export const part1 = "ready";\n', 'part1.js preserved without restart');
+    assert.equal(done2.data.workspace.files['part2.js'], 'export const magic = 777;\n', 'part2.js completed on resume');
+
+    // Verify new API token was used AND exact cutoff checkpoint was injected on the wire!
+    assert.equal(seenAuthHeaders[2], `Bearer ${newToken}`, 'resumed turn uses the newly swapped API token');
+    const resumeWireUserMsg = seenWireBodies[2].messages.at(-1).content;
+    assert.match(resumeWireUserMsg, /EXACT CHECKPOINT RESUME/);
+    assert.match(resumeWireUserMsg, /یک ماژول دوقسمتی کامل بساز/);
+    assert.match(resumeWireUserMsg, /part1\.js/);
+    assert.match(resumeWireUserMsg, /const magic =/);
+
+    // Verify checkpoint is cleared after clean completion!
+    const snapAfter = await (
+      await oneConv.onRequestGet({
+        ...ctx(req(`/api/state/conversations/${resumeConv.id}`, { headers: { Cookie: cookie } }), env),
+        params: { id: resumeConv.id }
+      })
+    ).json();
+    assert.equal(snapAfter.checkpoint, null, 'checkpoint cleared once resumed turn completes');
+  } finally {
+    // Reset custom provider so subsequent state stays clean
+    await configApi.onRequestPost(
+      ctx(req('/api/config', { method: 'POST', headers: { Cookie: cookie }, body: { reset: true } }), env)
+    );
+    globalThis.fetch = original;
+  }
+});
+
+
 

@@ -515,6 +515,24 @@ assert.equal($('thinkBtn').textContent, effortLabelBefore, 'main Effort button (
 await window.executeSlashCommand('/power medium');
 assert.equal($('powerBoostBtn').dataset.tier, 'medium', '/power medium resets power engine cleanly');
 
+// --- Live Checkpoint & Exact-Point Resume Banner + Inline Quick Token Swap
+window.eval(`state.activeCheckpoint = {
+  active: true,
+  reason: 'quota_exhausted',
+  errorMessage: 'اعتبار توکن تمام شد',
+  completedSteps: 3,
+  touchedFiles: ['index.html', 'app.js'],
+  partialTextChars: 840
+}`);
+window.renderActiveCheckpointBanner();
+const resumeCard = window.document.querySelector('.resume-checkpoint-card');
+assert.ok(resumeCard, 'renders .resume-checkpoint-card when checkpoint is active');
+assert.ok(resumeCard.textContent.includes('ادامه دقیق از همین نقطه'), 'shows exact-point resume button');
+assert.ok(resumeCard.querySelector('.inline-token-swap.open'), 'auto-opens inline token swap when quota exhausted');
+window.eval('state.activeCheckpoint = null');
+window.renderActiveCheckpointBanner();
+assert.equal(window.document.querySelector('.resume-checkpoint-card'), null, 'clears resume card when checkpoint cleared');
+
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));
 window.restoreGitHub();
