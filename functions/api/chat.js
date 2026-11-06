@@ -15,6 +15,7 @@
 //   5. Persist the whole assistant/tool group before streaming `done`.
 
 import { route } from '../_lib/api.js';
+import { resolveEffectiveEnv } from '../_lib/provider.js';
 import { resolveUploadRefs, hydrateUploadParts } from '../_lib/uploads.js';
 import {
   callModel,
@@ -624,10 +625,16 @@ export async function onRequestPost({ request, env }) {
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
-      const selectedModel = data?.model ? sanitizeModelId(data.model, env) : undefined;
-      const effectiveModelId = selectedModel || String(env.MODEL_NAME || 'claude-sonnet-5-5');
-      const reasoningSpec = getModelReasoningSpec(effectiveModelId);
-      const reasoningEffort = normalizeReasoningEffort(data?.reasoningEffort, effectiveModelId, data?.thinking);
+      const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
+      const selectedModel = data?.model ? sanitizeModelId(data.model, effectiveEnv) : undefined;
+      const effectiveModelId = selectedModel || String(effectiveEnv.MODEL_NAME || 'claude-sonnet-5-5');
+      const reasoningSpec = getModelReasoningSpec(effectiveModelId, effectiveEnv);
+      const reasoningEffort = normalizeReasoningEffort(
+        data?.reasoningEffort,
+        effectiveModelId,
+        data?.thinking,
+        effectiveEnv
+      );
       const thinking = Boolean(reasoningEffort && reasoningEffort !== 'none');
       const maxSteps =
         reasoningEffort === 'max' || reasoningEffort === 'xhigh'
@@ -649,7 +656,7 @@ export async function onRequestPost({ request, env }) {
 
       // 1. Persist the user turn first (durability over speed).
       await appendMessages(env, conversation, [
-        { role: 'user', content: redactSecrets(userText, envSecrets(env)), attachments, created_at: Date.now() }
+        { role: 'user', content: redactSecrets(userText, envSecrets(effectiveEnv)), attachments, created_at: Date.now() }
       ]);
 
       let workspace;
@@ -700,11 +707,12 @@ export async function onRequestPost({ request, env }) {
           const history = await listMessages(env, conversation.id);
           const memories = await listMemories(env, identity.owner).catch(() => []);
           const working = await buildWorkingContext({
-            env,
+            env: effectiveEnv,
             conversation: { ...conversation, owner: identity.owner },
             messages: history,
             memories,
-            callModel: (payload) => callModel(env, { ...payload, ...(selectedModel ? { model: selectedModel } : {}) }),
+            callModel: (payload) =>
+              callModel(effectiveEnv, { ...payload, ...(selectedModel ? { model: selectedModel } : {}) }),
             saveMemories: (memo) =>
               env.DB.prepare(
                 `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
@@ -750,7 +758,7 @@ export async function onRequestPost({ request, env }) {
               break;
             }
 
-            const result = await callModel(env, {
+            const result = await callModel(effectiveEnv, {
               ...(selectedModel ? { model: selectedModel } : {}),
               ...(reasoningEffort !== null ? { reasoningEffort } : {}),
               temperature: 0.25,
@@ -888,6 +896,7 @@ export async function onRequestPost({ request, env }) {
             model: usedModel,
             reasoningEffort: appliedEffort,
             reasoningTokens: totalReasoningTokens,
+            modelReasoning: getModelReasoningSpec(effectiveModelId, effectiveEnv),
             conversation: conversationView(latest),
             touchedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
             deletedFiles: [...turn.deleted],

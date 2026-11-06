@@ -199,7 +199,11 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .sheet-head h2{margin:0;text-align:center;font-size:16px;font-weight:600;color:#f5f5f7;letter-spacing:-.01em}
 .sheet-icon-btn{width:36px;height:36px;min-height:36px!important;padding:0;border:0;background:transparent;color:#c8c9d0;font-size:18px;border-radius:999px!important;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .sheet-icon-btn:hover{background:#25262b;color:#fff}
+.sheet-search{display:flex;gap:6px;margin-bottom:10px;direction:ltr}
+.sheet-search input{flex:1;min-width:0;height:38px;min-height:38px;padding:0 12px;border-radius:12px;border:1px solid #2e2f36;background:#1f1f24;color:#f3f3f7;font-size:13px;outline:none}
+.sheet-search input:focus{border-color:#6ca0f6}
 .sheet-group{background:#1f1f23;border:1px solid #2c2c32;border-radius:16px;overflow:hidden;direction:ltr}
+#featuredModelList{max-height:44vh;overflow-y:auto}
 .sheet-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:13px 16px;background:transparent;border:0;border-bottom:1px solid #2b2b31;border-radius:0!important;color:#f3f3f6;cursor:pointer;text-align:right;transition:background .12s ease}
 .sheet-item:last-child{border-bottom:0}
 .sheet-item:hover{background:#27272d}
@@ -432,9 +436,20 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
 
     <div class="kv" id="accountInfo"></div>
     <section aria-label="اتصال API" style="margin-top:16px">
-      <strong>اتصال API و مدل</strong>
-      <p id="apiConnectionStatus">اتصال مدل از تنظیمات امن سرور مدیریت می‌شود؛ کلیدها را در گفتگو وارد نکنید.</p>
-      <div class="modal-actions"><button onclick="runDiagnostics('settingsDiagBox')">بررسی اتصال</button><button onclick="probeModel('settingsProbeBox')">تست مدل</button></div>
+      <strong>اتصال API و سرویس مدل (OpenAI-Compatible)</strong>
+      <p id="apiConnectionStatus" class="tiny" style="margin:6px 0 10px">می‌توانید از پیش‌فرض سرور استفاده کنید یا هر آدرس و کلید API سازگار با OpenAI را وارد کنید؛ مدل‌ها و سطوح استدلال هر مدل به‌صورت خودکار شناسایی می‌شوند.</p>
+      <label class="field-label" for="providerBaseUrlInput">آدرس سرویس (Base URL)</label>
+      <input class="field" id="providerBaseUrlInput" style="direction:ltr;text-align:left" placeholder="https://tooken.club/v1 یا https://openrouter.ai/api/v1">
+      <label class="field-label" for="providerApiKeyInput">کلید API اختصاصی (رمزنگاری AES-GCM در D1 — اختیاری اگر روی سرور تنظیم شده)</label>
+      <input class="field" id="providerApiKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="sk-... / tc_live_...">
+      <label class="field-label" for="providerDefaultModelInput">مدل پیش‌فرض (اختیاری — در صورت خالی بودن خودکار از لیست مدل‌ها انتخاب می‌شود)</label>
+      <input class="field" id="providerDefaultModelInput" style="direction:ltr;text-align:left" placeholder="claude-sonnet-5-5">
+      <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px;margin-top:8px">
+        <button class="primary" onclick="saveProviderConfig()" id="saveProviderBtn">ذخیره و شناسایی خودکار مدل‌ها</button>
+        <button onclick="resetProviderConfig()">بازگشت به API پیش‌فرض سرور</button>
+        <button onclick="runDiagnostics('settingsDiagBox')">بررسی اتصال</button>
+        <button onclick="probeModel('settingsProbeBox')">تست مدل</button>
+      </div>
       <div id="settingsDiagBox"></div><div id="settingsProbeBox"></div>
     </section>
 
@@ -492,15 +507,18 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
   </div>
 </div>
 
-<!-- Model & Effort selector sheet (Claude + tooken.club native specs) -->
+<!-- Model & Effort selector sheet (Universal live /v1/models + Auto-Discovery) -->
 <div class="modal" id="modelModal">
   <div class="modal-card sheet-card">
     <!-- View 1: Select model -->
     <div class="sheet-view active" id="sheetViewMain">
       <div class="sheet-head">
         <button class="sheet-icon-btn" onclick="closeModal('modelModal')" aria-label="بستن">✕</button>
-        <h2>Select model</h2>
-        <button class="sheet-icon-btn" onclick="refreshLiveModels()" id="refreshModelsBtn" title="همگام‌سازی زنده با tooken.club/v1/models">↻</button>
+        <h2 id="selectModelHeading">Select model</h2>
+        <button class="sheet-icon-btn" onclick="refreshLiveModels()" id="refreshModelsBtn" title="بروزرسانی زنده لیست مدل‌ها از /v1/models">↻</button>
+      </div>
+      <div class="sheet-search">
+        <input id="modelSearchInput" placeholder="Search models or type new model ID…" oninput="onModelSearchInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applySearchedOrCustomModel()}">
       </div>
       <div class="sheet-group" id="featuredModelList"></div>
       <button type="button" class="sheet-nav-row" id="effortRowBtn" onclick="openModelSheetView('effort')">
@@ -508,8 +526,8 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
         <span>Effort</span>
       </button>
       <button type="button" class="sheet-nav-row" id="moreModelsRowBtn" onclick="openModelSheetView('more')">
-        <span class="val">&lt;</span>
-        <span>More models</span>
+        <span class="val" id="moreModelsCountVal">&lt;</span>
+        <span>More models &amp; Custom ID</span>
       </button>
       <div id="modelModalNote" class="sheet-caption"></div>
     </div>
@@ -517,7 +535,7 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
     <!-- View 2: Effort -->
     <div class="sheet-view" id="sheetViewEffort">
       <div class="sheet-head">
-        <span></span>
+        <button class="sheet-icon-btn" onclick="discoverModelReasoning(activeModelId(), true)" id="rediscoverEffortBtn" title="تشخیص مجدد خودکار سطوح استدلال این مدل از سرویس">↻</button>
         <h2>Effort</h2>
         <button class="sheet-icon-btn" onclick="openModelSheetView('main')" aria-label="بازگشت">→</button>
       </div>
@@ -525,26 +543,27 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
       <div class="sheet-caption" id="effortSheetCaption">Higher effort means more thorough responses, but takes longer and uses your limits faster.</div>
     </div>
 
-    <!-- View 3: More models (full tooken.club catalog + live /v1/models) -->
+    <!-- View 3: More models / Grid + manual model ID + quick API link -->
     <div class="sheet-view" id="sheetViewMore">
       <div class="sheet-head">
-        <button class="sheet-icon-btn" onclick="refreshLiveModels()" title="دریافت لیست زنده از tooken.club">↻</button>
-        <h2>More models</h2>
+        <button class="sheet-icon-btn" onclick="refreshLiveModels()" title="دریافت لیست زنده از /v1/models">↻</button>
+        <h2>All models</h2>
         <button class="sheet-icon-btn" onclick="openModelSheetView('main')" aria-label="بازگشت">→</button>
       </div>
-      <div id="modelGrid" class="model-grid" style="max-height:48vh"></div>
-      <label class="field-label" for="customModelInput" style="margin-top:10px">شناسه‌ی دقیق مدل از tooken.club:</label>
+      <div id="modelGrid" class="model-grid" style="max-height:44vh"></div>
+      <label class="field-label" for="customModelInput" style="margin-top:10px">افزودن مستقیم هر شناسه‌ی مدل جدید (تشخیص خودکار سطوح استدلال):</label>
       <div style="display:flex;gap:8px;align-items:center">
-        <input class="field" id="customModelInput" style="direction:ltr;text-align:left;margin:0" placeholder="claude-opus-5-5" onkeydown="if(event.key==='Enter'){event.preventDefault();applyCustomModel()}">
+        <input class="field" id="customModelInput" style="direction:ltr;text-align:left;margin:0" placeholder="مثلاً claude-opus-5-5 یا o3-mini یا مدل جدید" onkeydown="if(event.key==='Enter'){event.preventDefault();applyCustomModel()}">
         <button onclick="applyCustomModel()" style="white-space:nowrap">انتخاب</button>
       </div>
-      <div class="modal-actions" style="margin-top:12px">
+      <div class="modal-actions" style="margin-top:12px;flex-wrap:wrap">
+        <button onclick="closeModal('modelModal');openApiConnection()">⌁ تغییر آدرس/کلید API</button>
         <button onclick="resetDefaultModel()">پیش‌فرض سرور</button>
         <button class="primary" onclick="openModelSheetView('main')">تأیید</button>
       </div>
     </div>
 
-    <!-- View 4: Model capability card (tooken.club inspector) -->
+    <!-- View 4: Model capability card + live Auto-Discovery -->
     <div class="sheet-view" id="sheetViewSpec">
       <div class="sheet-head">
         <button class="sheet-icon-btn" onclick="openModelSheetView(state.prevSheetView || 'main')" aria-label="بازگشت">←</button>
@@ -822,14 +841,27 @@ const BUILTIN_MODEL_META = {
   }
 };
 
+const discoveringModels = new Set();
+
+function isCurrentProviderTooken() {
+  const u = state.provider?.effectiveBaseUrl || 'https://tooken.club/v1';
+  return /tooken\.club/i.test(u);
+}
+
 function getModelMeta(modelId) {
   const raw = String(modelId || '').trim();
   const found = state.availableModels.find((m) => m.id === raw);
   if (found) return found;
-  if (BUILTIN_MODEL_META[raw]) return { id: raw, ...BUILTIN_MODEL_META[raw] };
+  if (isCurrentProviderTooken() && BUILTIN_MODEL_META[raw]) {
+    return { id: raw, ...BUILTIN_MODEL_META[raw] };
+  }
   const isGemini = raw.toLowerCase().startsWith('gemini-');
   const isLegacyNoReasoning = /^(gpt-3\.5|gpt-4o|claude-2|claude-3-(?:haiku|sonnet|opus))/i.test(raw);
-  const levels = isLegacyNoReasoning ? [] : isGemini ? ['low', 'medium', 'high'] : [...EFFORT_ORDER];
+  const levels = isLegacyNoReasoning
+    ? []
+    : isGemini || !isCurrentProviderTooken()
+      ? ['low', 'medium', 'high']
+      : [...EFFORT_ORDER];
   return {
     id: raw || 'claude-sonnet-5-5',
     title: raw || 'Sonnet 5.5',
@@ -842,9 +874,72 @@ function getModelMeta(modelId) {
       supported: levels.length > 0,
       levels,
       defaultEffort: levels.includes('medium') ? 'medium' : levels[0] || null,
-      unconfirmed: isGemini
+      unconfirmed: isGemini,
+      source: 'provisional',
+      needsDiscovery: true
     }
   };
+}
+
+function applyDiscoveredReasoningToState(modelId, reasoningObj) {
+  if (!modelId || !reasoningObj || !Array.isArray(reasoningObj.levels)) return;
+  const spec = {
+    supported: Boolean(reasoningObj.supported && reasoningObj.levels.length),
+    levels: reasoningObj.levels,
+    defaultEffort: reasoningObj.defaultEffort || (reasoningObj.levels.includes('medium') ? 'medium' : reasoningObj.levels[0] || null),
+    unconfirmed: Boolean(reasoningObj.unconfirmed),
+    source: reasoningObj.source || 'discovered',
+    via: reasoningObj.via || 'probed',
+    needsDiscovery: false
+  };
+  const existing = state.availableModels.find((m) => m.id === modelId);
+  if (existing) {
+    existing.reasoning = spec;
+  } else {
+    state.availableModels.unshift({ ...getModelMeta(modelId), reasoning: spec });
+  }
+  syncModelState();
+  renderModelList();
+  if ($('sheetViewSpec')?.classList.contains('active') && $('specModelTitle')?.dataset?.modelId === modelId) {
+    inspectModelSpec(modelId);
+  }
+}
+
+async function discoverModelReasoning(modelId, force = false) {
+  const clean = String(modelId || '').trim();
+  if (!clean || !state.ready) return null;
+  if (discoveringModels.has(clean)) return null;
+
+  const currentSpec = inferClientReasoningSpec(clean);
+  if (!force && !currentSpec.needsDiscovery) return currentSpec;
+
+  discoveringModels.add(clean);
+  renderFeaturedSheet();
+  renderEffortSheet();
+  const reBtn = $('rediscoverEffortBtn');
+  if (reBtn) reBtn.textContent = '…';
+  try {
+    const res = await api(API.models, {
+      method: 'POST',
+      body: JSON.stringify({ model: clean, force: Boolean(force) })
+    });
+    if (res?.reasoning) {
+      applyDiscoveredReasoningToState(clean, res.reasoning);
+      if (force) {
+        const lvls = res.reasoning.levels || [];
+        toast(lvls.length ? `سطوح واقعی ${clean}: ${lvls.join(' · ')}` : `مدل ${clean} فاقد پارامتر Effort است`);
+      }
+      return res.reasoning;
+    }
+  } catch (err) {
+    if (force) toast('خطا در تشخیص خودکار سطوح مدل: ' + err.message);
+  } finally {
+    discoveringModels.delete(clean);
+    if (reBtn) reBtn.textContent = '↻';
+    renderFeaturedSheet();
+    renderEffortSheet();
+  }
+  return null;
 }
 
 function inferClientReasoningSpec(modelId) {
@@ -894,10 +989,17 @@ function openModelSheetView(view) {
     spec: 'sheetViewSpec'
   };
   if (view === 'effort') {
-    const spec = inferClientReasoningSpec(activeModelId());
+    const mid = activeModelId();
+    const spec = inferClientReasoningSpec(mid);
     if (!spec.supported || !spec.levels.length) {
-      toast('این مدل در tooken.club دارای پارامتر Effort نیست');
-      return;
+      if (spec.needsDiscovery) {
+        discoverModelReasoning(mid, true);
+      } else {
+        toast('این مدل دارای پارامتر Effort نیست (برای بررسی مجدد روی ⓘ مدل بزنید)');
+        return;
+      }
+    } else if (spec.needsDiscovery) {
+      discoverModelReasoning(mid, false);
     }
     renderEffortSheet();
   }
@@ -913,10 +1015,23 @@ function inspectModelSpec(modelId, event) {
   const m = getModelMeta(modelId);
   const spec = m.reasoning || inferClientReasoningSpec(m.id);
   const titleEl = $('specModelTitle');
-  if (titleEl) titleEl.textContent = m.title || m.id;
+  if (titleEl) {
+    titleEl.textContent = m.title || m.id;
+    titleEl.dataset.modelId = m.id;
+  }
   const body = $('specModelBody');
   if (body) {
-    const reasoningStr = spec.supported && spec.levels.length ? spec.levels.join(' · ') : 'No';
+    const isProbing = discoveringModels.has(m.id);
+    const baseStr = spec.supported && spec.levels.length ? spec.levels.join(' · ') : 'No';
+    const reasoningStr = isProbing ? `${baseStr} (detecting…)` : baseStr;
+    const sourceHint =
+      spec.source === 'provider'
+        ? 'Reported by /v1/models'
+        : spec.source === 'discovered'
+          ? 'Auto-discovered from live API'
+          : spec.needsDiscovery
+            ? 'Pending auto-discovery'
+            : '';
     body.innerHTML = `
       <div class="spec-id-row">
         <span>${esc(m.id)}</span>
@@ -933,54 +1048,130 @@ function inspectModelSpec(modelId, event) {
           <div style="text-align:right">
             <div class="v">${esc(reasoningStr)}</div>
             ${spec.unconfirmed ? '<div class="spec-unconf">Unconfirmed on provider</div>' : ''}
+            ${sourceHint ? `<div class="spec-unconf">${esc(sourceHint)}</div>` : ''}
           </div>
         </div>
         <div class="spec-row"><span class="k">Tools</span><span class="v">${m.tools === false ? 'No' : 'Yes'}</span></div>
       </div>
-      <div class="modal-actions" style="margin-top:14px">
-        <button class="primary" style="width:100%" onclick="selectModel('${esc(m.id)}', false);openModelSheetView('main')">Select ${esc(m.title || m.id)}</button>
+      <div class="modal-actions" style="margin-top:14px;gap:8px">
+        <button type="button" onclick="discoverModelReasoning('${esc(m.id)}', true)">🔍 Auto-Detect Effort</button>
+        <button class="primary" style="flex:1" onclick="selectModel('${esc(m.id)}', false);openModelSheetView('main')">Select ${esc(m.title || m.id)}</button>
       </div>`;
   }
   openModelSheetView('spec');
+  if (spec.needsDiscovery) discoverModelReasoning(m.id, false);
+}
+
+function onModelSearchInput(val) {
+  state.modelFilter = String(val || '').trim();
+  renderFeaturedSheet();
+}
+
+function applySearchedOrCustomModel() {
+  const q = String(state.modelFilter || '').trim();
+  if (!q) return;
+  const exact = state.availableModels.find((m) => m.id.toLowerCase() === q.toLowerCase());
+  if (exact) {
+    selectModel(exact.id, false);
+    return;
+  }
+  if (/^[a-zA-Z0-9._:/-]{2,120}$/.test(q)) {
+    if (!state.availableModels.some((m) => m.id === q)) {
+      state.availableModels.unshift(getModelMeta(q));
+    }
+    state.modelFilter = '';
+    if ($('modelSearchInput')) $('modelSearchInput').value = '';
+    selectModel(q, false);
+  }
 }
 
 function renderFeaturedSheet() {
   const box = $('featuredModelList');
   if (!box) return;
   const activeId = activeModelId();
-  const list = state.availableModels.length ? state.availableModels : [getModelMeta(activeId)];
-  const featuredIds = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
-  const featured = [];
-  for (const id of featuredIds) {
-    const found = list.find((m) => m.id === id) || getModelMeta(id);
-    if (found) featured.push(found);
+
+  // Build the complete model list for the active API (never hiding models!)
+  const fullList = [];
+  const seen = new Set();
+  const pushUnique = (m) => {
+    if (m && m.id && !seen.has(m.id)) {
+      seen.add(m.id);
+      fullList.push(m);
+    }
+  };
+
+  if (state.availableModels.length) {
+    for (const m of state.availableModels) pushUnique(m);
+  } else if (isCurrentProviderTooken()) {
+    for (const id of ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']) {
+      pushUnique(getModelMeta(id));
+    }
   }
-  if (!featured.some((m) => m.id === activeId)) {
-    featured.unshift(getModelMeta(activeId));
+  if (!seen.has(activeId)) {
+    fullList.unshift(getModelMeta(activeId));
+    seen.add(activeId);
   }
 
-  box.innerHTML = featured
+  const q = String(state.modelFilter || '').trim().toLowerCase();
+  const filtered = q
+    ? fullList.filter(
+        (m) =>
+          m.id.toLowerCase().includes(q) ||
+          String(m.title || '').toLowerCase().includes(q) ||
+          String(m.subtitle || '').toLowerCase().includes(q)
+      )
+    : fullList;
+
+  const heading = $('selectModelHeading');
+  if (heading) heading.textContent = fullList.length > 1 ? `Select model (${fullList.length})` : 'Select model';
+  const moreCount = $('moreModelsCountVal');
+  if (moreCount) moreCount.innerHTML = `&lt; ${fullList.length}`;
+
+  let rowsHtml = filtered
     .map((m) => {
       const isAct = m.id === activeId;
       const title = m.title || m.id;
       const sub = m.subtitle || m.desc || (m.label && m.label !== m.id ? m.label : m.id);
-      const badge = m.badge ? `<span class="sheet-pill-pro">${esc(m.badge)}</span>` : '';
+      const spec = m.reasoning || inferClientReasoningSpec(m.id);
+      const isProbing = discoveringModels.has(m.id);
+      const effortTag = isProbing
+        ? `<span class="sheet-pill-rec">Detecting…</span>`
+        : !spec.supported || !spec.levels.length
+          ? `<span class="sheet-pill-rec" style="opacity:.6">No effort</span>`
+          : `<span class="sheet-pill-rec">${spec.levels.length === 7 ? 'none–max' : spec.levels.join('·')}</span>`;
+      const badge = m.badge ? `<span class="sheet-pill-pro">${esc(m.badge)}</span>` : effortTag;
       return `<div class="sheet-item" role="button" tabindex="0" data-model-id="${esc(m.id)}" onclick="selectModel('${esc(m.id)}', false)">
         <span class="sheet-check">${isAct ? '✓' : ''}</span>
         <div class="sheet-main">
           <div class="sheet-title-row">${badge}<span class="sheet-name">${esc(title)}</span></div>
-          <div class="sheet-sub">${esc(sub)}</div>
+          <div class="sheet-sub">${esc(sub !== m.id && title !== m.id ? `${m.id} · ${sub}` : sub)}</div>
         </div>
-        <button type="button" class="sheet-info-btn" title="مشاهده مشخصات واقعی در tooken.club" onclick="inspectModelSpec('${esc(m.id)}', event)">ⓘ</button>
+        <button type="button" class="sheet-info-btn" title="مشاهده مشخصات و تشخیص خودکار سطوح" onclick="inspectModelSpec('${esc(m.id)}', event)">ⓘ</button>
       </div>`;
     })
     .join('');
+
+  if (q && /^[a-zA-Z0-9._:/-]{2,120}$/.test(state.modelFilter) && !fullList.some((m) => m.id.toLowerCase() === q)) {
+    const rawNew = state.modelFilter.trim();
+    rowsHtml += `<div class="sheet-item" role="button" tabindex="0" onclick="applySearchedOrCustomModel()">
+      <span class="sheet-check">+</span>
+      <div class="sheet-main">
+        <div class="sheet-title-row"><span class="sheet-pill-pro">Auto-Detect</span><span class="sheet-name">Use "${esc(rawNew)}"</span></div>
+        <div class="sheet-sub">افزودن مدل جدید و تشخیص خودکار سطوح استدلال از API</div>
+      </div>
+    </div>`;
+  }
+
+  box.innerHTML = rowsHtml || `<div style="padding:16px;text-align:center;color:#9a9ba3;font-size:13px">مدلی پیدا نشد</div>`;
 
   const effortRow = $('effortRowBtn');
   const effortVal = $('effortRowValue');
   const spec = inferClientReasoningSpec(activeId);
   if (effortRow && effortVal) {
-    if (!spec.supported || !spec.levels.length) {
+    if (discoveringModels.has(activeId)) {
+      effortRow.style.opacity = '1';
+      effortVal.innerHTML = `&lt; Detecting…`;
+    } else if (!spec.supported || !spec.levels.length) {
       effortRow.style.opacity = '0.5';
       effortVal.textContent = 'Not supported';
     } else {
@@ -1014,9 +1205,15 @@ function renderEffortSheet() {
 
   const cap = $('effortSheetCaption');
   if (cap) {
-    cap.textContent = spec.unconfirmed
-      ? 'Higher effort means more thorough responses, but takes longer and uses your limits faster. (Unconfirmed on provider for this model)'
-      : 'Higher effort means more thorough responses, but takes longer and uses your limits faster.';
+    if (discoveringModels.has(modelId)) {
+      cap.textContent = `Auto-discovering genuine effort levels for ${modelId} from provider…`;
+    } else if (spec.source === 'discovered') {
+      cap.textContent = `Auto-discovered for ${modelId}: ${levels.join(' · ')}. Higher effort means more thorough responses.`;
+    } else if (spec.unconfirmed) {
+      cap.textContent = 'Higher effort means more thorough responses, but takes longer and uses your limits faster. (Tap ↻ to live-verify on provider)';
+    } else {
+      cap.textContent = 'Higher effort means more thorough responses, but takes longer and uses your limits faster.';
+    }
   }
 }
 
@@ -1194,7 +1391,13 @@ function selectModel(id, closeAfter = false) {
   if (input) input.value = state.selectedModel;
   const note = $('modelModalNote');
   if (note) {
-    note.textContent = `Active: ${activeModelId()} · Effort: ${(EFFORT_META[state.reasoningEffort] || { label: 'None' }).label}`;
+    const base = state.provider?.effectiveBaseUrl || 'https://tooken.club/v1';
+    note.textContent = `Active: ${activeModelId()} · Effort: ${(EFFORT_META[state.reasoningEffort] || { label: 'None' }).label} · API: ${base}`;
+  }
+  // Automatically discover exact reasoning levels if this model is new / provisional!
+  const spec = inferClientReasoningSpec(clean);
+  if (spec.needsDiscovery) {
+    discoverModelReasoning(clean, false).catch(() => {});
   }
   toast('مدل فعال شد: ' + state.modelLabel);
   if (closeAfter) closeModal('modelModal');
@@ -1233,9 +1436,14 @@ async function refreshLiveModels(silent = false) {
     }
     const note = $('modelModalNote');
     if (note && !silent) {
+      const apiHost = data.baseUrl || state.provider?.effectiveBaseUrl || 'API';
       note.textContent = data.source === 'remote'
-        ? `Synced ${data.models.length} live models from tooken.club/v1`
+        ? `✔ ${data.models.length} live models loaded from ${apiHost}`
         : `Loaded ${data.models.length} models`;
+    }
+    const curSpec = inferClientReasoningSpec(activeModelId());
+    if (curSpec.needsDiscovery) {
+      discoverModelReasoning(activeModelId(), false).catch(() => {});
     }
   } catch (error) {
     if (!silent) toast('خطا در دریافت لیست مدل‌ها: ' + error.message);
@@ -1283,6 +1491,7 @@ async function boot() {
     const config = await api(API.config).catch(() => null);
     if (config) {
       state.config = config;
+      state.provider = config.provider || null;
       state.defaultModel = config.model || '—';
       if (Array.isArray(config.models)) state.availableModels = config.models;
       state.contextBudget = config.contextBudgetTokens || 24000;
@@ -2376,6 +2585,9 @@ async function consumeStream(response, bubble) {
       }
       if (data.sandbox !== undefined) state.sandbox = Boolean(data.sandbox);
       if (data.linuxRunner !== undefined) state.linuxRunner = Boolean(data.linuxRunner);
+      if (data.modelReasoning && Array.isArray(data.modelReasoning.levels)) {
+        applyDiscoveredReasoningToState(activeModelId(), data.modelReasoning);
+      }
       syncShellBadge();
       if (data.context && Number.isFinite(data.context.estimatedTokens)) {
         state.contextTokens = data.context.estimatedTokens;
@@ -2707,6 +2919,81 @@ async function removeMemory(key, scope) {
 
 /* -------------------------------- settings ------------------------------- */
 
+function syncProviderSettingsForm() {
+  const p = state.provider || {};
+  const statusEl = $('apiConnectionStatus');
+  if (statusEl) {
+    statusEl.textContent = p.customActive
+      ? `✔ سرویس اختصاصی فعال: ${p.effectiveBaseUrl}${p.hasCustomKey ? ` (کلید ذخیره شده: ${p.keyHint})` : ' (با کلید سرور)'}`
+      : `در حال استفاده از API پیش‌فرض سرور: ${p.effectiveBaseUrl || 'https://tooken.club/v1'}`;
+  }
+  const baseInput = $('providerBaseUrlInput');
+  if (baseInput) baseInput.value = p.baseUrl || '';
+  const keyInput = $('providerApiKeyInput');
+  if (keyInput) {
+    keyInput.value = '';
+    keyInput.placeholder = p.hasCustomKey
+      ? `کلید ذخیره شده (${p.keyHint}) — برای تغییر، کلید جدید وارد کنید`
+      : 'sk-... / tc_live_...';
+  }
+  const defModelInput = $('providerDefaultModelInput');
+  if (defModelInput) defModelInput.value = p.defaultModel || '';
+}
+
+async function saveProviderConfig() {
+  const btn = $('saveProviderBtn');
+  const baseUrl = ($('providerBaseUrlInput')?.value || '').trim();
+  const apiKey = ($('providerApiKeyInput')?.value || '').trim();
+  const defaultModel = ($('providerDefaultModelInput')?.value || '').trim();
+  if (btn) btn.textContent = 'در حال اتصال و شناسایی مدل‌ها…';
+  try {
+    const res = await api(API.config, {
+      method: 'POST',
+      body: JSON.stringify({ baseUrl, apiKey, defaultModel })
+    });
+    state.provider = res.provider || null;
+    state.defaultModel = res.model || state.defaultModel;
+    if (Array.isArray(res.models)) {
+      state.availableModels = res.models;
+      // If previous selectedModel doesn't exist on the new API, switch cleanly to the new API's defaultModel
+      if (state.selectedModel && res.models.length && !res.models.some((m) => m.id === state.selectedModel)) {
+        state.selectedModel = '';
+        try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
+      }
+    }
+    syncModelState();
+    renderModelList();
+    syncProviderSettingsForm();
+    const activeSpec = inferClientReasoningSpec(activeModelId());
+    if (activeSpec.needsDiscovery) {
+      discoverModelReasoning(activeModelId(), false).catch(() => {});
+    }
+    toast(`✔ سرویس ذخیره شد · ${faNum((res.models || []).length)} مدل بارگذاری شد`);
+  } catch (error) {
+    toast('خطا در ذخیره تنظیمات API: ' + error.message);
+  } finally {
+    if (btn) btn.textContent = 'ذخیره و شناسایی خودکار مدل‌ها';
+  }
+}
+
+async function resetProviderConfig() {
+  try {
+    const res = await api(API.config, {
+      method: 'POST',
+      body: JSON.stringify({ reset: true })
+    });
+    state.provider = res.provider || null;
+    state.defaultModel = res.model || 'claude-sonnet-5-5';
+    if (Array.isArray(res.models)) state.availableModels = res.models;
+    syncModelState();
+    renderModelList();
+    syncProviderSettingsForm();
+    toast('به API پیش‌فرض سرور بازگردانده شد');
+  } catch (error) {
+    toast('خطا: ' + error.message);
+  }
+}
+
 function openSettings() {
   const info = $('accountInfo');
   info.innerHTML = `
@@ -2717,8 +3004,10 @@ function openSettings() {
         ? '⚠ تک‌کاربره (DEV_ACCESS_EMAIL) — بدون ورود واقعی'
         : 'Cloudflare Access (امضای JWT)'
     }</span>
+    <b>سرویس API</b><span style="direction:ltr;text-align:left">${esc(state.provider?.effectiveBaseUrl || 'https://tooken.club/v1')}</span>
     <b>مدل</b><span style="direction:ltr;text-align:left">${esc(state.modelLabel)}</span>
     <b>مخزن</b><span style="direction:ltr;text-align:left">${state.repo ? esc(`${state.repo.owner}/${state.repo.repo}@${state.repo.branch}`) : 'متصل نیست'}</span>`;
+  syncProviderSettingsForm();
   renderMemory();
   $('settingsModal').classList.add('open');
 }

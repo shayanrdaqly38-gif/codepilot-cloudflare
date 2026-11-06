@@ -66,11 +66,51 @@ function mockFetch(url, init = {}) {
       'Set-Cookie': 'cp_session=abc; HttpOnly'
     });
   }
-  if (path === '/api/config') {
+  if (path === '/api/config' && (!init.method || init.method === 'GET')) {
     return jsonResponse({ ok: true, model: 'gpt-4o-mini', contextBudgetTokens: 24000, storage: 'd1', sandbox: false });
   }
-  if (path.startsWith('/api/models')) {
+  if (path === '/api/config' && init.method === 'POST') {
+    const body = JSON.parse(init.body || '{}');
+    return jsonResponse({
+      ok: true,
+      provider: {
+        customActive: !body.reset,
+        baseUrl: body.baseUrl || '',
+        effectiveBaseUrl: body.baseUrl || 'https://tooken.club/v1',
+        hasCustomKey: Boolean(body.apiKey),
+        keyHint: 'sk-t••••1234'
+      },
+      model: 'omega-next-v1',
+      modelsSource: 'remote',
+      models: [
+        {
+          id: 'omega-next-v1',
+          title: 'Omega Next V1',
+          reasoning: { supported: true, levels: ['low', 'medium', 'high'], defaultEffort: 'medium', needsDiscovery: true }
+        }
+      ]
+    });
+  }
+  if (path.startsWith('/api/models') && (!init.method || init.method === 'GET')) {
     return jsonResponse({ ok: true, source: 'catalog', models: [] });
+  }
+  if (path === '/api/models' && init.method === 'POST') {
+    const body = JSON.parse(init.body || '{}');
+    const lvls =
+      body.model === 'gemini-4-argon'
+        ? ['low', 'medium', 'high']
+        : ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    return jsonResponse({
+      ok: true,
+      model: body.model,
+      reasoning: {
+        supported: true,
+        levels: lvls,
+        defaultEffort: 'medium',
+        source: 'discovered',
+        via: 'schema-enum'
+      }
+    });
   }
   if (path === '/api/state' && (!init.method || init.method === 'GET')) {
     return jsonResponse({
@@ -348,6 +388,20 @@ assert.ok($('sheetViewSpec').classList.contains('active'));
 assert.ok($('specModelBody').textContent.includes('32768'));
 assert.ok($('specModelBody').textContent.includes('low · medium · high'));
 window.closeModal('modelModal');
+
+// Switching custom API provider in ⌁ API loads live models and auto-discovers brand-new model's 5 effort levels!
+window.openApiConnection();
+$('providerBaseUrlInput').value = 'https://api.custom-llm.example/v1';
+$('providerApiKeyInput').value = 'sk-test-secret-1234';
+await window.saveProviderConfig();
+await wait(50);
+assert.equal($('modelBadge').textContent, 'omega-next-v1');
+window.openModelModal('effort');
+assert.ok($('effortOptionsList').querySelector('[data-effort="minimal"]'), 'auto-discovered minimal level');
+assert.ok($('effortOptionsList').querySelector('[data-effort="xhigh"]'), 'auto-discovered Extra (xhigh) level');
+assert.equal($('effortOptionsList').querySelector('[data-effort="max"]'), null, 'max excluded per auto-discovered levels');
+window.closeModal('modelModal');
+window.closeModal('settingsModal');
 
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));
