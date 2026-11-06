@@ -1297,22 +1297,49 @@ export function parseErrorReasoningSignal(rawErrorText, sentEffort = '') {
   return { type: 'unrelated' };
 }
 
-function inferProvisionalLevels(modelId, { isTooken = true, booleanHint = null } = {}) {
-  const s = String(modelId || '').toLowerCase();
-  if (booleanHint === false) return [];
-  if (NON_REASONING_LEGACY_RE.test(s) && booleanHint !== true) {
-    return [];
+const EMPTY_OBJ = Object.freeze({});
+const EMPTY_EFFORTS = Object.freeze([]);
+const REASONING_DISABLED_PROVIDER = Object.freeze({
+  supported: false,
+  levels: EMPTY_EFFORTS,
+  defaultEffort: null,
+  unconfirmed: false,
+  source: 'provider',
+  needsDiscovery: false
+});
+const REASONING_STD_PROVISIONAL = Object.freeze({
+  supported: true,
+  levels: STANDARD_EFFORTS,
+  defaultEffort: 'medium',
+  unconfirmed: false,
+  source: 'provisional',
+  needsDiscovery: true
+});
+
+function isNonChatModelId(idLower) {
+  if (
+    idLower.includes('embedding') ||
+    idLower.includes('whisper') ||
+    idLower.includes('dall-e') ||
+    idLower.includes('moderation') ||
+    idLower.includes('rerank') ||
+    idLower.includes('bge-')
+  ) {
+    return true;
+  }
+  return idLower.includes('tts') && /(?:^|[-_/:])tts(?:$|[-_/:])/.test(idLower);
+}
+
+function inferProvisionalLevels(idLower, { isTooken = true, booleanHint = null } = {}) {
+  if (booleanHint === false) return EMPTY_EFFORTS;
+  if (booleanHint !== true && NON_REASONING_LEGACY_RE.test(idLower)) {
+    return EMPTY_EFFORTS;
   }
   if (isTooken) {
-    if (s.startsWith('gemini-')) return [...STANDARD_EFFORTS];
-    return [...FULL_TOOKEN_EFFORTS];
+    if (idLower.startsWith('gemini-')) return STANDARD_EFFORTS;
+    return FULL_TOOKEN_EFFORTS;
   }
-  // On external OpenAI-compatible providers (OpenRouter, OpenAI, DeepSeek, Groq, etc.),
-  // start with standard 3 levels (`low`, `medium`, `high`) until live auto-discovery probes the exact enum.
-  if (booleanHint === true || REASONING_FAMILY_RE.test(s)) {
-    return [...STANDARD_EFFORTS];
-  }
-  return [...STANDARD_EFFORTS];
+  return STANDARD_EFFORTS;
 }
 
 function pickDefaultEffort(modelId, levels, preferred) {
@@ -1323,26 +1350,91 @@ function pickDefaultEffort(modelId, levels, preferred) {
   return levels[0];
 }
 
+function resolveItemEffortSignals(item, caps, arch) {
+  // Fast O(1) skip for standard OpenRouter / OpenAI items that carry no explicit effort fields
+  if (
+    item.reasoning_efforts === undefined &&
+    item.supported_reasoning_efforts === undefined &&
+    item.reasoning_levels === undefined &&
+    item.efforts === undefined &&
+    item.reasoning === undefined &&
+    item.thinking === undefined &&
+    caps === EMPTY_OBJ &&
+    arch.reasoning_efforts === undefined &&
+    item.meta === undefined &&
+    item.info === undefined
+  ) {
+    return null;
+  }
+
+  let exactLevels = null;
+  let explicitDisabled = false;
+  let booleanHint = null;
+  let extractedUnconfirmed = false;
+
+  const cands = [
+    item.reasoning_efforts,
+    item.supported_reasoning_efforts,
+    item.reasoning_levels,
+    item.efforts,
+    item.reasoning,
+    item.thinking,
+    caps.reasoning_efforts,
+    caps.reasoning_levels,
+    caps.reasoning,
+    caps.effort,
+    arch.reasoning_efforts,
+    item.meta?.reasoning,
+    item.info?.reasoning
+  ];
+
+  for (let i = 0; i < cands.length; i += 1) {
+    const cand = cands[i];
+    if (cand === undefined || cand === null) continue;
+    const res = extractEffortLevelsFromValue(cand);
+    if (res.kind === 'exact') {
+      exactLevels = res.levels;
+      extractedUnconfirmed = res.unconfirmed;
+      break;
+    }
+    if (res.kind === 'none') {
+      explicitDisabled = true;
+      break;
+    }
+    if (res.kind === 'boolean_true' && booleanHint === null) {
+      booleanHint = true;
+      extractedUnconfirmed = res.unconfirmed;
+    }
+  }
+
+  return { exactLevels, explicitDisabled, booleanHint, extractedUnconfirmed };
+}
+
 /**
  * Parse a raw model object returned by `GET /v1/models` (on `tooken.club`, OpenRouter,
  * OpenAI, LiteLLM, or any custom provider) and merge with D1 auto-discovered capabilities.
- * Zero-allocation hot path so 450-model OpenRouter catalogs stay well under Cloudflare's 10ms CPU cap.
+ * Zero-allocation hot path so ALL 450–1,000+ OpenRouter models parse well under Cloudflare's 10ms CPU cap.
  */
 export function parseProviderModelItem(item, options = {}) {
   if (!item || typeof item !== 'object') return null;
   const id = typeof item.id === 'string' ? item.id.trim() : '';
-  if (!id || !MODEL_ID_RE.test(id) || EMBEDDING_FILTER_RE.test(id)) {
+  if (!id || id.length > 160 || !MODEL_ID_RE.test(id)) {
+    return null;
+  }
+  const idLower = id.toLowerCase();
+  if (isNonChatModelId(idLower)) {
     return null;
   }
 
   const isTooken = options.isTooken !== undefined ? Boolean(options.isTooken) : true;
+  const light = Boolean(options.light);
   const discovered = options.discoveredMap?.[id] || null;
   const base = isTooken ? CATALOG_BY_ID.get(id) : null;
 
-  const caps = item.capabilities && typeof item.capabilities === 'object' ? item.capabilities : {};
-  const limits = item.limits && typeof item.limits === 'object' ? item.limits : {};
-  const arch = item.architecture && typeof item.architecture === 'object' ? item.architecture : {};
-  const topProvider = item.top_provider && typeof item.top_provider === 'object' ? item.top_provider : {};
+  const caps = item.capabilities && typeof item.capabilities === 'object' ? item.capabilities : EMPTY_OBJ;
+  const limits = item.limits && typeof item.limits === 'object' ? item.limits : EMPTY_OBJ;
+  const arch = item.architecture && typeof item.architecture === 'object' ? item.architecture : EMPTY_OBJ;
+  const topProvider = item.top_provider && typeof item.top_provider === 'object' ? item.top_provider : EMPTY_OBJ;
 
   let hasSupportedParams = false;
   let spHasReasoning = false;
@@ -1359,38 +1451,11 @@ export function parseProviderModelItem(item, options = {}) {
     }
   }
 
-  let exactLevels = null;
-  let explicitDisabled = false;
-  let booleanHint = null;
-  let extractedUnconfirmed = false;
-
-  const checkCand = (cand) => {
-    if (cand === undefined || cand === null || exactLevels !== null || explicitDisabled) return;
-    const res = extractEffortLevelsFromValue(cand);
-    if (res.kind === 'exact') {
-      exactLevels = res.levels;
-      extractedUnconfirmed = res.unconfirmed;
-    } else if (res.kind === 'none') {
-      explicitDisabled = true;
-    } else if (res.kind === 'boolean_true' && booleanHint === null) {
-      booleanHint = true;
-      extractedUnconfirmed = res.unconfirmed;
-    }
-  };
-
-  checkCand(item.reasoning_efforts);
-  checkCand(item.supported_reasoning_efforts);
-  checkCand(item.reasoning_levels);
-  checkCand(item.efforts);
-  checkCand(item.reasoning);
-  checkCand(item.thinking);
-  checkCand(caps.reasoning_efforts);
-  checkCand(caps.reasoning_levels);
-  checkCand(caps.reasoning);
-  checkCand(caps.effort);
-  checkCand(arch.reasoning_efforts);
-  checkCand(item.meta?.reasoning);
-  checkCand(item.info?.reasoning);
+  const signals = resolveItemEffortSignals(item, caps, arch);
+  const exactLevels = signals ? signals.exactLevels : null;
+  let explicitDisabled = signals ? signals.explicitDisabled : false;
+  let booleanHint = signals ? signals.booleanHint : null;
+  const extractedUnconfirmed = signals ? signals.extractedUnconfirmed : false;
 
   // OpenRouter / vLLM style `supported_parameters`:
   if (!exactLevels && !explicitDisabled && hasSupportedParams) {
@@ -1433,7 +1498,7 @@ export function parseProviderModelItem(item, options = {}) {
     source = 'catalog';
     needsDiscovery = false;
   } else {
-    levels = inferProvisionalLevels(id, { isTooken, booleanHint });
+    levels = inferProvisionalLevels(idLower, { isTooken, booleanHint });
     source = 'provisional';
     needsDiscovery = true;
   }
@@ -1497,31 +1562,71 @@ export function parseProviderModelItem(item, options = {}) {
     base?.title ||
     id;
 
-  const isFeatured = Boolean(item.featured ?? base?.featured ?? (!isTooken && OPENROUTER_FEATURED_RE.test(id)));
+  const isFeatured = Boolean(item.featured ?? base?.featured ?? (!isTooken && OPENROUTER_FEATURED_RE.test(idLower)));
+  let subtitle = '';
+  if (typeof item.description === 'string' && item.description) {
+    if (light) {
+      const nl = item.description.indexOf('\n');
+      const cut = nl >= 0 && nl < 64 ? nl : 64;
+      subtitle = item.description.slice(0, cut).trim();
+    } else {
+      subtitle = item.description.slice(0, 160).trim().slice(0, 120);
+    }
+  } else if (base?.subtitle) {
+    subtitle = base.subtitle;
+  }
 
-  return {
-    ...(base || {}),
-    id,
-    title,
-    subtitle:
-      (typeof item.description === 'string' && item.description.slice(0, 160).trim().slice(0, 120)) ||
-      base?.subtitle ||
-      '',
-    label: base?.label || title,
-    tier: base?.tier || 'live',
-    featured: isFeatured,
-    maxInputTokens,
-    maxOutputTokens,
-    vision,
-    tools,
-    reasoning: {
+  let reasoningObj;
+  if (!unconfirmed && !preferredDefault && source === 'provider' && levels.length === 0) {
+    reasoningObj = REASONING_DISABLED_PROVIDER;
+  } else if (
+    !unconfirmed &&
+    !preferredDefault &&
+    source === 'provisional' &&
+    levels === STANDARD_EFFORTS &&
+    defaultEffort === 'medium'
+  ) {
+    reasoningObj = REASONING_STD_PROVISIONAL;
+  } else {
+    reasoningObj = {
       supported: levels.length > 0,
       levels,
       defaultEffort,
       unconfirmed,
       source,
       needsDiscovery
-    }
+    };
+  }
+
+  if (!base) {
+    return {
+      id,
+      title,
+      subtitle,
+      label: title,
+      tier: 'live',
+      featured: isFeatured,
+      maxInputTokens,
+      maxOutputTokens,
+      vision,
+      tools,
+      reasoning: reasoningObj
+    };
+  }
+
+  return {
+    ...base,
+    id,
+    title,
+    subtitle,
+    label: base.label || title,
+    tier: base.tier || 'live',
+    featured: isFeatured,
+    maxInputTokens,
+    maxOutputTokens,
+    vision,
+    tools,
+    reasoning: reasoningObj
   };
 }
 
@@ -1768,32 +1873,14 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     }
   }
 
-  // When an aggregator returns hundreds of models (e.g. OpenRouter ~450 models / 3.5 MB JSON),
-  // prioritize flagship/coding families first and cap parsed items to 220 so Worker CPU stays < 1.2ms!
-  let candidateRaw = rawList;
-  if (rawList.length > 220) {
-    const tier0 = [];
-    const tier1 = [];
-    const tier2 = [];
-    const wantedModel = String(env.MODEL_NAME || '').trim();
-    for (let i = 0; i < rawList.length; i += 1) {
-      const item = rawList[i];
-      const rid = typeof item === 'string' ? item : typeof item?.id === 'string' ? item.id : '';
-      if (!rid) continue;
-      if ((wantedModel && rid === wantedModel) || OPENROUTER_FEATURED_RE.test(rid)) {
-        tier0.push(item);
-      } else if (OPENROUTER_PRIORITY_RE.test(rid)) {
-        tier1.push(item);
-      } else if (tier0.length + tier1.length + tier2.length < 240) {
-        tier2.push(item);
-      }
-    }
-    candidateRaw = [...tier0, ...tier1, ...tier2].slice(0, 220);
-  }
+  // Keep 100% of all provider models (OpenRouter ~450-600+ models) without dropping any model!
+  // Use ultra-light parsing (`light: true`) on large catalogs so Worker CPU stays ~1ms for all 500+ models.
+  const maxSafetyItems = Math.min(rawList.length, 2_000);
+  const useLight = maxSafetyItems > 80;
 
   const byId = new Map();
-  for (let i = 0; i < candidateRaw.length; i += 1) {
-    const rawItem = candidateRaw[i];
+  for (let i = 0; i < maxSafetyItems; i += 1) {
+    const rawItem = rawList[i];
     const baseObj = typeof rawItem === 'string' ? { id: rawItem } : rawItem;
     const rich =
       baseObj?.id && cliById.has(baseObj.id)
@@ -1801,6 +1888,7 @@ export async function fetchProviderModels(env, { force = false } = {}) {
         : baseObj;
     const parsed = parseProviderModelItem(rich, {
       isTooken,
+      light: useLight,
       discoveredMap: env._discoveredSpecs
     });
     if (parsed && !byId.has(parsed.id)) byId.set(parsed.id, parsed);
@@ -1809,6 +1897,7 @@ export async function fetchProviderModels(env, { force = false } = {}) {
   if (isOpenRouter && !byId.has('openrouter/auto')) {
     const autoItem = parseProviderModelItem(OPENROUTER_FALLBACK_IDS[0], {
       isTooken: false,
+      light: true,
       discoveredMap: env._discoveredSpecs
     });
     if (autoItem) byId.set(autoItem.id, autoItem);
@@ -1834,6 +1923,16 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     for (const m of byId.values()) {
       if (m.featured) pushOrdered(m);
     }
+    const priorityLabs = [];
+    for (const m of byId.values()) {
+      if (!orderedIds.has(m.id) && OPENROUTER_PRIORITY_RE.test(m.id)) {
+        priorityLabs.push(m);
+      }
+    }
+    priorityLabs.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (let i = 0; i < priorityLabs.length; i += 1) {
+      pushOrdered(priorityLabs[i]);
+    }
   } else if (cliOrderIds.length) {
     for (const cid of cliOrderIds) {
       if (byId.has(cid)) pushOrdered(byId.get(cid));
@@ -1842,7 +1941,7 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     pushOrdered(byId.get('deepseek-v4.1-flash'));
   }
 
-  // Fast ASCII codepoint sort (avoids ICU `localeCompare` which burns ~7ms CPU on 400+ models in Workers!)
+  // Fast ASCII codepoint sort for ALL remaining models (avoids ICU `localeCompare` which burns ~7ms CPU on Workers!)
   const rest = [];
   for (const m of byId.values()) {
     if (!orderedIds.has(m.id)) rest.push(m);
