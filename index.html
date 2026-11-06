@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>CodePilot — محیط توسعه هوشمند</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2374d9a1'/><text x='16' y='22' font-size='18' text-anchor='middle' fill='%2310151d'>✳</text></svg>">
+<title>CodePilot — محیط توسعه هوشمند Claude Code &amp; Codex</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23E87B52'/><text x='16' y='22.5' font-size='19' font-weight='900' text-anchor='middle' fill='%231F1612'>✳</text></svg>">
 <style>
 :root{
   --bg:#0b0e14;--panel:#11151e;--panel2:#161b25;--line:#252b38;--text:#e6e9ef;--muted:#929bad;
@@ -299,20 +299,475 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
  .conv .acts{opacity:1}.conv .acts button{min-height:32px}.sidebar-foot button{min-height:40px}.tab{max-width:100%}.tab-actions{width:100%}.tab-actions button{flex:1;min-height:38px}.code{font-size:13px}.bottom-head{gap:8px}.model-badge{max-width:160px}.modal{padding:10px}.modal-card{padding:16px}.msg .msg-actions{opacity:1}
 }
 @media(prefers-reduced-motion:reduce){.chat{scroll-behavior:auto}}
+
+/* =========================================================================
+   Claude Code Warm Terracotta-Orange Aesthetic + Animations + GPT Codex UI
+   Default theme: claude-warm (brighter warm roasted-cocoa + Claude terracotta)
+   Optional themes: claude-day (Anthropic warm cream-orange), midnight
+   ========================================================================= */
+:root,body[data-theme="claude-warm"]{
+  --bg:#211b17;
+  --bg-elev:#29211c;
+  --panel:#2b221d;
+  --panel2:#362b24;
+  --panel3:#42342b;
+  --chat-bg:#251e19;
+  --editor-bg:#1d1714;
+  --term-bg:#191411;
+  --line:#4c3c32;
+  --line-strong:#695040;
+  --text:#fbf4ed;
+  --text-soft:#eadccf;
+  --muted:#c7b3a1;
+  --claude:#E87B52;
+  --claude-bright:#F5936C;
+  --claude-deep:#C95F38;
+  --claude-amber:#F4B266;
+  --claude-glow:rgba(232,123,82,.22);
+  --claude-tint:rgba(232,123,82,.13);
+  --green:#82d9a0;
+  --user-bg:linear-gradient(145deg,#3d291f,#33221a);
+  --user-border:#6e4632;
+  --card-bg:rgba(54,43,36,.78);
+  --composer-bg:#312620;
+  --composer-border:#5b4538;
+  --btn-bg:#382c25;
+  --btn-hover:#47372e;
+  --code-bg:#181310;
+  --on-primary:#1f130d;
+}
+body[data-theme="claude-day"]{
+  --bg:#FAF5EE;
+  --bg-elev:#F3ECE1;
+  --panel:#F4EDE3;
+  --panel2:#EAE0D2;
+  --panel3:#DFD2C0;
+  --chat-bg:#FCF9F4;
+  --editor-bg:#F7F1E7;
+  --term-bg:#231C18;
+  --line:#DECFC0;
+  --line-strong:#C8B29D;
+  --text:#251C17;
+  --text-soft:#3C2E26;
+  --muted:#735F50;
+  --claude:#D96941;
+  --claude-bright:#E87B52;
+  --claude-deep:#B8512C;
+  --claude-amber:#D98A36;
+  --claude-glow:rgba(217,105,65,.20);
+  --claude-tint:rgba(217,105,65,.11);
+  --green:#248A52;
+  --user-bg:linear-gradient(145deg,#F6E4D6,#F2D9C7);
+  --user-border:#E2B89D;
+  --card-bg:rgba(255,252,247,.92);
+  --composer-bg:#FFFFFF;
+  --composer-border:#D8C3B0;
+  --btn-bg:#EFE6DA;
+  --btn-hover:#E5D8C7;
+  --code-bg:#F0E8DC;
+  --on-primary:#FFFFFF;
+}
+body[data-theme="midnight"]{
+  --bg:#11141a;
+  --bg-elev:#161a22;
+  --panel:#171b24;
+  --panel2:#202633;
+  --panel3:#293142;
+  --chat-bg:#151922;
+  --editor-bg:#0f1218;
+  --term-bg:#0d1016;
+  --line:#2d3546;
+  --line-strong:#43506a;
+  --text:#eef2f8;
+  --text-soft:#d7dfec;
+  --muted:#9ca7ba;
+  --claude:#E87B52;
+  --claude-bright:#F5936C;
+  --claude-deep:#C95F38;
+  --claude-amber:#F4B266;
+  --claude-glow:rgba(232,123,82,.18);
+  --claude-tint:rgba(232,123,82,.11);
+  --green:#82d9a0;
+  --user-bg:linear-gradient(145deg,#243342,#1e2a37);
+  --user-border:#3b526b;
+  --card-bg:rgba(32,38,51,.82);
+  --composer-bg:#1e2430;
+  --composer-border:#384357;
+  --btn-bg:#232a38;
+  --btn-hover:#2d3648;
+  --code-bg:#0c0f15;
+  --on-primary:#1d120c;
+}
+body.reduced-motion *,body.reduced-motion *::before,body.reduced-motion *::after{
+  animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important
+}
+
+body{
+  background:var(--bg);color:var(--text);
+  transition:background-color .28s ease,color .22s ease;
+}
+button{
+  background:var(--btn-bg);border-color:var(--line);color:var(--text);
+  transition:transform .16s cubic-bezier(.2,.8,.2,1),background .18s ease,border-color .18s ease,box-shadow .18s ease;
+}
+button:hover:not(:disabled){
+  background:var(--btn-hover);border-color:var(--line-strong);transform:translateY(-1px);
+}
+button:active:not(:disabled){transform:translateY(0) scale(.985)}
+button:focus-visible,[role=button]:focus-visible,a:focus-visible{outline:2px solid var(--claude);outline-offset:2px}
+textarea:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--claude);outline-offset:-1px}
+
+.top{
+  background:linear-gradient(180deg,var(--bg-elev),var(--panel));
+  border-bottom:1px solid var(--line);
+  box-shadow:0 4px 22px rgba(0,0,0,.16);
+  position:relative;z-index:5;
+}
+.top::after{
+  content:"";position:absolute;inset:auto 0 -1px 0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--claude-bright),var(--claude-amber),transparent);
+  opacity:.55;pointer-events:none;
+}
+.logo{
+  background:linear-gradient(135deg,var(--claude-bright),var(--claude-deep));
+  color:#fff8f2;border-radius:10px;width:32px;height:32px;font-size:18px;
+  box-shadow:0 4px 16px var(--claude-glow),inset 0 1px 0 rgba(255,255,255,.32);
+  transition:transform .35s cubic-bezier(.34,1.56,.64,1),box-shadow .3s ease;
+}
+.brand:hover .logo{transform:rotate(36deg) scale(1.07)}
+body.is-working .logo{animation:claudeStarSpin 2.6s cubic-bezier(.45,.05,.55,.95) infinite}
+@keyframes claudeStarSpin{
+  0%{transform:rotate(0deg) scale(1);box-shadow:0 0 14px var(--claude-glow)}
+  50%{transform:rotate(180deg) scale(1.08);box-shadow:0 0 24px var(--claude)}
+  100%{transform:rotate(360deg) scale(1);box-shadow:0 0 14px var(--claude-glow)}
+}
+.pill{
+  color:var(--claude-bright);background:var(--claude-tint);border-color:rgba(232,123,82,.38);font-weight:600
+}
+body[data-theme="claude-day"] .pill{color:var(--claude-deep)}
+.status .sync.on{background:var(--green);box-shadow:0 0 0 3px rgba(130,217,160,.22)}
+.status .sync.busy{background:var(--claude-bright);box-shadow:0 0 0 4px var(--claude-glow);animation:pulse 1s infinite}
+
+.sidebar{background:var(--panel);border-left:1px solid var(--line)}
+.sidebar-head,.pane-head,.right-head{background:var(--bg-elev);border-bottom:1px solid var(--line)}
+.sidebar-head .tiny{background:var(--panel2);color:var(--muted)}
+.new-conversation{
+  background:linear-gradient(135deg,rgba(232,123,82,.22),rgba(244,178,102,.13));
+  border:1px solid rgba(232,123,82,.52);color:var(--text);font-weight:700;
+  box-shadow:0 4px 14px rgba(232,123,82,.10);
+}
+.new-conversation:hover:not(:disabled){
+  background:linear-gradient(135deg,rgba(232,123,82,.34),rgba(244,178,102,.22));
+  border-color:var(--claude-bright);box-shadow:0 6px 18px var(--claude-glow);
+}
+.conv{color:var(--text-soft);transition:background .16s ease,border-color .16s ease,transform .16s ease}
+.conv:hover{background:var(--panel2);transform:translateX(-2px)}
+.conv.active{
+  background:var(--panel2);border-color:rgba(232,123,82,.42);
+  border-right:3px solid var(--claude);color:var(--text);
+  box-shadow:0 4px 14px rgba(0,0,0,.10);
+}
+.conv .meta,.section-title{color:var(--muted)}
+.conv .acts button{background:var(--panel3);color:var(--text)}
+.bar{background:var(--panel2)}
+.bar i{background:linear-gradient(90deg,var(--claude),var(--claude-amber))}
+.tree-row{color:var(--text-soft);transition:background .14s ease,color .14s ease}
+.tree-row:hover,.tree-row.active{background:var(--panel2);color:var(--text)}
+.tree-row .ico{color:var(--claude-bright)}
+.sidebar-foot button{color:var(--text-soft)}
+.sidebar-foot button:hover{background:var(--panel2);color:var(--text)}
+
+.center{background:var(--editor-bg)}
+.tabs{background:var(--bg-elev);border-bottom:1px solid var(--line)}
+.tab{background:var(--panel2);border-bottom:2px solid var(--claude);color:var(--text);border-radius:8px 8px 0 0}
+.editor,.code{background:var(--editor-bg);color:var(--text)}
+.nums{background:var(--bg-elev);color:var(--muted);border-right:1px solid var(--line)}
+.bottom{background:var(--term-bg);border-top:1px solid var(--line)}
+.bottom-head{background:var(--bg-elev);border-bottom:1px solid var(--line);color:var(--muted)}
+.bottom-head .selected{color:var(--claude-bright);border-bottom:2px solid var(--claude)}
+body[data-theme="claude-day"] .terminal,body[data-theme="claude-day"] .cmd{color:#f3ece4}
+
+.right{
+  background:
+    radial-gradient(ellipse 88% 250px at 50% 0%,var(--claude-tint),transparent 72%),
+    var(--chat-bg);
+  border-left:1px solid var(--line);position:relative;
+}
+.model-badge{
+  background:var(--panel2);border:1px solid var(--line-strong);color:var(--text);
+  font-weight:600;padding:5px 10px;border-radius:999px;
+}
+.model-badge:hover{border-color:var(--claude-bright);background:var(--panel3);color:var(--text)}
+.think-toggle{background:var(--panel2);border-color:var(--line);color:var(--muted);min-height:32px}
+.think-toggle.on{
+  background:var(--claude-tint);border-color:rgba(232,123,82,.55);color:var(--claude-bright);
+  box-shadow:0 0 12px rgba(232,123,82,.12);
+}
+body[data-theme="claude-day"] .think-toggle.on{color:var(--claude-deep)}
+.think-toggle.max{
+  background:rgba(244,178,102,.18);border-color:var(--claude-amber);color:var(--claude-amber);
+}
+.token-pill{
+  background:var(--panel2);border:1px solid var(--line-strong);color:var(--text);min-height:34px;
+}
+.token-pill:hover{border-color:var(--claude-bright);background:var(--panel3);color:var(--text)}
+.primary{
+  background:linear-gradient(135deg,var(--claude-bright),var(--claude));
+  color:var(--on-primary);border:1px solid rgba(255,255,255,.14);font-weight:750;
+  box-shadow:0 5px 18px var(--claude-glow);
+}
+.primary:hover:not(:disabled){
+  background:linear-gradient(135deg,#ffa27d,var(--claude-bright));
+  box-shadow:0 8px 22px var(--claude-glow);
+}
+
+/* Claude Code Welcome Card & Pixel Terracotta Buddy */
+.welcome{
+  position:relative;overflow:hidden;
+  background:linear-gradient(155deg,var(--card-bg),var(--panel));
+  border:1.5px solid rgba(232,123,82,.48);
+  border-radius:18px;padding:22px;
+  box-shadow:0 14px 38px rgba(0,0,0,.16),inset 0 1px 0 rgba(255,255,255,.07);
+  animation:msgEnter .38s cubic-bezier(.2,.9,.3,1);
+}
+.welcome::before{
+  content:"";position:absolute;inset:0 0 auto 0;height:3px;
+  background:linear-gradient(90deg,var(--claude-deep),var(--claude-bright),var(--claude-amber),var(--claude-bright));
+  background-size:200% 100%;animation:claudeShimmer 5s linear infinite;
+}
+@keyframes claudeShimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+.welcome-hero{display:flex;align-items:center;gap:14px;margin-bottom:12px;flex-wrap:wrap}
+.claude-mascot-wrap{
+  width:56px;height:56px;border-radius:15px;flex:none;
+  background:radial-gradient(circle at 50% 35%,rgba(245,147,108,.28),rgba(232,123,82,.08));
+  border:1px solid rgba(232,123,82,.42);display:grid;place-items:center;
+  box-shadow:0 8px 20px rgba(232,123,82,.16);
+}
+.claude-pixel-svg{width:40px;height:40px;animation:mascotBob 3.2s ease-in-out infinite;transform-origin:center bottom}
+body.is-working .claude-pixel-svg{animation:mascotExcited .65s ease-in-out infinite}
+@keyframes mascotBob{
+  0%,100%{transform:translateY(0) rotate(0deg)}
+  50%{transform:translateY(-3px) rotate(-1.5deg)}
+}
+@keyframes mascotExcited{
+  0%,100%{transform:translateY(0) scale(1)}
+  50%{transform:translateY(-5px) scale(1.06)}
+}
+.claude-pixel-eye{animation:mascotBlink 4.6s infinite;transform-origin:center}
+@keyframes mascotBlink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(.12)}}
+.welcome-meta-pills{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 12px}
+.w-chip{
+  display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 9px;
+  border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:var(--text-soft);
+}
+.w-chip b{color:var(--claude-bright);font-weight:700}
+body[data-theme="claude-day"] .w-chip b{color:var(--claude-deep)}
+.suggestions{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-top:14px}
+.suggestions button{
+  padding:11px 13px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+  color:var(--text);font-size:12px;text-align:right;line-height:1.55;min-height:44px;
+  display:flex;align-items:center;gap:8px;
+}
+.suggestions button:hover{
+  border-color:var(--claude-bright);background:var(--panel3);
+  box-shadow:0 6px 18px rgba(232,123,82,.14);
+}
+.welcome-tip{
+  margin-top:13px;padding-top:10px;border-top:1px dashed var(--line);
+  font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+}
+.welcome-tip kbd{
+  font:11px ui-monospace,monospace;padding:1px 6px;border-radius:5px;
+  background:var(--panel2);border:1px solid var(--line-strong);color:var(--claude-bright);direction:ltr;
+}
+body[data-theme="claude-day"] .welcome-tip kbd{color:var(--claude-deep)}
+
+/* Animated Chat Messages, Claude Spinner Verb Bar & Tool Cards */
+@keyframes msgEnter{
+  from{opacity:0;transform:translateY(8px) scale(.992)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+.msg{animation:msgEnter .24s cubic-bezier(.2,.85,.3,1)}
+.msg.user{
+  background:var(--user-bg);border:1px solid var(--user-border);color:var(--text);
+  border-radius:15px 15px 4px 15px;box-shadow:0 6px 18px rgba(0,0,0,.12);
+}
+.msg.assistant{background:transparent;border-color:transparent;color:var(--text)}
+.msg code{background:var(--code-bg);color:var(--claude-amber);border:1px solid var(--line);padding:1px 5px}
+body[data-theme="claude-day"] .msg code{color:var(--claude-deep)}
+.msg pre{background:var(--code-bg);border:1px solid var(--line);color:var(--text-soft);border-radius:10px}
+.msg .msg-actions button{background:var(--panel2);border-color:var(--line);color:var(--text-soft);min-height:30px;min-width:44px}
+.think-box{
+  border:1px solid rgba(232,123,82,.38);background:var(--claude-tint);
+  border-radius:11px;padding:8px 12px;color:var(--text-soft);
+}
+.think-box summary{color:var(--claude-bright)}
+body[data-theme="claude-day"] .think-box summary{color:var(--claude-deep)}
+.think-box pre{color:var(--text-soft)}
+
+.claude-spinner-bar{
+  display:flex;align-items:center;gap:9px;padding:9px 12px;margin:4px 0 8px;
+  border-radius:12px;background:var(--claude-tint);border:1px solid rgba(232,123,82,.42);
+  font-size:12px;color:var(--text);animation:msgEnter .2s ease;
+}
+.claude-star{
+  display:inline-grid;place-items:center;width:22px;height:22px;border-radius:7px;
+  background:linear-gradient(135deg,var(--claude-bright),var(--claude));color:#1f120c;
+  font-weight:900;font-size:14px;flex:none;animation:claudeStarSpin 1.8s linear infinite;
+}
+.claude-verb{font-weight:700;color:var(--claude-bright)}
+body[data-theme="claude-day"] .claude-verb{color:var(--claude-deep)}
+.claude-elapsed{margin-right:auto;font:11px ui-monospace,monospace;color:var(--muted);direction:ltr}
+.stream-cursor::after{
+  content:"▋";display:inline-block;margin-inline-start:2px;color:var(--claude-bright);
+  animation:cursorBlink .85s steps(2,start) infinite;
+}
+@keyframes cursorBlink{to{visibility:hidden}}
+
+.msg .tool-line{
+  background:var(--panel);border:1px solid rgba(232,123,82,.42);color:var(--text-soft);
+  border-radius:9px;padding:6px 10px;margin:5px 0;position:relative;overflow:hidden;
+  animation:msgEnter .2s ease;
+}
+.msg .tool-line:not(.done):not(.fail)::before{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(232,123,82,.16),transparent);
+  transform:translateX(-100%);animation:toolSweep 1.6s infinite;pointer-events:none;
+}
+@keyframes toolSweep{100%{transform:translateX(100%)}}
+.msg .tool-line.done{color:var(--green);border-color:rgba(130,217,160,.38);background:rgba(130,217,160,.07)}
+.msg .tool-line.fail{color:#ff8f85;border-color:rgba(255,123,114,.45);background:rgba(255,123,114,.08)}
+
+/* Codex Turn Diff Summary Card inside Assistant Bubble */
+.turn-diff-card{
+  margin-top:10px;padding:10px 12px;border-radius:12px;
+  background:var(--panel);border:1px solid var(--line-strong);
+  display:flex;flex-direction:column;gap:6px;direction:rtl;
+}
+.turn-diff-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;font-weight:700;color:var(--claude-bright)}
+body[data-theme="claude-day"] .turn-diff-head{color:var(--claude-deep)}
+.turn-diff-row{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:4px 8px;border-radius:8px;background:var(--panel2);font:11.5px ui-monospace,monospace;direction:ltr;cursor:pointer;
+}
+.turn-diff-row:hover{border-color:var(--claude-bright);background:var(--panel3)}
+.diff-add-pill{color:#6ee7a0;font-weight:700}.diff-del-pill{color:#ff8f85;font-weight:700}
+body[data-theme="claude-day"] .diff-add-pill{color:#1b7f46}body[data-theme="claude-day"] .diff-del-pill{color:#c93b2b}
+
+/* Composer Box + Perched Claude Buddy + Mode/Slash/@ Toolbar + Popover Menus */
+.chatbox{
+  position:relative;margin:0 16px 10px;padding:11px 12px 12px;
+  background:var(--composer-bg);border:1.5px solid var(--composer-border);
+  border-radius:18px;box-shadow:0 10px 30px rgba(0,0,0,.18);
+  transition:border-color .2s ease,box-shadow .2s ease;
+}
+.chatbox:focus-within{
+  border-color:var(--claude);
+  box-shadow:0 10px 32px rgba(0,0,0,.22),0 0 0 3px var(--claude-glow);
+}
+.composer-buddy{
+  position:absolute;top:-21px;left:18px;width:28px;height:22px;pointer-events:none;z-index:2;
+  filter:drop-shadow(0 3px 6px rgba(0,0,0,.28));
+}
+.composer-toolbar{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;
+  border-bottom:1px dashed var(--line);
+}
+.mode-pill{
+  display:inline-flex;align-items:center;gap:5px;padding:4px 10px;min-height:32px;min-width:34px;
+  border-radius:999px!important;font-size:11.5px;font-weight:700;
+  background:var(--claude-tint);border:1px solid rgba(232,123,82,.5);color:var(--claude-bright);
+}
+body[data-theme="claude-day"] .mode-pill{color:var(--claude-deep)}
+.mode-pill[data-mode="plan"]{background:rgba(122,174,255,.15);border-color:rgba(122,174,255,.5);color:#8ec0ff}
+body[data-theme="claude-day"] .mode-pill[data-mode="plan"]{color:#2459a8}
+.mode-pill[data-mode="suggest"]{background:rgba(244,178,102,.16);border-color:rgba(244,178,102,.52);color:var(--claude-amber)}
+.mode-pill[data-mode="full-auto"]{background:rgba(130,217,160,.16);border-color:rgba(130,217,160,.52);color:var(--green)}
+.comp-chip-btn{
+  padding:4px 9px;min-height:32px;min-width:34px;border-radius:999px!important;
+  font-size:11.5px;background:var(--panel2);border:1px solid var(--line);color:var(--text-soft);
+}
+.comp-chip-btn.active{border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)}
+body[data-theme="claude-day"] .comp-chip-btn.active{color:var(--claude-deep)}
+.chat-input{color:var(--text)}
+.chat-input::placeholder{color:var(--muted)}
+.sendrow{border-top:1px solid var(--line)}
+.hint{color:var(--muted)}
+
+/* Slash Command & @File Mention Floating Palette */
+.floating-palette{
+  display:none;position:absolute;bottom:calc(100% + 8px);right:0;left:0;max-height:260px;overflow-y:auto;
+  background:var(--panel);border:1.5px solid var(--claude);border-radius:14px;padding:6px;
+  box-shadow:0 18px 46px rgba(0,0,0,.38);z-index:18;animation:msgEnter .16s ease;
+}
+.floating-palette.open{display:block}
+.palette-item{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
+  padding:8px 11px;min-height:36px;border:0;border-radius:9px!important;background:transparent;
+  color:var(--text);text-align:right;cursor:pointer;
+}
+.palette-item:hover,.palette-item.active{background:var(--claude-tint);color:var(--text)}
+.palette-cmd{font:700 12.5px ui-monospace,monospace;color:var(--claude-bright);direction:ltr;flex:none}
+body[data-theme="claude-day"] .palette-cmd{color:var(--claude-deep)}
+.palette-desc{font-size:11.5px;color:var(--muted);flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Claude Code Statusline at bottom of Chat Pane */
+.claude-statusline{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+  padding:5px 16px 8px;font-size:11px;color:var(--muted);border-top:1px solid var(--line);
+  background:var(--bg-elev);flex:none;
+}
+.statusline-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.sl-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.sl-goal{
+  max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--claude-amber);font-weight:600;
+}
+
+/* Modals & Codex Settings Controls */
+.modal-card{background:var(--panel);border:1px solid var(--line-strong);color:var(--text)}
+.field{background:var(--editor-bg);border-color:var(--line);color:var(--text)}
+.codex-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:8px;margin-top:8px}
+.codex-mode-card{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:10px 12px;min-height:62px;
+  border-radius:12px!important;border:1.5px solid var(--line);background:var(--panel2);text-align:right;
+}
+.codex-mode-card.active{border-color:var(--claude);background:var(--claude-tint);box-shadow:0 0 0 1px var(--claude-glow)}
+.codex-mode-card strong{font-size:12.5px;color:var(--text)}
+.codex-mode-card span{font-size:11px;color:var(--muted);line-height:1.45}
+.codex-toggle-row{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 12px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);margin-top:7px;
+}
+.codex-toggle-row label{font-size:12px;color:var(--text);cursor:pointer;flex:1}
+.codex-toggle-row small{display:block;font-size:10.5px;color:var(--muted);margin-top:2px}
+.codex-toggle-row input[type=checkbox]{width:18px;height:18px;accent-color:var(--claude);cursor:pointer}
+.theme-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.theme-pill-btn{flex:1;min-width:110px;min-height:38px;border-radius:11px!important;font-size:12px;font-weight:600}
+.theme-pill-btn.active{border-color:var(--claude);background:var(--claude-tint);color:var(--claude-bright)}
+body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
+@media(max-width:760px){
+  .chatbox{margin:0 10px 6px;padding:9px 10px}
+  .claude-statusline{padding:4px 10px max(6px,env(safe-area-inset-bottom));font-size:10px}
+  .composer-buddy{display:none}
+  .suggestions{grid-template-columns:1fr}
+}
 </style>
 </head>
-<body data-view="chat">
+<body data-view="chat" data-theme="claude-warm">
 <header class="top">
   <div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill" id="storagePill">اتصال…</span></div>
   <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
   <div class="top-actions">
     <button id="fullscreenButton" onclick="toggleFullscreen()" title="تمام‌صفحه" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
+    <button class="utility" id="themeToggleBtn" onclick="cycleTheme()" title="تغییر تم ظاهری (کلود کد گرم نارنجی / روشن کرم / تاریک)" aria-label="تغییر تم ظاهری">🎨</button>
     <button class="token-pill" id="tokenQuotaBtn" onclick="openQuotaModal()" title="توکن‌های باقی‌مانده و سهمیه زنده API">
       <span class="tok-dot" id="tokenQuotaDot"></span>
       <span id="tokenQuotaText">🪙 —</span>
     </button>
     <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
     <button onclick="openModelModal()" title="انتخاب مدل هوش مصنوعی">✦ مدل</button>
+    <button class="utility" id="codexSettingsBtn" onclick="openCodexModal()" title="تنظیمات پیشرفته عامل و مجوزها (GPT Codex &amp; Claude Code)">🎛 عامل</button>
     <button class="utility" onclick="openSettings()" title="تنظیمات و حافظه" aria-label="تنظیمات و حافظه">⚙</button>
     <button class="utility" onclick="toggleMemoryPanel()" title="حافظه‌ی بلندمدت" aria-label="حافظه‌ی بلندمدت">🧠</button>
     <button class="gh-top" onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
@@ -396,22 +851,55 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
 
   <aside class="right">
     <div class="right-head">
-      <strong>همراه کدنویسی</strong>
+      <strong style="display:inline-flex;align-items:center;gap:6px"><span style="color:var(--claude-bright)">✳</span> همراه کدنویسی</strong>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="model-badge" id="modelBadge" role="button" tabindex="0" title="انتخاب مدل هوش مصنوعی (کلیک کنید)" onclick="openModelModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openModelModal()}">—</span>
         <button class="think-toggle on" id="thinkBtn" onclick="openModelModal('effort')" title="تنظیم سطح Effort واقعی مدل">🧠 تفکر</button>
+        <button class="tiny ghost" onclick="openCodexModal()" title="تنظیمات عامل Codex و Claude Code">🎛 عامل</button>
         <button class="tiny ghost" onclick="openSettings()">حافظه</button>
       </div>
     </div>
     <div class="chat" id="chat"></div>
     <div class="chatbox">
+      <svg class="composer-buddy claude-pixel-svg" viewBox="0 0 16 12" aria-hidden="true">
+        <rect x="3" y="1" width="10" height="8" rx="1" fill="#E87B52"/>
+        <rect x="2" y="3" width="12" height="5" fill="#E87B52"/>
+        <rect x="4" y="0" width="2" height="1" fill="#F5936C"/>
+        <rect x="10" y="0" width="2" height="1" fill="#F5936C"/>
+        <rect class="claude-pixel-eye" x="5" y="3" width="1.6" height="2.2" fill="#1E1410"/>
+        <rect class="claude-pixel-eye" x="9.4" y="3" width="1.6" height="2.2" fill="#1E1410"/>
+        <rect x="3" y="9" width="2" height="2.5" fill="#C95F38"/>
+        <rect x="6" y="9" width="1.6" height="2" fill="#C95F38"/>
+        <rect x="8.4" y="9" width="1.6" height="2" fill="#C95F38"/>
+        <rect x="11" y="9" width="2" height="2.5" fill="#C95F38"/>
+      </svg>
+      <div class="floating-palette" id="slashMenu" role="listbox" aria-label="دستورات اسلش"></div>
+      <div class="floating-palette" id="mentionMenu" role="listbox" aria-label="ارجاع به فایل پروژه"></div>
+      <div class="composer-toolbar">
+        <button type="button" class="mode-pill" id="modeCycleBtn" data-mode="auto-edit" onclick="cycleAgentMode()" title="تغییر حالت خودمختاری عامل (میانبر Shift+Tab)">⚡ Auto-Edit</button>
+        <button type="button" class="comp-chip-btn" onclick="toggleSlashPalette()" title="دستورات سریع کلود کد و کدکس (/)">/ دستورات</button>
+        <button type="button" class="comp-chip-btn" onclick="toggleMentionPalette()" title="ارجاع مستقیم به فایل پروژه (@)">@ فایل</button>
+        <button type="button" class="comp-chip-btn" id="quickNetBtn" onclick="toggleQuickPermission('networkAccess')" title="دسترسی زنده عامل به وب و جست‌وجو">🌐 وب</button>
+        <button type="button" class="comp-chip-btn" id="quickShellBtn" onclick="toggleQuickPermission('shellAccess')" title="دسترسی اجرای دستورات شل/لینوکس">🐧 شل</button>
+      </div>
       <input id="attachmentInput" type="file" multiple hidden onchange="queueAttachments(this.files);this.value=''">
       <div id="attachmentList" style="display:flex;gap:6px;flex-wrap:wrap" aria-live="polite"></div>
-      <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+      <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند… (برای دستورات / و برای فایل‌ها @ بزنید)" oninput="onPromptInput(event)" onkeydown="onPromptKeydown(event)"></textarea>
       <div class="sendrow">
         <button type="button" onclick="document.getElementById('attachmentInput').click()" title="تا ۵ فایل، مجموعاً ۲۰ مگابایت؛ خواندن فایل باینری به مدل بستگی دارد" aria-label="افزودن عکس یا فایل">📎 پیوست</button>
-        <span class="hint" id="composerHint">Enter ارسال · Shift+Enter خط جدید</span>
+        <span class="hint" id="composerHint">Enter ارسال · Shift+Tab تغییر حالت · / دستورات</span>
         <button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
+      </div>
+    </div>
+    <div class="claude-statusline" id="claudeStatusLine" aria-label="نوار وضعیت عامل">
+      <div class="statusline-group">
+        <span class="sl-item" id="slModeText">✳ حالت: Auto-Edit</span>
+        <span class="sl-item" id="slStyleText">· متعادل</span>
+        <span class="sl-goal" id="slGoalText"></span>
+      </div>
+      <div class="statusline-group" style="direction:ltr">
+        <span class="sl-item" id="slBranchText">⑂ local</span>
+        <span class="sl-item" id="slCtxText">Ctx 0%</span>
       </div>
     </div>
   </aside>
@@ -480,10 +968,114 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
     <div class="notice" id="storageNotice" style="display:none"></div>
 
     <div class="modal-actions">
+      <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
       <button onclick="deleteAllData()" style="color:#ff9d92">حذف همه‌ی داده‌ها</button>
       <button onclick="exportData()">خروجی JSON</button>
       <button onclick="addMemory()" class="primary">افزودن حافظه</button>
       <button onclick="closeModal('settingsModal')">بستن</button>
+    </div>
+  </div>
+</div>
+
+<!-- GPT Codex & Claude Code Agent Capabilities & Appearance Modal -->
+<div class="modal" id="codexModal">
+  <div class="modal-card" style="width:min(620px,100%)">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <h2 style="margin:0;display:flex;align-items:center;gap:8px"><span style="color:var(--claude-bright)">✳</span> تنظیمات پیشرفته عامل (Claude Code &amp; GPT Codex)</h2>
+      <button class="sheet-icon-btn" onclick="closeModal('codexModal')" aria-label="بستن">✕</button>
+    </div>
+    <p style="margin-top:4px">کنترل سطح خودمختاری، سندباکس ابزارها، شخصیت پاسخ‌گویی، پارامترهای مدل، قوانین <code>AGENTS.md</code> و تم ظاهری.</p>
+
+    <div class="section-title" style="padding-right:0;margin-top:12px">۱. حالت خودمختاری و تأیید (Approval &amp; Autonomy Mode — میانبر Shift+Tab)</div>
+    <div class="codex-grid" id="codexModeCards">
+      <button type="button" class="codex-mode-card" data-agent-mode="plan" onclick="selectCodexModeCard('plan')">
+        <strong>🧭 Plan (برنامه‌ریزی)</strong>
+        <span>فقط تحلیل، خواندن کد و ارائه نقشه معماری؛ بدون تغییر فایل‌ها</span>
+      </button>
+      <button type="button" class="codex-mode-card" data-agent-mode="suggest" onclick="selectCodexModeCard('suggest')">
+        <strong>💬 Suggest (پیشنهادی)</strong>
+        <span>ارائه پچ و کدهای پیشنهادی در چت بدون اعمال خودکار روی پروژه</span>
+      </button>
+      <button type="button" class="codex-mode-card active" data-agent-mode="auto-edit" onclick="selectCodexModeCard('auto-edit')">
+        <strong>⚡ Auto-Edit (ویرایش هوشمند)</strong>
+        <span>ویرایش خودکار فایل‌ها و اعتبارسنجی سینتکس با ثبت نسخه قابل بازگشت</span>
+      </button>
+      <button type="button" class="codex-mode-card" data-agent-mode="full-auto" onclick="selectCodexModeCard('full-auto')">
+        <strong>🚀 Full-Auto (مستقل کامل)</strong>
+        <span>اجرای زنجیره‌ای تا ۳۲ گام، تست در شل و رفع خودکار خطاها تا تکمیل هدف</span>
+      </button>
+    </div>
+
+    <div class="section-title" style="padding-right:0;margin-top:14px">۲. مجوزهای سندباکس و اتوماسیون (Codex Sandbox &amp; Guardrails)</div>
+    <div class="codex-toggle-row">
+      <label for="cfgNetworkAccess">🌐 دسترسی زنده به اینترنت و وب<small>اجازه استفاده از ابزارهای <code>web_search</code> و <code>fetch_url</code> برای مستندات روز</small></label>
+      <input type="checkbox" id="cfgNetworkAccess" checked>
+    </div>
+    <div class="codex-toggle-row">
+      <label for="cfgShellAccess">🐧 دسترسی اجرای شل و کانتینر لینوکس<small>اجازه اجرای دستورات واقعی و تست‌ها با ابزار <code>run_command</code></small></label>
+      <input type="checkbox" id="cfgShellAccess" checked>
+    </div>
+    <div class="codex-toggle-row">
+      <label for="cfgAutoVerify">✅ اعتبارسنجی و بررسی خودکار پس از ویرایش<small>الزام عامل به بررسی خطاهای نحوی و منطقی پیش از پایان پاسخ</small></label>
+      <input type="checkbox" id="cfgAutoVerify" checked>
+    </div>
+    <div class="codex-toggle-row">
+      <label for="cfgAutoCommitGh">↗ کامیت خودکار تغییرات در GitHub<small>در صورت اتصال مخزن، فایل‌های ویرایش‌شده را اتمیک روی شاخه ثبت کند</small></label>
+      <input type="checkbox" id="cfgAutoCommitGh" checked>
+    </div>
+    <div class="codex-toggle-row">
+      <label for="cfgReadAgentsMd">📜 خواندن خودکار <code>AGENTS.md</code> و <code>CLAUDE.md</code><small>تزریق خودکار قوانین قراردادی مخزن به پرامپت سیستم عامل</small></label>
+      <input type="checkbox" id="cfgReadAgentsMd" checked>
+    </div>
+
+    <div class="section-title" style="padding-right:0;margin-top:14px">۳. سبک پاسخ‌دهی و پارامترهای فنی مدل</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin-top:6px">
+      <div>
+        <label class="field-label" for="cfgResponseStyle" style="margin-top:0">شخصیت و سبک پاسخ</label>
+        <select class="field" id="cfgResponseStyle" style="direction:rtl;text-align:right">
+          <option value="balanced">متعادل و مهندسی (Balanced)</option>
+          <option value="concise">فشرده و سریع (Concise CLI)</option>
+          <option value="explanatory">توضیحی و آموزشی (Explanatory)</option>
+          <option value="senior-reviewer">بازبین ارشد سخت‌گیر (Senior Reviewer)</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="cfgTemperature" style="margin-top:0">دمای مدل (Temperature: <span id="cfgTempVal">0.25</span>)</label>
+        <input class="field" type="range" id="cfgTemperature" min="0" max="1.2" step="0.05" value="0.25" oninput="document.getElementById('cfgTempVal').textContent=Number(this.value).toFixed(2)" style="padding:6px">
+      </div>
+      <div>
+        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps)</label>
+        <input class="field" type="number" id="cfgMaxSteps" min="4" max="36" step="2" value="16">
+      </div>
+      <div>
+        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن)</label>
+        <input class="field" type="number" id="cfgContextBudget" min="8000" max="120000" step="4000" value="24000">
+      </div>
+    </div>
+
+    <label class="field-label" for="cfgSessionGoal">🎯 هدف فعال جلسه (Session Goal — اختیاری، معادل <code>/goal</code>)</label>
+    <input class="field" id="cfgSessionGoal" style="direction:rtl;text-align:right" maxlength="600" placeholder="مثلاً: بازنویسی احراز هویت بدون شکستن تست‌های موجود">
+
+    <label class="field-label" for="cfgCustomInstructions">📝 دستورالعمل سفارشی ثابت (Custom System Prompt)</label>
+    <textarea class="field" id="cfgCustomInstructions" rows="3" maxlength="4000" style="direction:rtl;text-align:right;resize:vertical;line-height:1.7" placeholder="قوانین همیشگی شما برای کدنویسی (مثلاً: همیشه کد تمیز و ماژولار بنویس، توضیح فارسی بده و تست اضافه کن)…"></textarea>
+
+    <div class="section-title" style="padding-right:0;margin-top:14px">۴. تم ظاهری و جلوه‌های حرکتی (Claude Code Theme)</div>
+    <div class="theme-pills" id="codexThemePills">
+      <button type="button" class="theme-pill-btn active" data-theme-choice="claude-warm" onclick="applyTheme('claude-warm', true)">🔥 کلود کد گرم و نارنجی</button>
+      <button type="button" class="theme-pill-btn" data-theme-choice="claude-day" onclick="applyTheme('claude-day', true)">☀️ کلود کد روشن کرم‌نارنجی</button>
+      <button type="button" class="theme-pill-btn" data-theme-choice="midnight" onclick="applyTheme('midnight', true)">🌙 تاریک کلاسیک</button>
+    </div>
+    <div class="codex-toggle-row" style="margin-top:8px">
+      <label for="cfgReducedMotion">✨ کاهش انیمیشن‌ها (Reduced Motion)<small>توقف چرخش نمادها و انیمیشن‌های ظریف رابط کاربری</small></label>
+      <input type="checkbox" id="cfgReducedMotion">
+    </div>
+
+    <div class="modal-actions" style="justify-content:space-between">
+      <button type="button" onclick="scaffoldAgentsMdFile()" title="ایجاد یا باز کردن فایل استاندارد AGENTS.md در پروژه">📄 ساخت AGENTS.md</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" onclick="closeModal('codexModal')">بستن</button>
+        <button type="button" class="primary" id="saveCodexConfigBtn" onclick="saveAgentConfigFromModal()">ذخیره تنظیمات عامل</button>
+      </div>
     </div>
   </div>
 </div>
@@ -684,11 +1276,45 @@ function openApiConnection() {
 const MODEL_STORE = 'cp-model';
 const THINK_STORE = 'cp-thinking';
 const EFFORT_MAP_STORE = 'cp-effort-map';
+const THEME_STORE = 'cp-theme';
+const AGENT_CFG_STORE = 'cp-agent-cfg';
+
+const DEFAULT_CLIENT_AGENT_CONFIG = {
+  mode: 'auto-edit',
+  networkAccess: true,
+  shellAccess: true,
+  autoVerify: true,
+  autoCommitGh: true,
+  readAgentsMd: true,
+  responseStyle: 'balanced',
+  temperature: 0.25,
+  maxSteps: 16,
+  contextBudget: 24000,
+  customInstructions: '',
+  goal: '',
+  theme: 'claude-warm',
+  reducedMotion: false
+};
+
+const AGENT_MODE_META = {
+  plan: { label: '🧭 Plan', short: 'Plan', fa: 'برنامه‌ریزی (بدون ویرایش)' },
+  suggest: { label: '💬 Suggest', short: 'Suggest', fa: 'پیشنهادی (نمایش کد)' },
+  'auto-edit': { label: '⚡ Auto-Edit', short: 'Auto-Edit', fa: 'ویرایش هوشمند' },
+  'full-auto': { label: '🚀 Full-Auto', short: 'Full-Auto', fa: 'مستقل کامل (۳۲ گام)' }
+};
+
+const AGENT_STYLE_META = {
+  balanced: 'متعادل',
+  concise: 'فشرده CLI',
+  explanatory: 'توضیحی',
+  'senior-reviewer': 'بازبین ارشد'
+};
 
 const state = {
   ready: false,
   auth: null,
   config: null,
+  agentConfig: { ...DEFAULT_CLIENT_AGENT_CONFIG },
   conversations: [],
   conversationId: null,
   messages: [],
@@ -714,6 +1340,9 @@ const state = {
   tokenCap: null,
   lastTurnTokens: null,
   busy: false,
+  paletteItems: [],
+  paletteIndex: 0,
+  paletteKind: '',
   dirtyFiles: new Set(),
   saveTimer: null,
   streaming: false,
@@ -1496,8 +2125,204 @@ async function refreshLiveModels(silent = false) {
 
 /* ---------------------------------- boot --------------------------------- */
 
+function applyTheme(themeId, persistLocal = false) {
+  const valid = ['claude-warm', 'claude-day', 'midnight'];
+  const next = valid.includes(themeId) ? themeId : 'claude-warm';
+  document.body.dataset.theme = next;
+  state.agentConfig.theme = next;
+  const metaColor = document.querySelector('meta[name="color-scheme"]');
+  if (metaColor) metaColor.setAttribute('content', next === 'claude-day' ? 'light' : 'dark');
+  document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.themeChoice === next);
+  });
+  const topBtn = $('themeToggleBtn');
+  if (topBtn) {
+    topBtn.textContent = next === 'claude-warm' ? '🔥' : next === 'claude-day' ? '☀️' : '🌙';
+  }
+  if (persistLocal) {
+    try { localStorage.setItem(THEME_STORE, next); } catch { /* ignore */ }
+  }
+}
+
+function cycleTheme() {
+  const order = ['claude-warm', 'claude-day', 'midnight'];
+  const cur = state.agentConfig.theme || 'claude-warm';
+  const next = order[(order.indexOf(cur) + 1) % order.length];
+  applyTheme(next, true);
+  persistAgentConfigPatch({ theme: next });
+  const names = { 'claude-warm': 'کلود کد گرم و نارنجی 🔥', 'claude-day': 'کلود کد روشن کرم‌نارنجی ☀️', midnight: 'تاریک کلاسیک 🌙' };
+  toast('تم فعال: ' + names[next]);
+}
+
+function syncAgentUi() {
+  const cfg = state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
+  document.body.classList.toggle('reduced-motion', Boolean(cfg.reducedMotion));
+  applyTheme(cfg.theme || 'claude-warm', false);
+
+  const modeMeta = AGENT_MODE_META[cfg.mode] || AGENT_MODE_META['auto-edit'];
+  const modeBtn = $('modeCycleBtn');
+  if (modeBtn) {
+    modeBtn.dataset.mode = cfg.mode || 'auto-edit';
+    modeBtn.textContent = modeMeta.label;
+    modeBtn.title = `حالت عامل: ${modeMeta.fa} (کلیک یا Shift+Tab برای تغییر)`;
+  }
+  const netBtn = $('quickNetBtn');
+  if (netBtn) {
+    netBtn.classList.toggle('active', cfg.networkAccess !== false);
+    netBtn.textContent = cfg.networkAccess !== false ? '🌐 وب ✓' : '🌐 وب ✕';
+  }
+  const shBtn = $('quickShellBtn');
+  if (shBtn) {
+    const shAllowed = cfg.shellAccess !== false && cfg.mode !== 'plan' && cfg.mode !== 'suggest';
+    shBtn.classList.toggle('active', shAllowed);
+    shBtn.textContent = shAllowed ? '🐧 شل ✓' : '🐧 شل ✕';
+  }
+  const slMode = $('slModeText');
+  if (slMode) slMode.textContent = `✳ ${modeMeta.short}`;
+  const slStyle = $('slStyleText');
+  if (slStyle) slStyle.textContent = `· ${AGENT_STYLE_META[cfg.responseStyle] || 'متعادل'}`;
+  const slGoal = $('slGoalText');
+  if (slGoal) {
+    slGoal.textContent = cfg.goal ? `🎯 ${cfg.goal}` : '';
+    slGoal.title = cfg.goal || '';
+  }
+  const slBranch = $('slBranchText');
+  if (slBranch) {
+    const dirtyCount = state.dirtyFiles ? state.dirtyFiles.size : 0;
+    const branchLabel = state.repo ? `${state.repo.repo}@${state.repo.branch}` : 'workspace';
+    slBranch.textContent = `⑂ ${branchLabel}${dirtyCount ? ` *${dirtyCount}` : ''}`;
+  }
+}
+
+async function persistAgentConfigPatch(patch, showNotice = false) {
+  state.agentConfig = { ...state.agentConfig, ...patch };
+  if (Number.isFinite(Number(state.agentConfig.contextBudget))) {
+    state.contextBudget = Number(state.agentConfig.contextBudget);
+  }
+  syncAgentUi();
+  try {
+    localStorage.setItem(AGENT_CFG_STORE, JSON.stringify(state.agentConfig));
+  } catch { /* ignore */ }
+  if (!state.auth) return;
+  try {
+    const res = await api(API.config, {
+      method: 'POST',
+      body: JSON.stringify({ agentConfig: state.agentConfig })
+    });
+    if (res && res.agentConfig) {
+      state.agentConfig = { ...state.agentConfig, ...res.agentConfig };
+      state.contextBudget = res.contextBudgetTokens || state.agentConfig.contextBudget || 24000;
+      syncAgentUi();
+      updateContextMeter();
+    }
+    if (showNotice) toast('تنظیمات عامل در سرور ذخیره شد');
+  } catch (err) {
+    if (showNotice) toast('خطا در ذخیره تنظیمات: ' + err.message);
+  }
+}
+
+function cycleAgentMode(targetMode) {
+  const order = ['plan', 'suggest', 'auto-edit', 'full-auto'];
+  const cur = state.agentConfig.mode || 'auto-edit';
+  const next = targetMode && order.includes(targetMode)
+    ? targetMode
+    : order[(order.indexOf(cur) + 1) % order.length];
+  persistAgentConfigPatch({ mode: next });
+  const meta = AGENT_MODE_META[next];
+  toast(`حالت عامل: ${meta.label} — ${meta.fa}`);
+  if ($('chat') && $('chat').querySelector('.welcome')) renderChat();
+}
+
+function toggleQuickPermission(key) {
+  if (key !== 'networkAccess' && key !== 'shellAccess') return;
+  const nextVal = !(state.agentConfig[key] !== false);
+  persistAgentConfigPatch({ [key]: nextVal });
+  toast(
+    key === 'networkAccess'
+      ? (nextVal ? 'دسترسی وب عامل فعال شد 🌐' : 'دسترسی وب عامل بسته شد')
+      : (nextVal ? 'دسترسی شل عامل فعال شد 🐧' : 'دسترسی شل عامل بسته شد')
+  );
+}
+
+function selectCodexModeCard(mode) {
+  document.querySelectorAll('#codexModeCards .codex-mode-card').forEach((card) => {
+    card.classList.toggle('active', card.dataset.agentMode === mode);
+  });
+  state.agentConfig.mode = mode;
+}
+
+function openCodexModal() {
+  const cfg = state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
+  selectCodexModeCard(cfg.mode || 'auto-edit');
+  if ($('cfgNetworkAccess')) $('cfgNetworkAccess').checked = cfg.networkAccess !== false;
+  if ($('cfgShellAccess')) $('cfgShellAccess').checked = cfg.shellAccess !== false;
+  if ($('cfgAutoVerify')) $('cfgAutoVerify').checked = cfg.autoVerify !== false;
+  if ($('cfgAutoCommitGh')) $('cfgAutoCommitGh').checked = cfg.autoCommitGh !== false;
+  if ($('cfgReadAgentsMd')) $('cfgReadAgentsMd').checked = cfg.readAgentsMd !== false;
+  if ($('cfgResponseStyle')) $('cfgResponseStyle').value = cfg.responseStyle || 'balanced';
+  if ($('cfgTemperature')) {
+    $('cfgTemperature').value = String(cfg.temperature ?? 0.25);
+    if ($('cfgTempVal')) $('cfgTempVal').textContent = Number(cfg.temperature ?? 0.25).toFixed(2);
+  }
+  if ($('cfgMaxSteps')) $('cfgMaxSteps').value = String(cfg.maxSteps || 16);
+  if ($('cfgContextBudget')) $('cfgContextBudget').value = String(cfg.contextBudget || 24000);
+  if ($('cfgSessionGoal')) $('cfgSessionGoal').value = cfg.goal || '';
+  if ($('cfgCustomInstructions')) $('cfgCustomInstructions').value = cfg.customInstructions || '';
+  if ($('cfgReducedMotion')) $('cfgReducedMotion').checked = Boolean(cfg.reducedMotion);
+  applyTheme(cfg.theme || 'claude-warm', false);
+  $('codexModal').classList.add('open');
+}
+
+async function saveAgentConfigFromModal() {
+  const activeCard = document.querySelector('#codexModeCards .codex-mode-card.active');
+  const patch = {
+    mode: activeCard?.dataset?.agentMode || state.agentConfig.mode || 'auto-edit',
+    networkAccess: Boolean($('cfgNetworkAccess')?.checked),
+    shellAccess: Boolean($('cfgShellAccess')?.checked),
+    autoVerify: Boolean($('cfgAutoVerify')?.checked),
+    autoCommitGh: Boolean($('cfgAutoCommitGh')?.checked),
+    readAgentsMd: Boolean($('cfgReadAgentsMd')?.checked),
+    responseStyle: $('cfgResponseStyle')?.value || 'balanced',
+    temperature: Math.min(Math.max(Number($('cfgTemperature')?.value ?? 0.25), 0), 1.5),
+    maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 36),
+    contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 120000),
+    goal: String($('cfgSessionGoal')?.value || '').trim().slice(0, 600),
+    customInstructions: String($('cfgCustomInstructions')?.value || '').trim().slice(0, 4000),
+    reducedMotion: Boolean($('cfgReducedMotion')?.checked),
+    theme: state.agentConfig.theme || 'claude-warm'
+  };
+  await persistAgentConfigPatch(patch, true);
+  closeModal('codexModal');
+}
+
+async function scaffoldAgentsMdFile() {
+  const targetPath = state.workspace.files['AGENTS.md'] ? 'AGENTS.md' : 'AGENTS.md';
+  if (!state.workspace.files[targetPath]) {
+    const fileNames = Object.keys(state.workspace.files);
+    const sampleList = fileNames.slice(0, 12).map((p) => `- \`${p}\``).join('\n') || '- (پروژه جدید)';
+    state.workspace.files[targetPath] = `# AGENTS.md — قوانین و معماری پروژه\n\n## معرفی و استک فنی\n- این فایل به صورت خودکار توسط عامل (مشابه GPT Codex و Claude Code) پیش از هر تغییر خوانده می‌شود.\n\n## فایل‌های کلیدی فعلی\n${sampleList}\n\n## استانداردهای کدنویسی و تست\n- پیش از ویرایش، فایل هدف را کامل بخوانید و با کمترین تغییر هدفمند (\`apply_patch\`) اصلاح کنید.\n- از قرار دادن هرگونه کلید API یا توکن محرمانه در کد خودداری کنید.\n- پس از هر تغییر، صحت سینتکس و تست‌ها را بررسی کنید.\n`;
+    state.dirtyFiles.add(targetPath);
+  }
+  state.workspace.active = targetPath;
+  renderTree();
+  renderEditor();
+  await persistWorkspace();
+  closeModal('codexModal');
+  setWorkspaceView('editor');
+  toast('فایل AGENTS.md آماده و باز شد');
+}
+
 async function boot() {
   try {
+    const savedTheme = localStorage.getItem(THEME_STORE);
+    const savedAgentCfg = localStorage.getItem(AGENT_CFG_STORE);
+    if (savedAgentCfg) {
+      const parsedCfg = JSON.parse(savedAgentCfg);
+      if (parsedCfg && typeof parsedCfg === 'object') {
+        state.agentConfig = { ...DEFAULT_CLIENT_AGENT_CONFIG, ...parsedCfg };
+      }
+    }
+    if (savedTheme) state.agentConfig.theme = savedTheme;
     state.selectedModel = localStorage.getItem(MODEL_STORE) || '';
     const savedThink = localStorage.getItem(THINK_STORE);
     state.thinking = savedThink === null ? true : savedThink === '1';
@@ -1507,6 +2332,7 @@ async function boot() {
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) state.effortByModel = parsed;
     }
   } catch { /* ignore */ }
+  syncAgentUi();
   syncModelState();
   renderTerminalIntro();
   setSync('busy', 'در حال بررسی نشست…');
@@ -1536,10 +2362,24 @@ async function boot() {
       state.provider = config.provider || null;
       state.defaultModel = config.model || '—';
       if (Array.isArray(config.models)) state.availableModels = config.models;
-      state.contextBudget = config.contextBudgetTokens || 24000;
+      if (config.agentConfig && typeof config.agentConfig === 'object') {
+        state.agentConfig = { ...DEFAULT_CLIENT_AGENT_CONFIG, ...config.agentConfig };
+      }
+      state.contextBudget = config.contextBudgetTokens || state.agentConfig.contextBudget || 24000;
       state.sandbox = Boolean(config.sandbox);
       state.linuxRunner = Boolean(config.linuxRunner);
       state.executionMode = config.executionMode || (state.sandbox ? 'sandbox' : state.linuxRunner ? 'linux-container' : 'virtual');
+      // If user switched to a custom provider (e.g. Zro) and stale localStorage selectedModel isn't in catalog, clear stale selection so provider's active model works cleanly!
+      if (
+        state.provider?.usingCustom &&
+        state.selectedModel &&
+        state.availableModels.length > 0 &&
+        !state.availableModels.some((m) => m.id === state.selectedModel)
+      ) {
+        state.selectedModel = '';
+        try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
+      }
+      syncAgentUi();
       syncModelState();
       syncShellBadge();
       renderTerminalIntro();
@@ -1831,12 +2671,19 @@ async function removeConversation(conv) {
 }
 
 function updateContextMeter(conv) {
-  const used = Math.min(1, (state.contextTokens || 0) / state.contextBudget);
-  $('ctxBar').style.width = Math.round(used * 100) + '%';
-  $('ctxLabel').textContent = 'زمینه ' + faNum(Math.round(used * 100)) + '٪';
+  const used = Math.min(1, (state.contextTokens || 0) / (state.contextBudget || 24000));
+  const pct = Math.round(used * 100);
+  $('ctxBar').style.width = pct + '%';
+  $('ctxLabel').textContent = 'زمینه ' + faNum(pct) + '٪';
   if (conv && conv.summaryUntil) {
     $('ctxLabel').title = 'خلاصه‌ی حافظه تا پیام ' + conv.summaryUntil;
   }
+  const slCtx = $('slCtxText');
+  if (slCtx) {
+    slCtx.textContent = `Ctx ${pct}%`;
+    slCtx.style.color = pct >= 85 ? '#ff8f85' : pct >= 65 ? 'var(--claude-amber)' : '';
+  }
+  syncAgentUi();
   renderTopTokenBadge();
 }
 
@@ -1881,6 +2728,19 @@ function getActiveModelContextMax() {
   return state.contextBudget || 128_000;
 }
 
+function formatResetCountdown(isoStr) {
+  if (!isoStr) return '';
+  const ts = Date.parse(isoStr);
+  if (!Number.isFinite(ts)) return '';
+  const diffMs = ts - Date.now();
+  if (diffMs <= 0) return 'در حال ریست';
+  const mins = Math.ceil(diffMs / 60000);
+  if (mins < 60) return `ریست تا ${faNum(mins)} دقیقه دیگر`;
+  const hrs = Math.floor(mins / 60);
+  const remM = mins % 60;
+  return remM > 0 ? `ریست تا ${faNum(hrs)} ساعت و ${faNum(remM)} دقیقه دیگر` : `ریست تا ${faNum(hrs)} ساعت دیگر`;
+}
+
 function computeRemainingSummary() {
   const maxCtx = getActiveModelContextMax();
   const usedCtx = Math.max(0, Number(state.contextTokens) || 0);
@@ -1907,7 +2767,24 @@ function computeRemainingSummary() {
 
   const hasRemTokens = q && q.supported && Number.isFinite(q.remainingTokens);
   const hasRemMoney = q && q.supported && Number.isFinite(q.remainingBalance ?? q.remainingUsd);
+  const hasRemPercent = q && q.supported && Number.isFinite(q.remainingPercent);
   const moneyVal = hasRemMoney ? Number(q.remainingBalance ?? q.remainingUsd) : null;
+
+  // Priority 0.5: Zro Free-plan percentage window (e.g. zro.moonmath.ai /api/cli/status -> remainingPercent: 40)
+  if (hasRemPercent && (q.plan === 'free' || (!hasRemTokens && !hasRemMoney))) {
+    const pct = Math.max(0, Math.min(100, Math.round(q.remainingPercent)));
+    const ratio = pct / 100;
+    const resetNote = formatResetCountdown(q.windowResetsAt);
+    return {
+      mode: 'provider_percent',
+      badge: `🪙 Free ${pct}%`,
+      ratio,
+      tooltip: `سهمیه واقعی حساب (${q.source || 'API'}): ${pct}% باقی‌مانده${resetNote ? ` · ${resetNote}` : ''}`,
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
 
   // Priority 1: Live remaining tokens from provider API (e.g. tooken.club /v1/balance, OneAPI)
   // Note: if remainingTokens === 0 BUT the user has positive monetary balance (e.g. RUB balance after bonus tokens), show money!
@@ -2041,26 +2918,38 @@ function renderQuotaModalBody() {
   const moneyAmt = Number(q?.remainingBalance ?? q?.remainingUsd);
   const hasMoney = q && q.supported && Number.isFinite(moneyAmt);
   const hasTok = q && q.supported && Number.isFinite(q.remainingTokens);
+  const hasPct = q && q.supported && Number.isFinite(q.remainingPercent);
   if (!q) {
     providerHtml = `<div style="font-size:12px;color:#9aa1ae">در حال بررسی اندپوینت سهمیه <code style="direction:ltr">${esc(activeHost)}</code>…</div>`;
   } else if (q.supported && q.unlimited) {
     providerHtml = `<div style="font-size:13px;color:#7ee2a8;font-weight:700">♾ نامحدود (Unlimited Key)</div>
       <div style="font-size:11px;color:#8e95a2;margin-top:4px">منبع: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · مصرف کلید: ${formatExactTokens(q.usedTokens)} توکن` : ''}</div>`;
-  } else if (hasTok || hasMoney) {
+  } else if (hasPct || hasTok || hasMoney) {
     let rows = '';
+    if (hasPct) {
+      const pct = Math.max(0, Math.min(100, Math.round(q.remainingPercent)));
+      const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
+      const resetTxt = formatResetCountdown(q.windowResetsAt);
+      rows += `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <span style="font-size:18px;font-weight:700;color:var(--text);direction:ltr">${pct}% Remaining${q.plan ? ` (${esc(String(q.plan).toUpperCase())})` : ''}</span>
+          <span style="font-size:11.5px;color:var(--muted)">${resetTxt ? esc(resetTxt) : 'پنجره سهمیه فعال'}</span>
+        </div>
+        <div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>`;
+    }
     if (hasTok) {
       const pct = Number.isFinite(q.limitTokens) && q.limitTokens > 0
         ? Math.max(0, Math.min(100, Math.round((q.remainingTokens / q.limitTokens) * 100)))
         : (q.remainingTokens > 0 ? 100 : 0);
       const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
       rows += `
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-          <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${formatExactTokens(q.remainingTokens)} tok</span>
-          <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(q.limitTokens) ? `از ${formatExactTokens(q.limitTokens)}` : 'توکن باقی‌مانده در سایت'}</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:${hasPct ? '10px' : '0'}">
+          <span style="font-size:18px;font-weight:700;color:var(--text);direction:ltr">${formatExactTokens(q.remainingTokens)} tok</span>
+          <span style="font-size:11.5px;color:var(--muted);direction:ltr">${Number.isFinite(q.limitTokens) ? `از ${formatExactTokens(q.limitTokens)}` : 'توکن باقی‌مانده در سایت'}</span>
         </div>
         <div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>`;
     }
-    if (hasMoney) {
+    if (hasMoney && !(hasPct && q.plan === 'free')) {
       const limMoney = Number(q.limitBalance ?? q.limitUsd);
       const usedMoney = Number(q.usedBalance ?? q.usedUsd);
       const pct = Number.isFinite(limMoney) && limMoney > 0
@@ -2068,17 +2957,21 @@ function renderQuotaModalBody() {
         : (moneyAmt > 0 ? 100 : 0);
       const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
       rows += `
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:${hasTok ? '10px' : '0'}">
-          <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${formatProviderMoney(moneyAmt, q.currency, 4)}</span>
-          <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(limMoney) && limMoney > 0 ? `از ${formatProviderMoney(limMoney, q.currency, 2)}` : 'تراز مالی فعال'}</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:${hasTok || hasPct ? '10px' : '0'}">
+          <span style="font-size:18px;font-weight:700;color:var(--text);direction:ltr">${formatProviderMoney(moneyAmt, q.currency, 4)}</span>
+          <span style="font-size:11.5px;color:var(--muted);direction:ltr">${Number.isFinite(limMoney) && limMoney > 0 ? `از ${formatProviderMoney(limMoney, q.currency, 2)}` : 'تراز مالی فعال'}</span>
         </div>
-        ${!hasTok ? `<div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>` : ''}
+        ${!hasTok && !hasPct ? `<div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>` : ''}
+        ${Number.isFinite(q.packsRemainingUsd) && q.packsRemainingUsd > 0 ? `<div style="font-size:11px;color:var(--claude-amber);margin-top:4px;direction:ltr;text-align:left">+ Usage Packs remaining: ${formatProviderMoney(q.packsRemainingUsd, q.currency, 2)}</div>` : ''}
         ${Number.isFinite(q.reservedBalance) && q.reservedBalance > 0 ? `<div style="font-size:11px;color:#f5b14c;margin-top:4px;direction:ltr;text-align:left">Reserved hold: ${formatProviderMoney(q.reservedBalance, q.currency, 4)}</div>` : ''}
-        ${Number.isFinite(usedMoney) && usedMoney > 0 ? `<div style="font-size:11px;color:#8e95a2;margin-top:4px">هزینه مصرف‌شده در سرویس: <b style="direction:ltr">${formatProviderMoney(usedMoney, q.currency, 4)}</b></div>` : ''}`;
+        ${Number.isFinite(usedMoney) && usedMoney > 0 ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">هزینه مصرف‌شده در سرویس: <b style="direction:ltr">${formatProviderMoney(usedMoney, q.currency, 4)}</b></div>` : ''}`;
     }
+    const cacheReadStr = Number.isFinite(q.providerUsage?.cacheReadTokens) && q.providerUsage.cacheReadTokens > 0
+      ? ` · Cache Read: <b style="direction:ltr">${formatExactTokens(q.providerUsage.cacheReadTokens)}</b>`
+      : '';
     providerHtml = `
       ${rows}
-      <div style="font-size:11px;color:#8e95a2;margin-top:6px">منبع مستقیم: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · کل مصرف در سرویس: <b style="direction:ltr">${formatExactTokens(q.usedTokens)}</b> توکن` : ''}</div>`;
+      <div style="font-size:11px;color:var(--muted);margin-top:6px">منبع مستقیم: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · کل مصرف در سرویس: <b style="direction:ltr">${formatExactTokens(q.usedTokens)}</b> توکن` : ''}${cacheReadStr}</div>`;
   } else {
     providerHtml = `<div style="font-size:12px;color:#b8c0cf;line-height:1.7">
       درگاه <code style="direction:ltr">${esc(activeHost)}</code> اندپوینت عمومی مانده‌حساب کلید را بازنگرداند؛ بنابراین در نوار بالا به جای عدد فرضی، <b>مصرف واقعی ثبت‌شده</b> نمایش داده می‌شود. (در صورت داشتن سقف بسته، در پایین وارد کنید تا خودکار کسر شود.)
@@ -2548,19 +3441,52 @@ const TOOL_LABELS = {
   fetch_url: '🔗 فراخوانی لینک / API'
 };
 
+function claudeMascotSvg() {
+  return `<svg class="claude-pixel-svg" viewBox="0 0 16 14" aria-hidden="true">
+    <rect x="4" y="1" width="2" height="1.2" fill="#F5936C"/>
+    <rect x="10" y="1" width="2" height="1.2" fill="#F5936C"/>
+    <rect x="3" y="2" width="10" height="8" rx="1" fill="#E87B52"/>
+    <rect x="1.8" y="4" width="12.4" height="4.5" rx=".8" fill="#E87B52"/>
+    <rect class="claude-pixel-eye" x="5" y="4.2" width="1.7" height="2.4" fill="#1E1410"/>
+    <rect class="claude-pixel-eye" x="9.3" y="4.2" width="1.7" height="2.4" fill="#1E1410"/>
+    <rect x="6.8" y="7.4" width="2.4" height="1" fill="#F8C6A8" opacity=".85"/>
+    <rect x="3.2" y="10" width="2" height="2.8" fill="#C95F38"/>
+    <rect x="6" y="10" width="1.6" height="2.2" fill="#C95F38"/>
+    <rect x="8.4" y="10" width="1.6" height="2.2" fill="#C95F38"/>
+    <rect x="10.8" y="10" width="2" height="2.8" fill="#C95F38"/>
+  </svg>`;
+}
+
 function welcomeHtml() {
+  const modeMeta = AGENT_MODE_META[state.agentConfig?.mode || 'auto-edit'] || AGENT_MODE_META['auto-edit'];
+  const host = state.provider?.activeHost || 'tooken.club';
+  const modelTxt = state.modelLabel && state.modelLabel !== '—' ? state.modelLabel : 'انتخاب خودکار';
   return `<div class="welcome">
-    <h2>سلام! دستیار کدنویسی پیشرفته آماده است.</h2>
-    <p>مجهز به انتخاب مدل زنده، تفکر عمیق، اجرای واقعی دستورات لینوکس در کانتینر ایزوله، جست‌وجوی زنده اینترنت و API، و کامیت اتمیک مستقیم روی مخزن GitHub.</p>
-    <ol>
-      <li>از بالای پنل چت یا دکمه‌ی <b>✦ مدل</b>، قوی‌ترین مدل دلخواه (مثل <code>claude-opus-5-5</code> یا <code>gpt-6.1-sol</code>) را انتخاب کنید.</li>
-      <li>دستیار می‌تواند دستورات واقعی لینوکس، Python و Node را اجرا کند، وب و APIها را زنده بخواند، و حتی کدهای خودش را در GitHub ارتقا دهد.</li>
-      <li>تمام گفتگوها، نسخه‌های فایل و حافظه‌ی بلندمدت در Cloudflare D1 ذخیره می‌شوند.</li>
-    </ol>
+    <div class="welcome-hero">
+      <div class="claude-mascot-wrap">${claudeMascotSvg()}</div>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:11px;color:var(--claude-bright);font-weight:700;letter-spacing:.03em">✳ CLAUDE CODE &amp; GPT CODEX WORKSPACE</div>
+        <h2 style="margin:3px 0 0">سلام! دستیار هوشمند کدنویسی آماده کار است.</h2>
+      </div>
+    </div>
+    <p>مجهز به جریان زنده پاسخ، ۴ حالت خودمختاری عامل (<b>Plan · Suggest · Auto-Edit · Full-Auto</b>)، دستورات سریع اسلش (<code>/</code>)، ارجاع مستقیم به فایل‌ها (<code>@</code>)، خواندن خودکار <code>AGENTS.md</code> و اتصال زنده به مخزن GitHub.</p>
+    <div class="welcome-meta-pills">
+      <span class="w-chip">مدل: <b style="direction:ltr">${esc(modelTxt)}</b></span>
+      <span class="w-chip">حالت: <b>${esc(modeMeta.label)}</b></span>
+      <span class="w-chip">درگاه: <b style="direction:ltr">${esc(host)}</b></span>
+      <span class="w-chip">فایل‌ها: <b>${faNum(Object.keys(state.workspace?.files || {}).length)}</b></span>
+    </div>
     <div class="suggestions">
-      <button onclick="quickPrompt('فایل‌های پروژه را بررسی کن و معماری فعلی را دقیق توضیح بده.')">بررسی معماری پروژه</button>
-      <button onclick="quickPrompt('در لینوکس نسخه‌ی کرنل، Node و Python را با اجرای واقعی دستور بررسی کن.')">تست اجرای واقعی لینوکس</button>
-      <button onclick="quickPrompt('آخرین اخبار و فناوری‌های روز دنیای هوش مصنوعی را از اینترنت جست‌وجو کن و خلاصه بگو.')">جست‌وجوی زنده وب</button>
+      <button type="button" onclick="quickPrompt('/plan معماری فعلی پروژه را تحلیل کن و نقشه ارتقا و بهبود آن را گام‌به‌گام پیشنهاد بده.')">🧭 تحلیل معماری در حالت Plan</button>
+      <button type="button" onclick="executeSlashCommand('/review')">🔍 بازبینی تخصصی کدها (/review)</button>
+      <button type="button" onclick="scaffoldAgentsMdFile()">📄 ساخت فایل استاندارد AGENTS.md</button>
+      <button type="button" onclick="quickPrompt('در لینوکس نسخه‌ی کرنل، Node و Python را با اجرای واقعی دستور بررسی کن.')">🐧 تست اجرای واقعی لینوکس</button>
+    </div>
+    <div class="welcome-tip">
+      <span><kbd>Shift+Tab</kbd> تغییر حالت عامل</span>
+      <span><kbd>/</kbd> پالت دستورات کلود کد</span>
+      <span><kbd>@</kbd> انتخاب فایل پروژه</span>
+      <span><kbd>Ctrl+K</kbd> جست‌وجو در کد</span>
     </div>
   </div>`;
 }
@@ -2838,12 +3764,357 @@ $('prompt').addEventListener('paste', event => {
   if (files?.length) { event.preventDefault(); queueAttachments(files); }
 });
 
-async function sendMessage() {
+const CLAUDE_SPINNER_VERBS = [
+  'در حال کاوش و خواندن کدها…',
+  'در حال استدلال و تحلیل معماری…',
+  'در حال طراحی پچ دقیق…',
+  'در حال بررسی لبه‌های خطا…',
+  'در حال سنتز و نگارش پاسخ…',
+  'در حال هماهنگی با ساختار پروژه…'
+];
+
+const SLASH_COMMANDS = [
+  { cmd: '/plan', args: '[درخواست]', desc: 'ورود به حالت Plan (طراحی نقشه بدون دست‌زدن به فایل‌ها)' },
+  { cmd: '/suggest', args: '[درخواست]', desc: 'ورود به حالت Suggest (ارائه کد پیشنهادی بدون اعمال خودکار)' },
+  { cmd: '/auto', args: '', desc: 'فعال‌سازی حالت Auto-Edit (ویرایش هوشمند خودکار فایل‌ها)' },
+  { cmd: '/full', args: '[درخواست]', desc: 'فعال‌سازی حالت Full-Auto (اجرای زنجیره‌ای تا ۳۲ گام)' },
+  { cmd: '/review', args: '[بخش]', desc: 'بازبینی موشکافانه کدها مثل Senior Reviewer در GPT Codex' },
+  { cmd: '/init', args: '', desc: 'ساخت یا باز کردن فایل استاندارد AGENTS.md برای پروژه' },
+  { cmd: '/compact', args: '', desc: 'فشرده‌سازی هوشمند تاریخچه گفتگو برای آزادسازی پنجره زمینه' },
+  { cmd: '/fork', args: '[عنوان]', desc: 'انشعاب (Fork) این گفتگو همراه با تمام فایل‌ها در گفتگوی جدید' },
+  { cmd: '/diff', args: '', desc: 'نمایش پنل تغییرات آخرین ویرایش‌ها (+X -Y)' },
+  { cmd: '/goal', args: '[هدف]', desc: 'تنظیم یا پاک‌کردن هدف پایدار جلسه (Session Goal)' },
+  { cmd: '/codex', args: '', desc: 'باز کردن پنجره تنظیمات پیشرفته عامل (Codex & Claude Code)' },
+  { cmd: '/model', args: '', desc: 'انتخاب مدل هوش مصنوعی و تنظیم سطح استدلال (Effort)' },
+  { cmd: '/theme', args: '', desc: 'تغییر فوری تم رنگی (کلود کد گرم نارنجی / روشن کرم / تاریک)' },
+  { cmd: '/status', args: '', desc: 'نمایش خلاصه وضعیت مدل، سهمیه API، حالت عامل و توکن‌ها' },
+  { cmd: '/doctor', args: '', desc: 'عیب‌یابی کامل اتصال سرور، پایگاه‌داده D1 و سرویس مدل' },
+  { cmd: '/clear', args: '', desc: 'شروع یک گفتگوی جدید و تمیز' }
+];
+
+function closeFloatingPalettes() {
+  $('slashMenu')?.classList.remove('open');
+  $('mentionMenu')?.classList.remove('open');
+  state.paletteKind = '';
+  state.paletteItems = [];
+  state.paletteIndex = 0;
+}
+
+function renderFloatingPalette(kind, items) {
+  const slashEl = $('slashMenu');
+  const mentionEl = $('mentionMenu');
+  if (!slashEl || !mentionEl) return;
+  if (!items.length) {
+    closeFloatingPalettes();
+    return;
+  }
+  state.paletteKind = kind;
+  state.paletteItems = items;
+  state.paletteIndex = Math.min(state.paletteIndex, items.length - 1);
+  const target = kind === 'slash' ? slashEl : mentionEl;
+  const other = kind === 'slash' ? mentionEl : slashEl;
+  other.classList.remove('open');
+  target.innerHTML = items
+    .map((item, idx) => `<button type="button" class="palette-item${idx === state.paletteIndex ? ' active' : ''}" role="option" onmousedown="event.preventDefault();pickPaletteItem(${idx})">
+      <span class="palette-desc">${esc(item.desc || '')}</span>
+      <span class="palette-cmd">${esc(item.label)}</span>
+    </button>`)
+    .join('');
+  target.classList.add('open');
+}
+
+function pickPaletteItem(idx) {
+  const item = state.paletteItems[idx];
+  const input = $('prompt');
+  if (!item || !input) return;
+  if (state.paletteKind === 'slash') {
+    closeFloatingPalettes();
+    if (item.args) {
+      input.value = item.cmd + ' ';
+      input.focus();
+    } else {
+      input.value = '';
+      executeSlashCommand(item.cmd);
+    }
+  } else if (state.paletteKind === 'mention') {
+    const val = input.value;
+    const caret = input.selectionStart ?? val.length;
+    const before = val.slice(0, caret).replace(/@[^\s@]*$/, `@${item.path} `);
+    const after = val.slice(caret);
+    input.value = before + after;
+    closeFloatingPalettes();
+    input.focus();
+    const pos = before.length;
+    input.setSelectionRange(pos, pos);
+  }
+}
+
+function toggleSlashPalette() {
+  const slashEl = $('slashMenu');
+  if (slashEl?.classList.contains('open')) {
+    closeFloatingPalettes();
+    return;
+  }
+  const input = $('prompt');
+  if (input && !input.value.startsWith('/')) {
+    input.value = '/';
+    input.focus();
+  }
+  state.paletteIndex = 0;
+  renderFloatingPalette(
+    'slash',
+    SLASH_COMMANDS.map((c) => ({ ...c, label: c.args ? `${c.cmd} ${c.args}` : c.cmd }))
+  );
+}
+
+function toggleMentionPalette() {
+  const mentionEl = $('mentionMenu');
+  if (mentionEl?.classList.contains('open')) {
+    closeFloatingPalettes();
+    return;
+  }
+  const files = Object.keys(state.workspace?.files || {}).sort();
+  if (!files.length) {
+    toast('هنوز فایلی در پروژه نیست؛ ابتدا فایل بسازید یا مخزن وصل کنید');
+    return;
+  }
+  const input = $('prompt');
+  if (input) {
+    if (input.value && !input.value.endsWith(' ') && !input.value.endsWith('@')) input.value += ' @';
+    else if (!input.value.endsWith('@')) input.value += '@';
+    input.focus();
+  }
+  state.paletteIndex = 0;
+  renderFloatingPalette(
+    'mention',
+    files.slice(0, 20).map((p) => ({ path: p, label: `@${p}`, desc: `${faNum((state.workspace.files[p] || '').split('\n').length)} خط` }))
+  );
+}
+
+function onPromptInput() {
+  const input = $('prompt');
+  if (!input) return;
+  const val = input.value;
+  if (val.startsWith('/') && !val.includes('\n')) {
+    const firstToken = val.split(/\s+/)[0].toLowerCase();
+    if (!val.includes(' ')) {
+      const matches = SLASH_COMMANDS
+        .filter((c) => c.cmd.startsWith(firstToken))
+        .map((c) => ({ ...c, label: c.args ? `${c.cmd} ${c.args}` : c.cmd }));
+      state.paletteIndex = 0;
+      renderFloatingPalette('slash', matches);
+      return;
+    }
+  }
+  const caret = input.selectionStart ?? val.length;
+  const before = val.slice(0, caret);
+  const atMatch = before.match(/(?:^|\s)@([^\s@]*)$/);
+  if (atMatch) {
+    const q = atMatch[1].toLowerCase();
+    const files = Object.keys(state.workspace?.files || {})
+      .filter((p) => p.toLowerCase().includes(q))
+      .sort()
+      .slice(0, 16)
+      .map((p) => ({ path: p, label: `@${p}`, desc: `${faNum((state.workspace.files[p] || '').split('\n').length)} خط` }));
+    state.paletteIndex = 0;
+    renderFloatingPalette('mention', files);
+    return;
+  }
+  closeFloatingPalettes();
+}
+
+function onPromptKeydown(event) {
+  if (event.key === 'Tab' && event.shiftKey) {
+    event.preventDefault();
+    cycleAgentMode();
+    return;
+  }
+  if (state.paletteKind && state.paletteItems.length) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      state.paletteIndex = (state.paletteIndex + 1) % state.paletteItems.length;
+      renderFloatingPalette(state.paletteKind, state.paletteItems);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      state.paletteIndex = (state.paletteIndex - 1 + state.paletteItems.length) % state.paletteItems.length;
+      renderFloatingPalette(state.paletteKind, state.paletteItems);
+      return;
+    }
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+      event.preventDefault();
+      pickPaletteItem(state.paletteIndex);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeFloatingPalettes();
+      return;
+    }
+  }
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
+  }
+}
+
+function appendLocalSystemNotice(html) {
+  const chat = $('chat');
+  if (!chat) return;
+  chat.querySelector('.welcome')?.remove();
+  const box = document.createElement('div');
+  box.className = 'msg system';
+  box.innerHTML = html;
+  chat.appendChild(box);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function executeSlashCommand(rawText) {
+  const trimmed = String(rawText || '').trim();
+  const m = trimmed.match(/^(\/[a-zA-Z-]+)(?:\s+([\s\S]*))?$/);
+  if (!m) return false;
+  const cmd = m[1].toLowerCase();
+  const rest = (m[2] || '').trim();
+
+  switch (cmd) {
+    case '/plan':
+      cycleAgentMode('plan');
+      if (rest) return sendMessage(rest, { modeOverride: 'plan' });
+      return true;
+    case '/suggest':
+      cycleAgentMode('suggest');
+      if (rest) return sendMessage(rest, { modeOverride: 'suggest' });
+      return true;
+    case '/auto':
+      cycleAgentMode('auto-edit');
+      if (rest) return sendMessage(rest, { modeOverride: 'auto-edit' });
+      return true;
+    case '/full':
+      cycleAgentMode('full-auto');
+      if (rest) return sendMessage(rest, { modeOverride: 'full-auto' });
+      return true;
+    case '/review': {
+      const reviewPrompt = rest
+        ? `به عنوان یک مهندس ارشد بازبین کد (Senior Code Reviewer مشابه GPT Codex /review)، بخش یا موضوع زیر را در فایل‌های پروژه با دقت بازبینی کن و باگ‌های احتمالی، ریسک‌های امنیتی، لبه‌های خطا و پیشنهادهای دقیق اصلاحی را فهرست کن:\n${rest}`
+        : 'به عنوان یک مهندس ارشد بازبین کد (Senior Code Reviewer مشابه GPT Codex /review)، فایل‌های فعلی پروژه را عمیق بررسی کن و باگ‌های احتمالی، مشکلات امنیتی، خطاهای منطقی و پیشنهادهای بهینه‌سازی را به تفکیک فایل و خط گزارش بده.';
+      return sendMessage(reviewPrompt, { modeOverride: 'plan' });
+    }
+    case '/init':
+      await scaffoldAgentsMdFile();
+      return true;
+    case '/compact': {
+      if (!state.conversationId) return toast('گفتگوی فعالی وجود ندارد');
+      toast('در حال فشرده‌سازی هوشمند حافظه گفتگو…');
+      try {
+        const res = await api(API.state, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'compact', id: state.conversationId })
+        });
+        if (res.compacted) {
+          state.contextTokens = Math.max(400, Math.round((state.contextTokens || 2000) * 0.28));
+          updateContextMeter({ summaryUntil: res.summaryUntil });
+          appendLocalSystemNotice(`✳ <b>فشرده‌سازی حافظه (/compact) انجام شد:</b> تا پیام ${faNum(res.summaryUntil || 0)} خلاصه‌سازی شد تا پنجره زمینه سبک و سریع بماند.`);
+        } else {
+          toast(res.reason || 'گفتگو کوتاه است و نیازی به فشرده‌سازی ندارد');
+        }
+      } catch (err) {
+        toast('خطا در فشرده‌سازی: ' + err.message);
+      }
+      return true;
+    }
+    case '/fork': {
+      if (!state.conversationId) return toast('گفتگوی فعالی برای انشعاب وجود ندارد');
+      try {
+        const res = await api(API.state, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'fork', id: state.conversationId, title: rest || undefined })
+        });
+        await loadConversations();
+        if (res.id) await openConversation(res.id);
+        toast('⑂ گفتگوی فعلی با موفقیت منشعب (Fork) شد');
+      } catch (err) {
+        toast('خطا در انشعاب گفتگو: ' + err.message);
+      }
+      return true;
+    }
+    case '/diff':
+      if (state.diffs?.length) {
+        showDiff(state.diffs, state.diffs.map((d) => d.path));
+        setWorkspaceView('editor');
+      } else {
+        toast('تغییر ثبت‌شده‌ای در نوبت اخیر وجود ندارد');
+      }
+      return true;
+    case '/goal':
+      await persistAgentConfigPatch({ goal: rest }, false);
+      toast(rest ? `🎯 هدف جلسه ثبت شد: ${rest}` : 'هدف جلسه پاک شد');
+      return true;
+    case '/codex':
+      openCodexModal();
+      return true;
+    case '/model':
+      openModelModal();
+      return true;
+    case '/theme':
+      cycleTheme();
+      return true;
+    case '/doctor':
+      openApiConnection();
+      return true;
+    case '/status': {
+      const qSummary = computeRemainingSummary();
+      const modeMeta = AGENT_MODE_META[state.agentConfig.mode] || AGENT_MODE_META['auto-edit'];
+      appendLocalSystemNotice(
+        `✳ <b>وضعیت نشست CodePilot</b>\n` +
+        `• مدل فعال: <code>${esc(state.modelLabel)}</code> (Effort: <code>${esc(state.reasoningEffort || 'none')}</code>)\n` +
+        `• درگاه API: <code>${esc(state.provider?.effectiveBaseUrl || 'https://tooken.club/v1')}</code>\n` +
+        `• سهمیه و مصرف: <b>${esc(qSummary.badge)}</b> — ${esc(qSummary.tooltip)}\n` +
+        `• حالت عامل: <b>${esc(modeMeta.label)}</b> · وب: ${state.agentConfig.networkAccess !== false ? 'فعال' : 'غیرفعال'} · شل: ${state.agentConfig.shellAccess !== false ? 'فعال' : 'غیرفعال'}`
+      );
+      return true;
+    }
+    case '/clear':
+      await newConversation(true);
+      return true;
+    default:
+      return false;
+  }
+}
+
+function renderTurnDiffCardHtml(diffs) {
+  if (!Array.isArray(diffs) || !diffs.length) return '';
+  const rows = diffs
+    .slice(0, 8)
+    .map((d) => `<div class="turn-diff-row" onclick="openFile('${esc(d.path)}');setWorkspaceView('editor')" title="کلیک برای مشاهده فایل در ویرایشگر">
+      <span>📄 ${esc(d.path)}</span>
+      <span><span class="diff-add-pill">+${Number(d.added || 0)}</span> <span class="diff-del-pill">-${Number(d.removed || 0)}</span></span>
+    </div>`)
+    .join('');
+  return `<div class="turn-diff-card">
+    <div class="turn-diff-head">
+      <span>🩹 خلاصه تغییرات اعمال‌شده (${faNum(diffs.length)} فایل)</span>
+      <button type="button" class="icon-btn" onclick="showDiff(state.diffs, state.diffs.map(d=>d.path));setWorkspaceView('editor')" style="min-height:30px">مشاهده Diff</button>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+async function sendMessage(overrideText, opts = {}) {
   if (state.busy) return;
   if (pendingAttachments.some(file => file.status !== 'ready')) return toast('ابتدا آپلود همهٔ فایل‌ها باید کامل شود');
   const input = $('prompt');
+  closeFloatingPalettes();
+  const rawInput = typeof overrideText === 'string' ? overrideText : input.value.trim();
+  if (!overrideText && rawInput.startsWith('/')) {
+    const handled = await executeSlashCommand(rawInput);
+    if (handled) {
+      input.value = '';
+      return;
+    }
+  }
   const attachments = pendingAttachments.map(({id,name,type,size}) => ({id,name,type,size}));
-  const text = input.value.trim() || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
+  const text = rawInput || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
   if (!text) return;
   if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
   if (!state.conversationId) {
@@ -2851,11 +4122,20 @@ async function sendMessage() {
     if (!id) return;
   }
 
+  // Highlight @mentioned file in editor if present
+  const fileMention = text.match(/(?:^|\s)@([a-zA-Z0-9_./-]+)/);
+  if (fileMention && state.workspace?.files?.[fileMention[1]]) {
+    state.workspace.active = fileMention[1];
+    renderTree();
+    renderEditor();
+  }
+
   state.busy = true;
+  document.body.classList.add('is-working');
   $('sendBtn').disabled = true;
-  $('sendBtn').textContent = 'در حال کار…';
-  $('composerHint').textContent = 'در حال اجرا…';
-  input.value = '';
+  $('sendBtn').textContent = '✳ در حال کار…';
+  $('composerHint').textContent = 'در حال استدلال و اجرا…';
+  if (!overrideText) input.value = '';
 
   if (state.repoSyncPromise) {
     setSync('busy', 'همگام‌سازی فایل‌های مخزن GitHub…');
@@ -2869,18 +4149,48 @@ async function sendMessage() {
 
   const bubble = document.createElement('div');
   bubble.className = 'msg assistant';
-  bubble.innerHTML = '<div class="think-stream"></div><div class="msg-text"><span class="typing"><i></i><i></i><i></i></span></div>';
+  bubble.innerHTML =
+    `<div class="claude-spinner-bar">` +
+    `<span class="claude-star">✳</span>` +
+    `<span class="claude-verb">${esc(CLAUDE_SPINNER_VERBS[0])}</span>` +
+    `<span class="claude-elapsed">0.0s</span>` +
+    `</div>` +
+    `<div class="think-stream"></div><div class="msg-text"><span class="typing"><i></i><i></i><i></i></span></div>`;
   $('chat').appendChild(bubble);
   $('chat').scrollTop = $('chat').scrollHeight;
+
+  const startedAt = Date.now();
+  let verbIdx = 0;
+  const spinTimer = setInterval(() => {
+    const bar = bubble.querySelector('.claude-spinner-bar');
+    if (!bar) return;
+    const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const elEl = bar.querySelector('.claude-elapsed');
+    if (elEl) elEl.textContent = `${sec}s`;
+    if (Math.floor((Date.now() - startedAt) / 2800) !== verbIdx) {
+      verbIdx = Math.floor((Date.now() - startedAt) / 2800);
+      const vEl = bar.querySelector('.claude-verb');
+      if (vEl) vEl.textContent = CLAUDE_SPINNER_VERBS[verbIdx % CLAUDE_SPINNER_VERBS.length];
+    }
+  }, 200);
+
+  const resolvedModel =
+    state.selectedModel ||
+    (state.defaultModel && state.defaultModel !== '—' ? state.defaultModel : undefined);
+  const turnMode = opts.modeOverride || state.agentConfig?.mode || 'auto-edit';
 
   try {
     const reqBody = JSON.stringify({
       conversationId: state.conversationId,
       message: text,
       attachments,
-      model: state.selectedModel || undefined,
+      model: resolvedModel,
       reasoningEffort: state.reasoningEffort,
       thinking: state.thinking,
+      agentMode: turnMode,
+      networkAccess: state.agentConfig?.networkAccess !== false,
+      shellAccess: state.agentConfig?.shellAccess !== false,
+      temperature: state.agentConfig?.temperature ?? 0.25,
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
     let response;
@@ -2918,7 +4228,14 @@ async function sendMessage() {
     if (result.ok) {
       await reloadCurrentConversation();
       renderTurnNotices();
-      if (state.repo && (result.touchedFiles.length || result.deletedFiles.length)) {
+      if (state.diffs?.length) {
+        const bubbles = $('chat').querySelectorAll('.msg.assistant');
+        const lastBubble = bubbles[bubbles.length - 1];
+        if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
+          lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
+        }
+      }
+      if (state.repo && state.agentConfig?.autoCommitGh !== false && (result.touchedFiles.length || result.deletedFiles.length)) {
         const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
         commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
       }
@@ -2928,11 +4245,16 @@ async function sendMessage() {
     bubble.textContent = 'خطا: ' + error.message;
     state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
   } finally {
+    clearInterval(spinTimer);
+    bubble.querySelector('.claude-spinner-bar')?.remove();
+    bubble.querySelector('.msg-text')?.classList.remove('stream-cursor');
     state.busy = false;
+    document.body.classList.remove('is-working');
     renderAttachments();
     $('sendBtn').textContent = 'ارسال ↑';
-    $('composerHint').textContent = 'Enter ارسال · Shift+Enter خط جدید';
+    $('composerHint').textContent = 'Enter ارسال · Shift+Tab تغییر حالت · / دستورات';
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
+    syncAgentUi();
     loadConversations();
   }
 }
@@ -2943,6 +4265,8 @@ async function consumeStream(response, bubble) {
   const decoder = new TextDecoder();
   let buffer = '';
   let assistantText = '';
+  let streamedDraft = '';
+  let streamedThink = '';
   let touchedFiles = [];
   let deletedFiles = [];
   const thinkArea = bubble.querySelector('.think-stream');
@@ -2952,14 +4276,41 @@ async function consumeStream(response, bubble) {
   const handle = (event, data) => {
     if (event === 'status') {
       setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
+    } else if (event === 'thinking_delta') {
+      streamedThink += String(data.text || '');
+      if (thinkArea) {
+        let liveBox = thinkArea.querySelector('.live-think-stream');
+        if (!liveBox) {
+          thinkArea.insertAdjacentHTML(
+            'beforeend',
+            `<details class="think-box live-think-stream" open><summary>🧠 در حال استدلال زنده…</summary><pre></pre></details>`
+          );
+          liveBox = thinkArea.querySelector('.live-think-stream');
+        }
+        const pre = liveBox?.querySelector('pre');
+        if (pre) pre.textContent = streamedThink;
+      }
     } else if (event === 'thinking') {
+      thinkArea?.querySelector('.live-think-stream')?.remove();
+      streamedThink = '';
       if (thinkArea && (data.thought || data.plan || data.encrypted)) {
         thinkArea.insertAdjacentHTML('beforeend', renderThinkHtml(data.thought, data.plan, Boolean(data.thought || data.plan), data));
         $('chat').scrollTop = $('chat').scrollHeight;
       }
+    } else if (event === 'delta') {
+      streamedDraft += String(data.text || '');
+      textArea.classList.add('stream-cursor');
+      textArea.innerHTML = renderMarkdownish(streamedDraft);
+      const verbEl = bubble.querySelector('.claude-verb');
+      if (verbEl) verbEl.textContent = 'در حال نگارش زنده پاسخ…';
+      $('chat').scrollTop = $('chat').scrollHeight;
     } else if (event === 'tool') {
+      streamedDraft = '';
+      textArea.classList.remove('stream-cursor');
       for (const call of data.calls || []) {
         if (call.name === 'think') continue;
+        const verbEl = bubble.querySelector('.claude-verb');
+        if (verbEl) verbEl.textContent = `${TOOL_LABELS[call.name] || call.name}…`;
         bubble.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.name, call.arguments, false));
       }
       $('chat').scrollTop = $('chat').scrollHeight;
@@ -2971,14 +4322,17 @@ async function consumeStream(response, bubble) {
         const preview = String(data.result || '').slice(0, 140).replace(/\s+/g, ' ');
         line.insertAdjacentHTML(
           'beforeend',
-          `<span style="color:#6f7d92">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:160px">${esc(preview)}</span>`
+          `<span style="color:var(--muted)">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:160px">${esc(preview)}</span>`
         );
       }
     } else if (event === 'assistant') {
       assistantText = data.content || '';
+      textArea.classList.remove('stream-cursor');
       textArea.innerHTML = renderMarkdownish(assistantText);
       $('chat').scrollTop = $('chat').scrollHeight;
     } else if (event === 'done') {
+      bubble.querySelector('.claude-spinner-bar')?.remove();
+      textArea.classList.remove('stream-cursor');
       touchedFiles = Array.isArray(data.touchedFiles) ? data.touchedFiles : [];
       deletedFiles = Array.isArray(data.deletedFiles) ? data.deletedFiles : [];
       if (data.workspace) {
@@ -3503,9 +4857,18 @@ function toggleMemoryPanel() {
 }
 
 function closeModal(id) { $(id).classList.remove('open'); }
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.chatbox')) closeFloatingPalettes();
+});
 document.addEventListener('keydown', (event) => {
   const meta = event.ctrlKey || event.metaKey;
+  if (event.key === 'Tab' && event.shiftKey && event.target?.id !== 'prompt') {
+    event.preventDefault();
+    cycleAgentMode();
+    return;
+  }
   if (event.key === 'Escape') {
+    closeFloatingPalettes();
     document.querySelectorAll('.modal.open').forEach((m) => m.classList.remove('open'));
   }
   if (meta && event.key.toLowerCase() === 'k') {

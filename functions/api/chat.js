@@ -15,10 +15,11 @@
 //   5. Persist the whole assistant/tool group before streaming `done`.
 
 import { route } from '../_lib/api.js';
-import { resolveEffectiveEnv } from '../_lib/provider.js';
+import { DEFAULT_AGENT_CONFIG, isTookenUrl, normalizeAgentConfig, resolveEffectiveEnv } from '../_lib/provider.js';
 import { resolveUploadRefs, hydrateUploadParts } from '../_lib/uploads.js';
 import {
   callModel,
+  fetchProviderModels,
   getModelReasoningSpec,
   normalizeReasoningEffort,
   sanitizeModelId,
@@ -626,7 +627,26 @@ export async function onRequestPost({ request, env }) {
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
-      const selectedModel = data?.model ? sanitizeModelId(data.model, effectiveEnv) : undefined;
+      const agentConfig = normalizeAgentConfig(
+        {
+          ...(effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG),
+          ...(data?.agentMode ? { mode: data.agentMode } : {}),
+          ...(typeof data?.networkAccess === 'boolean' ? { networkAccess: data.networkAccess } : {}),
+          ...(typeof data?.shellAccess === 'boolean' ? { shellAccess: data.shellAccess } : {}),
+          ...(data?.temperature !== undefined ? { temperature: data.temperature } : {})
+        },
+        effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG
+      );
+
+      let selectedModel = data?.model ? sanitizeModelId(data.model, effectiveEnv) : undefined;
+      if (!selectedModel && !effectiveEnv.MODEL_NAME && !isTookenUrl(effectiveEnv.MODEL_BASE_URL)) {
+        try {
+          const liveModels = await fetchProviderModels(effectiveEnv);
+          if (liveModels.length) selectedModel = liveModels[0].id;
+        } catch {
+          selectedModel = undefined;
+        }
+      }
       const effectiveModelId = selectedModel || String(effectiveEnv.MODEL_NAME || 'claude-sonnet-5-5');
       const reasoningSpec = getModelReasoningSpec(effectiveModelId, effectiveEnv);
       const reasoningEffort = normalizeReasoningEffort(
@@ -636,15 +656,34 @@ export async function onRequestPost({ request, env }) {
         effectiveEnv
       );
       const thinking = Boolean(reasoningEffort && reasoningEffort !== 'none');
-      const maxSteps =
-        reasoningEffort === 'max' || reasoningEffort === 'xhigh'
-          ? 28
-          : reasoningEffort === 'high'
-            ? MAX_THINKING_LOOP_STEPS
-            : reasoningEffort === 'medium'
-              ? 20
-              : MAX_LOOP_STEPS;
-      const tools = data.tools === undefined ? TOOLS : sanitizeTools(data.tools);
+      const baseMaxSteps =
+        agentConfig.mode === 'full-auto'
+          ? Math.max(agentConfig.maxSteps || 24, 28)
+          : reasoningEffort === 'max' || reasoningEffort === 'xhigh'
+            ? 28
+            : reasoningEffort === 'high'
+              ? MAX_THINKING_LOOP_STEPS
+              : reasoningEffort === 'medium'
+                ? Math.max(agentConfig.maxSteps || 20, 20)
+                : agentConfig.maxSteps || MAX_LOOP_STEPS;
+      const maxSteps = Math.min(Math.max(baseMaxSteps, 4), 36);
+
+      const MUTATING_TOOL_NAMES = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
+      const NET_TOOL_NAMES = new Set(['web_search', 'fetch_url']);
+      const baseTools = data.tools === undefined ? TOOLS : sanitizeTools(data.tools);
+      const tools = baseTools.filter((t) => {
+        const fnName = t?.function?.name;
+        if ((agentConfig.mode === 'plan' || agentConfig.mode === 'suggest') && MUTATING_TOOL_NAMES.has(fnName)) {
+          return false;
+        }
+        if ((agentConfig.mode === 'plan' || agentConfig.mode === 'suggest' || !agentConfig.shellAccess) && fnName === 'run_command') {
+          return false;
+        }
+        if (!agentConfig.networkAccess && NET_TOOL_NAMES.has(fnName)) {
+          return false;
+        }
+        return true;
+      });
 
       const conversation = await getConversation(env, identity.owner, conversationId);
       const { count } = await messageStats(env, conversation.id);
@@ -743,7 +782,8 @@ export async function onRequestPost({ request, env }) {
             user: { email: identity.email },
             sandbox: sb,
             linuxRunner: linux,
-            thinking
+            thinking,
+            agentConfig
           });
 
           const messages = [{ role: 'system', content: systemPrompt }];
@@ -758,16 +798,26 @@ export async function onRequestPost({ request, env }) {
             steps += 1;
             const inputChars = estimateMessagesTextChars(messages);
             if (inputChars > MAX_TURN_INPUT_CHARS) {
-              finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً گفتگوی تازه‌ای بسازید یا فایل‌های کمتری باز کنید.';
+              finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً از دستور `/compact` استفاده کنید یا گفتگوی تازه‌ای بسازید.';
               break;
             }
 
+            let deltaChars = 0;
             const result = await callModel(effectiveEnv, {
               ...(selectedModel ? { model: selectedModel } : {}),
               ...(reasoningEffort !== null ? { reasoningEffort } : {}),
-              temperature: 0.25,
+              temperature: agentConfig.temperature ?? 0.25,
               messages,
-              tools
+              tools,
+              onDelta: (chunk) => {
+                if (!chunk?.text) return;
+                deltaChars += chunk.text.length;
+                if (chunk.type === 'content') {
+                  send('delta', { text: chunk.text, step: steps });
+                } else if (chunk.type === 'reasoning' && deltaChars <= 16_000) {
+                  send('thinking_delta', { text: chunk.text, step: steps });
+                }
+              }
             });
             usedModel = result.model;
             if (result.reasoningEffort !== undefined) appliedEffort = result.reasoningEffort;

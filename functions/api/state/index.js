@@ -6,8 +6,11 @@
 // a cache on the client.
 
 import { route, methodNotAllowed } from '../../_lib/api.js';
-import { fail } from '../../_lib/util.js';
+import { fail, redactSecrets } from '../../_lib/util.js';
 import { recentPaths } from '../../_lib/versions.js';
+import { forceCompactConversation } from '../../_lib/memory.js';
+import { callModel } from '../../_lib/model.js';
+import { resolveEffectiveEnv } from '../../_lib/provider.js';
 import {
   conversationView,
   createConversation,
@@ -136,6 +139,70 @@ export async function onRequestPost({ request, env }) {
         case 'workspace': {
           const workspace = await saveWorkspace(env, owner, data.id, data.workspace || {});
           return { ok: true, workspace };
+        }
+
+        case 'compact': {
+          const conversation = await getConversation(env, owner, data.id);
+          const messages = await listMessages(env, conversation.id);
+          const effectiveEnv = await resolveEffectiveEnv(env, owner);
+          const outcome = await forceCompactConversation({
+            env: effectiveEnv,
+            conversation: { ...conversation, owner },
+            messages,
+            callModel: (payload) => callModel(effectiveEnv, payload),
+            saveMemories: (memo) =>
+              env.DB.prepare(
+                `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
+                 VALUES(?,?,?,?,?,?,?,?)
+                 ON CONFLICT(owner,scope,project,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
+              )
+                .bind(
+                  crypto.randomUUID(),
+                  owner,
+                  'global',
+                  '',
+                  memo.key,
+                  redactSecrets(memo.value),
+                  Date.now(),
+                  Date.now()
+                )
+                .run()
+          });
+          return { ok: true, ...outcome };
+        }
+
+        case 'fork': {
+          const src = await getConversation(env, owner, data.id);
+          const srcMessages = await listMessages(env, src.id);
+          let ws = {};
+          try {
+            ws = JSON.parse(src.workspace || '{}');
+          } catch {
+            ws = {};
+          }
+          const forkTitle = String(data.title || `⑂ ${src.title || 'گفتگو'}`).slice(0, 120);
+          const newId = await createConversation(env, owner, { title: forkTitle, workspace: ws });
+          if (srcMessages.length) {
+            const newConv = await getConversation(env, owner, newId);
+            await appendMessages(env, newConv, srcMessages);
+            const now = Date.now();
+            await env.DB.prepare(
+              `UPDATE conversations SET message_count=?, last_message_at=?, updated_at=?, summary=?, summary_until=?, summary_updated_at=?
+               WHERE id=? AND owner=?`
+            )
+              .bind(
+                srcMessages.length,
+                now,
+                now,
+                String(src.summary || ''),
+                Number(src.summary_until) || 0,
+                Number(src.summary_updated_at) || 0,
+                newId,
+                owner
+              )
+              .run();
+          }
+          return { ok: true, id: newId, title: forkTitle, messageCount: srcMessages.length };
         }
 
         case 'memory-upsert': {

@@ -101,8 +101,13 @@ async function readUserSettingsObj(env, owner) {
 async function writeUserSettingsObj(env, owner, settingsObj) {
   if (!env?.DB || !owner) return;
   await ensureSchema(env);
-  await env.DB.prepare('UPDATE users SET settings=? WHERE owner=?')
-    .bind(JSON.stringify(settingsObj || {}), owner)
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO users(owner, email, created_at, last_seen_at, settings)
+     VALUES(?, '', ?, ?, ?)
+     ON CONFLICT(owner) DO UPDATE SET settings=excluded.settings`
+  )
+    .bind(owner, now, now, JSON.stringify(settingsObj || {}))
     .run();
 }
 
@@ -121,6 +126,7 @@ export async function getUserProviderSummary(env, owner) {
 
   return {
     customActive,
+    usingCustom: customActive,
     baseUrl: customBaseUrl,
     effectiveBaseUrl: customBaseUrl || serverBaseUrl,
     serverBaseUrl,
@@ -186,6 +192,82 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
   return getUserProviderSummary(env, owner);
 }
 
+export const VALID_AGENT_MODES = ['plan', 'suggest', 'auto-edit', 'full-auto'];
+export const VALID_RESPONSE_STYLES = ['balanced', 'concise', 'explanatory', 'senior-reviewer'];
+export const VALID_THEMES = ['claude-warm', 'claude-day', 'midnight'];
+
+export const DEFAULT_AGENT_CONFIG = Object.freeze({
+  mode: 'auto-edit',
+  networkAccess: true,
+  shellAccess: true,
+  autoVerify: true,
+  autoCommitGh: true,
+  readAgentsMd: true,
+  responseStyle: 'balanced',
+  customInstructions: '',
+  temperature: 0.25,
+  maxSteps: 20,
+  contextBudget: 24_000,
+  theme: 'claude-warm',
+  reducedMotion: false,
+  mascot: true,
+  goal: ''
+});
+
+export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const mode = VALID_AGENT_MODES.includes(src.mode) ? src.mode : base.mode;
+  const responseStyle = VALID_RESPONSE_STYLES.includes(src.responseStyle) ? src.responseStyle : base.responseStyle;
+  const theme = VALID_THEMES.includes(src.theme) ? src.theme : base.theme;
+  const tempNum = Number(src.temperature);
+  const temperature = Number.isFinite(tempNum) ? Math.min(1, Math.max(0, Math.round(tempNum * 100) / 100)) : base.temperature;
+  const stepsNum = Math.floor(Number(src.maxSteps));
+  const maxSteps = Number.isFinite(stepsNum) && stepsNum >= 4 && stepsNum <= 36 ? stepsNum : base.maxSteps;
+  const budgetNum = Math.floor(Number(src.contextBudget));
+  const contextBudget =
+    Number.isFinite(budgetNum) && budgetNum >= 6_000 && budgetNum <= 120_000 ? budgetNum : base.contextBudget;
+
+  return {
+    mode,
+    networkAccess: typeof src.networkAccess === 'boolean' ? src.networkAccess : base.networkAccess,
+    shellAccess: typeof src.shellAccess === 'boolean' ? src.shellAccess : base.shellAccess,
+    autoVerify: typeof src.autoVerify === 'boolean' ? src.autoVerify : base.autoVerify,
+    autoCommitGh: typeof src.autoCommitGh === 'boolean' ? src.autoCommitGh : base.autoCommitGh,
+    readAgentsMd: typeof src.readAgentsMd === 'boolean' ? src.readAgentsMd : base.readAgentsMd,
+    responseStyle,
+    customInstructions:
+      typeof src.customInstructions === 'string'
+        ? src.customInstructions.slice(0, 4_000)
+        : base.customInstructions,
+    temperature,
+    maxSteps,
+    contextBudget,
+    theme,
+    reducedMotion: typeof src.reducedMotion === 'boolean' ? src.reducedMotion : base.reducedMotion,
+    mascot: typeof src.mascot === 'boolean' ? src.mascot : base.mascot,
+    goal: typeof src.goal === 'string' ? src.goal.slice(0, 600) : base.goal
+  };
+}
+
+export async function getUserAgentConfig(env, owner) {
+  const settings = await readUserSettingsObj(env, owner);
+  return normalizeAgentConfig(settings.agentConfig, DEFAULT_AGENT_CONFIG);
+}
+
+export async function saveUserAgentConfig(env, owner, patch = {}) {
+  const settings = await readUserSettingsObj(env, owner);
+  if (patch && patch.resetAgentConfig) {
+    delete settings.agentConfig;
+    await writeUserSettingsObj(env, owner, settings);
+    return normalizeAgentConfig({}, DEFAULT_AGENT_CONFIG);
+  }
+  const current = normalizeAgentConfig(settings.agentConfig, DEFAULT_AGENT_CONFIG);
+  const next = normalizeAgentConfig({ ...current, ...(patch || {}) }, current);
+  settings.agentConfig = next;
+  await writeUserSettingsObj(env, owner, settings);
+  return next;
+}
+
 /**
  * Build a request-scoped `env` overlay with the user's custom Base URL / API Key
  * (if configured), plus preloaded D1 discovered model capabilities for that Base URL.
@@ -194,6 +276,7 @@ export async function resolveEffectiveEnv(env, owner) {
   if (!env?.DB || !owner) return env;
   const settings = await readUserSettingsObj(env, owner);
   const p = settings.provider && typeof settings.provider === 'object' ? settings.provider : null;
+  const agentConfig = normalizeAgentConfig(settings.agentConfig, DEFAULT_AGENT_CONFIG);
 
   let customKey = '';
   if (p?.apiKeyEnc) {
@@ -207,16 +290,25 @@ export async function resolveEffectiveEnv(env, owner) {
   const discoveredMap = await loadDiscoveredSpecs(env, effectiveBaseUrl).catch(() => ({}));
 
   // If the user pointed at a non-tooken custom provider and didn't set a custom default model,
-  // don't force `MODEL_FALLBACK` onto tooken-only model names.
+  // never fall back to tooken-only model IDs (`claude-sonnet-5-5`). Leave `_needsProviderDefaultModel`
+  // so `/api/config` and `/api/chat` pick an actual live model served by that provider.
   const isTooken = isTookenUrl(effectiveBaseUrl);
+  const resolvedModelName = customDefaultModel
+    ? customDefaultModel
+    : !isTooken && customBaseUrl
+      ? ''
+      : env.MODEL_NAME || 'claude-sonnet-5-5';
 
   return {
     ...env,
     MODEL_BASE_URL: effectiveBaseUrl,
     MODEL_API_KEY: customKey || env.MODEL_API_KEY || '',
-    MODEL_NAME: customDefaultModel || (isTooken ? env.MODEL_NAME : '') || env.MODEL_NAME || 'claude-sonnet-5-5',
+    MODEL_NAME: resolvedModelName,
     MODEL_FALLBACK: !isTooken && customBaseUrl ? 'off' : env.MODEL_FALLBACK,
+    CONTEXT_BUDGET_TOKENS:
+      settings.agentConfig?.contextBudget ? String(agentConfig.contextBudget) : env.CONTEXT_BUDGET_TOKENS,
     _customProvider: hasCustom,
+    _agentConfig: agentConfig,
     _discoveredSpecs: discoveredMap
   };
 }

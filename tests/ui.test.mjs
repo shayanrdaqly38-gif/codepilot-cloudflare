@@ -449,7 +449,44 @@ $('tokenCapInput').value = '100000';
 await window.saveTokenCap(false);
 assert.equal($('tokenQuotaText').textContent, '🪙 94,800 tok', 'deducts 5,200 used tokens from 100,000 manual cap');
 await window.saveTokenCap(true);
+
+// Zro Free-plan percentage quota (remainingPercent: 40) renders accurately in #tokenQuotaBtn & #quotaModal
+db.mockQuota = {
+  supported: true,
+  plan: 'free',
+  remainingPercent: 40,
+  windowResetsAt: '2026-11-06T23:30:00Z',
+  source: 'zro.moonmath.ai/api/cli/status',
+  providerUsage: { totalTokens: 51000, cacheReadTokens: 31000 }
+};
+await window.refreshProviderQuota({ live: true, force: true, silent: true });
+assert.equal($('tokenQuotaText').textContent, '🪙 Free 40%');
+assert.ok($('quotaModalBody').textContent.includes('40% Remaining'));
+assert.ok($('quotaModalBody').textContent.includes('Cache Read'));
 window.closeModal('quotaModal');
+
+// --- Claude Code Warm Terracotta theme, GPT Codex modal, mode cycling & / slash command palette
+assert.equal(window.document.body.dataset.theme, 'claude-warm', 'default theme is Claude Code warm terracotta');
+window.cycleTheme();
+assert.equal(window.document.body.dataset.theme, 'claude-day', 'cycles to Claude daylight cream-orange');
+window.cycleTheme();
+assert.equal(window.document.body.dataset.theme, 'midnight', 'cycles to midnight');
+window.cycleTheme();
+assert.equal(window.document.body.dataset.theme, 'claude-warm', 'cycles back to claude-warm');
+
+window.openCodexModal();
+assert.ok($('codexModal').classList.contains('open'), 'Codex & Claude settings modal opens');
+window.selectCodexModeCard('plan');
+await window.saveAgentConfigFromModal();
+assert.equal($('modeCycleBtn').dataset.mode, 'plan');
+window.cycleAgentMode('auto-edit');
+assert.equal($('modeCycleBtn').dataset.mode, 'auto-edit');
+
+$('prompt').value = '/re';
+window.onPromptInput();
+assert.ok($('slashMenu').classList.contains('open'), 'typing /re opens slash command palette');
+assert.ok($('slashMenu').textContent.includes('/review'), 'slash palette filters /review');
+window.closeFloatingPalettes();
 
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));
