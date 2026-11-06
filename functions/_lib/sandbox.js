@@ -19,6 +19,24 @@ const MAX_MOUNT_FILES = 70;
 const MAX_MOUNT_TOTAL_CHARS = 350_000;
 const WANDBOX_ENDPOINT = 'https://wandbox.org/api/compile.json';
 
+/**
+ * Combine an optional external abort signal (user stop / turn abort) with the
+ * hard per-request timeout. Falls back gracefully if AbortSignal.any is
+ * unavailable on the runtime.
+ */
+function mergeTimeoutSignal(timeoutMs, externalSignal) {
+  if (!externalSignal) return AbortSignal.timeout(timeoutMs);
+  if (externalSignal.aborted) return externalSignal;
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any([AbortSignal.timeout(timeoutMs), externalSignal]);
+  }
+  return AbortSignal.timeout(timeoutMs);
+}
+
+function isCancelled(externalSignal) {
+  return Boolean(externalSignal?.aborted);
+}
+
 export function sandboxBinding(env) {
   const binding = env && env.SANDBOX;
   if (!binding) return null;
@@ -117,7 +135,7 @@ async function callSandbox(env, { cmd, cwd = '/workspace', timeoutMs = DEFAULT_T
   };
 }
 
-async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS, externalSignal = null }) {
   const endpoint = String(env?.SANDBOX_URL || '').trim();
   if (!endpoint) return null;
   const started = Date.now();
@@ -129,7 +147,7 @@ async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_M
       method: 'POST',
       headers,
       redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: mergeTimeoutSignal(timeoutMs, externalSignal),
       body: JSON.stringify({ cmd, cwd: '/workspace', timeoutMs, files })
     });
   } catch (error) {
@@ -172,7 +190,7 @@ function mountSafeFiles(rawFiles, secrets) {
  * Execute `cmd` inside a real isolated Linux container (Podman `wandbox-runner`
  * with workspace files mounted into the working directory).
  */
-async function callLinuxContainer(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+async function callLinuxContainer(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS, externalSignal = null }) {
   const secrets = envSecrets(env || {});
   if (secrets.some((s) => s && cmd.includes(s))) {
     return { ok: false, unavailable: false, exitCode: 1, stdout: '', stderr: 'Blocked: command contains a server secret.' };
@@ -205,7 +223,7 @@ async function callLinuxContainer(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT
         'User-Agent': 'CodePilot-LinuxRunner/2.2'
       },
       redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: mergeTimeoutSignal(timeoutMs, externalSignal),
       body: JSON.stringify({
         compiler: 'bash',
         code: wrappedScript,
@@ -272,7 +290,17 @@ function formatRealResult(label, result) {
  * Returns { mode: 'sandbox'|'remote-sandbox'|'linux-container'|'virtual'|'blocked', ... }
  * and a `text` field that always states honestly which mode ran.
  */
-export async function runCommand(env, { command, workspace }) {
+export async function runCommand(env, { command, workspace, externalSignal }) {
+  if (isCancelled(externalSignal)) {
+    return {
+      mode: 'stopped',
+      ok: false,
+      exitCode: 130,
+      stdout: '',
+      stderr: 'Cancelled by user.',
+      text: 'Cancelled by user.'
+    };
+  }
   const verdict = classifyCommand(command);
   if (!verdict.allowed) {
     return {

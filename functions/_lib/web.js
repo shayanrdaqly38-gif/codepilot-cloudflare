@@ -6,6 +6,9 @@
 //   - Never forwards Cloudflare secrets, cookies, or internal metadata hosts.
 //   - Streams response bytes with a hard ceiling so a huge file cannot exhaust
 //     isolate memory.
+//   - Accepts an optional `externalSignal` (user stop / turn abort) on every
+//     outbound call and cancels immediately when it fires, so stopping a turn
+//     mid-tool never waits for a network timeout.
 
 import { clamp, envSecrets, fail, redactSecrets, truncate } from './util.js';
 
@@ -23,6 +26,26 @@ const BLOCKED_REQUEST_HEADERS = new Set([
   'cf-connecting-ip',
   'x-forwarded-for'
 ]);
+
+/**
+ * Combine an optional external abort signal (e.g. a user-initiated stop that
+ * aborts the whole agent turn) with a hard per-request timeout. When the
+ * external signal is already aborted, it is returned as-is so callers can
+ * short-circuit before any network I/O. Falls back to the plain timeout on
+ * runtimes without AbortSignal.any.
+ */
+function mergeTimeoutSignal(timeoutMs, externalSignal) {
+  if (!externalSignal) return AbortSignal.timeout(timeoutMs);
+  if (externalSignal.aborted) return externalSignal;
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any([AbortSignal.timeout(timeoutMs), externalSignal]);
+  }
+  return AbortSignal.timeout(timeoutMs);
+}
+
+function isCancelled(externalSignal) {
+  return Boolean(externalSignal && externalSignal.aborted);
+}
 
 /**
  * Validate that `rawUrl` points to a public internet HTTP(S) endpoint and never
@@ -217,7 +240,7 @@ function sanitizeOutboundHeaders(rawHeaders, secrets) {
  */
 export async function fetchExternalUrl(
   env,
-  { url, method = 'GET', headers = null, body = null, maxChars = 16_000 } = {}
+  { url, method = 'GET', headers = null, body = null, maxChars = 16_000, externalSignal = null } = {}
 ) {
   const secrets = envSecrets(env || {});
   const upperMethod = String(method || 'GET').trim().toUpperCase();
@@ -234,6 +257,10 @@ export async function fetchExternalUrl(
 
   if (secrets.some((s) => s && currentUrl.href.includes(s))) {
     return { ok: false, text: 'Blocked: server secrets cannot be sent to external URLs.' };
+  }
+
+  if (isCancelled(externalSignal)) {
+    return { ok: false, text: 'Cancelled by user.' };
   }
 
   const outboundHeaders = sanitizeOutboundHeaders(headers, secrets);
@@ -264,7 +291,7 @@ export async function fetchExternalUrl(
         headers: outboundHeaders,
         body: activeMethod === 'GET' || activeMethod === 'HEAD' ? undefined : activeBody,
         redirect: 'manual',
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+        signal: mergeTimeoutSignal(FETCH_TIMEOUT_MS, externalSignal)
       });
     } catch (error) {
       return {
@@ -373,7 +400,7 @@ export function parseDdgHtml(html) {
   return items;
 }
 
-async function searchDuckDuckGoHtml(query) {
+async function searchDuckDuckGoHtml(query, externalSignal = null) {
   const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const res = await fetch(endpoint, {
     headers: {
@@ -382,19 +409,19 @@ async function searchDuckDuckGoHtml(query) {
       'Accept-Language': 'fa,en-US;q=0.9,en;q=0.8'
     },
     redirect: 'manual',
-    signal: AbortSignal.timeout(7_500)
+    signal: mergeTimeoutSignal(7_500, externalSignal)
   });
   if (!res.ok) return [];
   const html = await readBoundedText(res, 250_000);
   return parseDdgHtml(html);
 }
 
-async function searchDuckDuckGoInstant(query) {
+async function searchDuckDuckGoInstant(query, externalSignal = null) {
   const endpoint = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
   const res = await fetch(endpoint, {
     headers: { Accept: 'application/json', 'User-Agent': 'CodePilot-Agent/2.2' },
     redirect: 'manual',
-    signal: AbortSignal.timeout(6_000)
+    signal: mergeTimeoutSignal(6_000, externalSignal)
   });
   if (!res.ok) return [];
   const data = await res.json();
@@ -420,13 +447,13 @@ async function searchDuckDuckGoInstant(query) {
   return out;
 }
 
-async function searchWikipedia(query, lang = 'en') {
+async function searchWikipedia(query, lang = 'en', externalSignal = null) {
   const host = lang === 'fa' ? 'fa.wikipedia.org' : 'en.wikipedia.org';
   const endpoint = `https://${host}/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=4&utf8=1&format=json`;
   const res = await fetch(endpoint, {
     headers: { Accept: 'application/json', 'User-Agent': 'CodePilot-Agent/2.2 (Cloudflare Pages)' },
     redirect: 'manual',
-    signal: AbortSignal.timeout(6_000)
+    signal: mergeTimeoutSignal(6_000, externalSignal)
   });
   if (!res.ok) return [];
   const data = await res.json();
@@ -438,12 +465,12 @@ async function searchWikipedia(query, lang = 'en') {
   }));
 }
 
-async function searchHackerNews(query) {
+async function searchHackerNews(query, externalSignal = null) {
   const endpoint = `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&hitsPerPage=4`;
   const res = await fetch(endpoint, {
     headers: { Accept: 'application/json', 'User-Agent': 'CodePilot-Agent/2.2' },
     redirect: 'manual',
-    signal: AbortSignal.timeout(6_000)
+    signal: mergeTimeoutSignal(6_000, externalSignal)
   });
   if (!res.ok) return [];
   const data = await res.json();
@@ -467,7 +494,7 @@ async function searchHackerNews(query) {
  * Federated live internet search across organic web, Wikipedia (FA/EN),
  * DuckDuckGo Instant Answers, and Hacker News Algolia.
  */
-export async function searchWeb(env, { query, limit = 8 } = {}) {
+export async function searchWeb(env, { query, limit = 8, externalSignal = null } = {}) {
   const q = String(query || '').trim();
   if (!q) return { ok: false, results: [], text: 'Error: search query is empty.' };
   if (q.length > 400) return { ok: false, results: [], text: 'Error: search query is too long.' };
@@ -477,14 +504,20 @@ export async function searchWeb(env, { query, limit = 8 } = {}) {
     return { ok: false, results: [], text: 'Blocked: query contains a server secret.' };
   }
 
+  if (isCancelled(externalSignal)) {
+    return { ok: false, results: [], text: 'Cancelled by user.' };
+  }
+
   const capped = clamp(Number(limit) || 8, 1, 15);
   const hasPersian = /[\u0600-\u06FF]/.test(q);
 
   const tasks = [
-    searchDuckDuckGoHtml(q),
-    searchDuckDuckGoInstant(q),
-    ...(hasPersian ? [searchWikipedia(q, 'fa'), searchWikipedia(q, 'en')] : [searchWikipedia(q, 'en')]),
-    searchHackerNews(q)
+    searchDuckDuckGoHtml(q, externalSignal),
+    searchDuckDuckGoInstant(q, externalSignal),
+    ...(hasPersian
+      ? [searchWikipedia(q, 'fa', externalSignal), searchWikipedia(q, 'en', externalSignal)]
+      : [searchWikipedia(q, 'en', externalSignal)]),
+    searchHackerNews(q, externalSignal)
   ];
 
   const settled = await Promise.allSettled(tasks);
