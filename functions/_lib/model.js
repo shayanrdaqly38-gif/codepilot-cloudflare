@@ -2362,6 +2362,216 @@ async function consumeChatSseResponse(response, onDelta) {
   };
 }
 
+function isContextOverflowError(status, rawErrText = '') {
+  if (status === 413) return true;
+  if (status !== 400 && status !== 422) return false;
+  return /context_length|maximum context|prompt is too long|input is too long|too many tokens|request_too_large|payload too large|string_above_max_length|exceed.*token|token.*limit|max_seq_len|context window|حجم پیام/i.test(
+    String(rawErrText || '')
+  );
+}
+
+function measureNonBinaryWireChars(messages) {
+  let total = 0;
+  for (const m of messages || []) {
+    if (!m) continue;
+    if (typeof m.content === 'string') {
+      total += m.content.length;
+    } else if (Array.isArray(m.content)) {
+      for (const p of m.content) {
+        if (typeof p?.text === 'string') total += p.text.length;
+      }
+    }
+    if (Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        total += (tc?.function?.name?.length || 0) + (tc?.function?.arguments?.length || 0) + 32;
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * Group messages into atomic units so an `assistant` message with `tool_calls`
+ * is NEVER separated from its immediately following `role: 'tool'` results!
+ */
+function groupAtomicWireUnits(messages) {
+  const units = [];
+  for (let i = 0; i < (messages || []).length; i += 1) {
+    const m = messages[i];
+    if (!m) continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      const grp = [m];
+      while (i + 1 < messages.length && messages[i + 1]?.role === 'tool') {
+        i += 1;
+        grp.push(messages[i]);
+      }
+      units.push(grp);
+    } else {
+      units.push([m]);
+    }
+  }
+  return units;
+}
+
+function slimSingleMessage(msg, { argCap = 900, toolOutCap = 1400, proseCap = 6000, stripBinary = false } = {}) {
+  if (!msg) return msg;
+  let next = { ...msg };
+
+  if (typeof next.content === 'string' && next.content.length > proseCap) {
+    const head = Math.floor(proseCap * 0.7);
+    const tail = Math.floor(proseCap * 0.22);
+    const label = next.role === 'tool' ? 'خروجی ابزار' : 'متن';
+    next.content = `${next.content.slice(0, head)}\n…[${label} برای رعایت سقف مدل فشرده شد (${next.content.length} کاراکتر)]…\n${next.content.slice(-tail)}`;
+  } else if (Array.isArray(next.content)) {
+    next.content = next.content.map((part) => {
+      if (!part) return part;
+      if (typeof part.text === 'string' && part.text.length > proseCap) {
+        const head = Math.floor(proseCap * 0.7);
+        const tail = Math.floor(proseCap * 0.22);
+        return {
+          ...part,
+          text: `${part.text.slice(0, head)}\n…[متن فشرده شد (${part.text.length} کاراکتر)]…\n${part.text.slice(-tail)}`
+        };
+      }
+      if (stripBinary && (part.type === 'image_url' || part.type === 'file' || part.type === 'input_audio')) {
+        const fname = part.file?.filename || part.type || 'attachment';
+        return { type: 'text', text: `[پیوست دودویی (${fname}) برای عبور از سقف حجم سرور خلاصه شد]` };
+      }
+      return part;
+    });
+  }
+
+  if (Array.isArray(next.tool_calls) && next.tool_calls.length) {
+    next.tool_calls = next.tool_calls.map((tc) => {
+      const rawArgs = String(tc?.function?.arguments || '');
+      if (rawArgs.length <= argCap) return tc;
+      let targetPath = '';
+      try {
+        const parsed = JSON.parse(rawArgs);
+        targetPath = parsed?.path || parsed?.url || parsed?.command?.slice?.(0, 60) || '';
+      } catch {
+        const m = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+        if (m) targetPath = m[1];
+      }
+      return {
+        ...tc,
+        function: {
+          ...tc.function,
+          arguments: JSON.stringify({
+            ...(targetPath ? { path: targetPath } : {}),
+            _compacted: true,
+            _chars: rawArgs.length
+          })
+        }
+      };
+    });
+  }
+
+  if (next.role === 'tool' && typeof next.content === 'string' && next.content.length > toolOutCap) {
+    const head = Math.floor(toolOutCap * 0.72);
+    const tail = Math.floor(toolOutCap * 0.22);
+    next.content = `${next.content.slice(0, head)}\n…[فشرده شد (${next.content.length} کاراکتر)]…\n${next.content.slice(-tail)}`;
+  }
+
+  return next;
+}
+
+/**
+ * Progressive 3-level auto-compactor that shrinks oversized message arrays in-place
+ * while strictly preserving `system` prompt, valid `assistant`->`tool` call pairing,
+ * and the user's active goal so 413 / context_length_exceeded NEVER blocks execution!
+ */
+export function compactMessagesForRetry(messages, level = 1) {
+  if (!Array.isArray(messages) || !messages.length) return messages;
+  const hasSystem = messages[0]?.role === 'system';
+  const sysMsg = hasSystem
+    ? level >= 3
+      ? slimSingleMessage(messages[0], { proseCap: 14_000 })
+      : messages[0]
+    : null;
+  const rest = hasSystem ? messages.slice(1) : messages.slice();
+  const units = groupAtomicWireUnits(rest);
+  if (!units.length) return sysMsg ? [sysMsg] : [];
+
+  if (level === 1) {
+    // Level 1: Keep last 2 atomic units untouched; slim all earlier tool_calls/tool outputs/long prose,
+    // and cap total middle units to ~90k chars.
+    const tailKeep = Math.min(2, units.length);
+    const headUnits = units.slice(0, units.length - tailKeep).map((u) =>
+      u.map((m) => slimSingleMessage(m, { argCap: 600, toolOutCap: 1200, proseCap: 4000, stripBinary: true }))
+    );
+    const tailUnits = units.slice(units.length - tailKeep).map((u, idx, arr) =>
+      idx === arr.length - 1 ? u : u.map((m) => slimSingleMessage(m, { argCap: 1800, toolOutCap: 3500, proseCap: 12_000 }))
+    );
+    let budget = 85_000;
+    const keptHead = [];
+    for (let i = headUnits.length - 1; i >= 0; i -= 1) {
+      const sz = JSON.stringify(headUnits[i]).length;
+      if (budget - sz < 0 && keptHead.length > 0) break;
+      budget -= sz;
+      keptHead.unshift(headUnits[i]);
+    }
+    // Ensure first non-system message starts on `user`
+    while (keptHead.length && keptHead[0][0]?.role !== 'user') keptHead.shift();
+    const flat = [...keptHead.flat(), ...tailUnits.flat()];
+    return sysMsg ? [sysMsg, ...flat] : flat;
+  }
+
+  if (level === 2) {
+    // Level 2: Digest older turns into a single compact reference block + keep only latest user goal & last 2 units (~34k chars).
+    const lastUserIdx = (() => {
+      for (let i = units.length - 1; i >= 0; i -= 1) {
+        if (units[i][0]?.role === 'user') return i;
+      }
+      return 0;
+    })();
+    const droppedGoals = [];
+    for (let i = 0; i < lastUserIdx; i += 1) {
+      const u0 = units[i][0];
+      if (u0?.role === 'user' && typeof u0.content === 'string') {
+        droppedGoals.push(u0.content.slice(0, 220));
+      }
+    }
+    const activeSlice = units.slice(lastUserIdx);
+    const keptActive =
+      activeSlice.length <= 3
+        ? activeSlice
+        : [activeSlice[0], ...activeSlice.slice(-2)];
+    const slimActive = keptActive.map((u, idx, arr) =>
+      u.map((m) =>
+        slimSingleMessage(m, {
+          argCap: idx === arr.length - 1 ? 2400 : 500,
+          toolOutCap: idx === arr.length - 1 ? 3000 : 900,
+          proseCap: idx === 0 ? 18_000 : 6000,
+          stripBinary: idx < arr.length - 1
+        })
+      )
+    );
+    const bridge = droppedGoals.length
+      ? [
+          { role: 'user', content: `[خلاصه خودکار پیام‌های پیشین برای عبور از سقف حجم]:\n- ${droppedGoals.slice(-6).join('\n- ')}` },
+          { role: 'assistant', content: 'زمینه فشرده دریافت شد؛ ادامه می‌دهم.' }
+        ]
+      : [];
+    const flat = [...bridge, ...slimActive.flat()];
+    return sysMsg ? [sysMsg, ...flat] : flat;
+  }
+
+  // Level 3 (Emergency Ultra-Compact): Strip heavy binary Base64 blocks & cap even a giant single turn to ~24k chars!
+  const lastUserIdx = (() => {
+    for (let i = units.length - 1; i >= 0; i -= 1) {
+      if (units[i][0]?.role === 'user') return i;
+    }
+    return Math.max(0, units.length - 1);
+  })();
+  const emergencyUnits =
+    lastUserIdx === units.length - 1 ? [units[lastUserIdx]] : [units[lastUserIdx], units[units.length - 1]];
+  const flat = emergencyUnits.flat().map((m) =>
+    slimSingleMessage(m, { argCap: 600, toolOutCap: 1500, proseCap: 18_000, stripBinary: true })
+  );
+  return sysMsg ? [sysMsg, ...flat] : flat;
+}
+
 /**
  * POST a Chat Completions request using the model's genuine `reasoning_effort`,
  * with automatic runtime self-learning if a new/external model reports different
@@ -2412,7 +2622,16 @@ export async function callModel(env, payload) {
   }
 
   let activeMessages = payload.messages;
+  // Pre-flight guard: if pure text + tool arguments exceed ~220k chars (~440 KB in UTF-8 Persian/JSON),
+  // slim redundant historical tool payloads BEFORE hitting Nginx 512KB/1MB 413 walls (never strips latest image/file attachments).
+  if (measureNonBinaryWireChars(activeMessages) > 220_000) {
+    activeMessages = compactMessagesForRetry(activeMessages, 1);
+    if (measureNonBinaryWireChars(activeMessages) > 220_000) {
+      activeMessages = compactMessagesForRetry(activeMessages, 2);
+    }
+  }
   let downgradedOnce = false;
+  let contextShrinkLevel = 0;
   let lastStatus = 0;
   let lastErrDetail = '';
 
@@ -2612,6 +2831,24 @@ export async function callModel(env, payload) {
         continue;
       }
 
+      // Automatic 3-level self-compaction whenever upstream proxy/model returns 413 Payload Too Large or context_length_exceeded
+      // (runs BEFORE reasoning_effort fallback so user's chosen Effort stays untouched!):
+      if (isContextOverflowError(status, errText) && contextShrinkLevel < 3) {
+        const beforeLen = JSON.stringify(activeMessages).length;
+        while (contextShrinkLevel < 3) {
+          contextShrinkLevel += 1;
+          const candidateMsgs = compactMessagesForRetry(activeMessages, contextShrinkLevel);
+          const afterLen = JSON.stringify(candidateMsgs).length;
+          if (afterLen < beforeLen) {
+            activeMessages = candidateMsgs;
+            break;
+          }
+        }
+        if (JSON.stringify(activeMessages).length < beforeLen) {
+          continue;
+        }
+      }
+
       // Runtime self-learning & seamless fallback when a model rejects a reasoning_effort value
       if ((status === 400 || status === 422) && currentVariant.effort !== null) {
         const signal = parseErrorReasoningSignal(errText, currentVariant.effort);
@@ -2660,7 +2897,7 @@ export async function callModel(env, payload) {
         }
       }
 
-      if ((status === 400 || status === 422 || status === 500 || status === 502 || status === 503) && !downgradedOnce) {
+      if ((status === 400 || status === 422 || status === 413 || status === 500 || status === 502 || status === 503) && !downgradedOnce) {
         const downgraded = downgradeUnsupportedFileParts(activeMessages);
         if (downgraded) {
           activeMessages = downgraded;
