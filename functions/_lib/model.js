@@ -320,9 +320,20 @@ export function extractRateLimitHeaders(headers) {
 
 function toNum(v) {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string' && v.trim() !== '') {
-    const n = Number(v.trim());
-    return Number.isFinite(n) ? n : null;
+  if (typeof v === 'string') {
+    let cleaned = v.trim();
+    if (!cleaned) return null;
+    // Strip currency symbols and thousand-separator spaces/NBSPs (e.g. "4 850 000" or "142,50 ₽")
+    cleaned = cleaned.replace(/[₽$€¥£\s\u00A0]/g, '');
+    if (/^-?\d+,\d{1,6}$/.test(cleaned)) {
+      cleaned = cleaned.replace(',', '.');
+    } else if (/^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(cleaned)) {
+      cleaned = cleaned.replace(/,/g, '');
+    }
+    if (/^-?\d+(?:\.\d+)?$/.test(cleaned)) {
+      const n = Number(cleaned);
+      return Number.isFinite(n) ? n : null;
+    }
   }
   return null;
 }
@@ -336,15 +347,15 @@ function firstNum(...vals) {
 }
 
 /**
- * Extract strictly non-sensitive numeric/boolean/currency metrics (up to 2 levels deep)
+ * Extract strictly non-sensitive numeric/boolean/currency metrics (up to 4 levels deep)
  * so the UI can display exact provider numbers without ever exposing IDs, keys, or strings.
  */
 function extractSafeMetrics(raw, depth = 0) {
-  if (!raw || typeof raw !== 'object' || depth > 2) return null;
+  if (!raw || typeof raw !== 'object' || depth > 4) return null;
   const out = {};
   let count = 0;
   for (const [k, v] of Object.entries(raw)) {
-    if (count >= 32) break;
+    if (count >= 40) break;
     if (/secret|password|hash|jwt|cookie|authorization/i.test(k)) continue;
     if (typeof v === 'boolean') {
       out[k] = v;
@@ -354,26 +365,26 @@ function extractSafeMetrics(raw, depth = 0) {
       count += 1;
     } else if (typeof v === 'string') {
       const trimmed = v.trim();
-      if (/^(RUB|USD|EUR|CNY|GBP|USDT|KZT|BYN|TRY|AED|IRR)$/i.test(trimmed)) {
+      if (/^(RUB|USD|EUR|CNY|GBP|USDT|KZT|BYN|TRY|AED|IRR|tokens|rub|usd)$/i.test(trimmed)) {
         out[k] = trimmed.toUpperCase();
         count += 1;
-      } else if (/^-?\d+(?:\.\d+)?$/.test(trimmed) && !/id$/i.test(k)) {
-        const n = Number(trimmed);
-        if (Number.isFinite(n)) {
+      } else if (!/id$/i.test(k)) {
+        const n = toNum(trimmed);
+        if (n !== null) {
           out[k] = n;
           count += 1;
         }
       }
-    } else if (v && typeof v === 'object' && !Array.isArray(v) && depth < 2) {
+    } else if (v && typeof v === 'object' && !Array.isArray(v) && depth < 4) {
       const sub = extractSafeMetrics(v, depth + 1);
       if (sub && Object.keys(sub).length > 0) {
         out[k] = sub;
         count += 1;
       }
-    } else if (Array.isArray(v) && depth === 0 && k === 'balance_infos' && v[0] && typeof v[0] === 'object') {
-      const sub = extractSafeMetrics(v[0], 2);
-      if (sub) {
-        out[k] = [sub];
+    } else if (Array.isArray(v) && depth < 3 && v.length > 0 && v[0] && typeof v[0] === 'object') {
+      const arr = v.slice(0, 3).map((item) => extractSafeMetrics(item, depth + 1)).filter(Boolean);
+      if (arr.length > 0) {
+        out[k] = arr;
         count += 1;
       }
     }
@@ -758,10 +769,52 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
     Authorization: `Bearer ${env.MODEL_API_KEY}`,
     Accept: 'application/json'
   };
-  const safeGetJson = async (url) => {
-    const res = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(4_500) });
-    if (!res.ok) return null;
-    return res.json().catch(() => null);
+  const probes = [];
+  const extractQuotaHeaders = (hdrs) => {
+    if (!hdrs || typeof hdrs.forEach !== 'function') return null;
+    const out = {};
+    let found = 0;
+    hdrs.forEach((val, key) => {
+      const k = String(key).toLowerCase();
+      if (/(?:token|quota|balance|credit|ratelimit|remain|limit)/i.test(k) && !/auth|cookie|key|id/i.test(k)) {
+        const n = toNum(val);
+        out[k] = n !== null ? n : String(val).slice(0, 32);
+        found += 1;
+      }
+    });
+    return found > 0 ? out : null;
+  };
+  const safeGetJson = async (url, label = '') => {
+    const tag = label || (() => { try { return new URL(url).pathname; } catch { return url; } })();
+    try {
+      const res = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(8_000) });
+      const qHeaders = extractQuotaHeaders(res.headers);
+      const bodyJson = await res.json().catch(() => null);
+      probes.push({
+        path: tag,
+        status: res.status,
+        ...(bodyJson && typeof bodyJson === 'object'
+          ? {
+              topKeys: Object.keys(bodyJson).slice(0, 16),
+              ...(bodyJson.data && typeof bodyJson.data === 'object' && !Array.isArray(bodyJson.data)
+                ? { dataKeys: Object.keys(bodyJson.data).slice(0, 16) }
+                : {}),
+              ...(bodyJson.error && typeof bodyJson.error === 'object'
+                ? {
+                    errorCode: String(bodyJson.error.code || bodyJson.error.type || '').slice(0, 40),
+                    errorOrigin: String(bodyJson.error.origin || '').slice(0, 24)
+                  }
+                : {})
+            }
+          : {}),
+        ...(qHeaders ? { headers: qHeaders } : {})
+      });
+      if (!res.ok) return null;
+      return bodyJson;
+    } catch (err) {
+      probes.push({ path: tag, status: 0, errorCode: String(err?.name || 'fetch_error').slice(0, 32) });
+      return null;
+    }
   };
 
   let result = null;
@@ -774,8 +827,8 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
 
   if (lowerBase.includes('openrouter.ai')) {
     const [creditsJson, keyJson] = await Promise.all([
-      safeGetJson(`${baseUrl}/credits`).catch(() => null),
-      safeGetJson(`${baseUrl}/key`).catch(() => null)
+      safeGetJson(`${baseUrl}/credits`, '/credits'),
+      safeGetJson(`${baseUrl}/key`, '/key')
     ]);
     rawMetrics = extractSafeMetrics(creditsJson) || extractSafeMetrics(keyJson);
     result =
@@ -789,16 +842,16 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
       }
     }
   } else if (lowerBase.includes('deepseek.com')) {
-    const dsJson = await safeGetJson(`${originUrl}/user/balance`).catch(() => null);
+    const dsJson = await safeGetJson(`${originUrl}/user/balance`, '/user/balance');
     rawMetrics = extractSafeMetrics(dsJson);
     result = parseQuotaFromObject(dsJson, 'api.deepseek.com/user/balance', 'USD');
   } else if (lowerBase.includes('tooken.club')) {
     // Native Tooken Club live balance & usage endpoints (`/v1/balance` + `/v1/usage`)
     const [v1BalanceJson, v1UsageJson] = await Promise.all([
-      safeGetJson(`${baseUrl}/balance`).catch(() => null),
-      safeGetJson(`${baseUrl}/usage`).catch(() => null)
+      safeGetJson(`${baseUrl}/balance`, '/v1/balance'),
+      safeGetJson(`${baseUrl}/usage`, '/v1/usage')
     ]);
-    rawMetrics = extractSafeMetrics(v1BalanceJson);
+    rawMetrics = extractSafeMetrics(v1BalanceJson) || extractSafeMetrics(v1UsageJson);
     providerUsage = parseProviderUsageObject(v1UsageJson);
     result = parseQuotaFromObject(v1BalanceJson, `${hostName}/v1/balance`, 'RUB');
     if (result && providerUsage && result.usedTokens === undefined && providerUsage.totalTokens !== undefined) {
@@ -812,13 +865,13 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
 
     const [v1BalanceJson, v1UsageJson, tokenUsageJson, subJson, billUsageJson, creditGrantsJson, keyInfoJson] =
       await Promise.all([
-        safeGetJson(`${baseUrl}/balance`).catch(() => null),
-        safeGetJson(`${baseUrl}/usage`).catch(() => null),
-        safeGetJson(`${originUrl}/api/usage/token`).catch(() => null),
-        safeGetJson(`${baseUrl}/dashboard/billing/subscription`).catch(() => null),
-        safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`).catch(() => null),
-        safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`).catch(() => null),
-        safeGetJson(`${originUrl}/key/info`).catch(() => null)
+        safeGetJson(`${baseUrl}/balance`, '/v1/balance'),
+        safeGetJson(`${baseUrl}/usage`, '/v1/usage'),
+        safeGetJson(`${originUrl}/api/usage/token`, '/api/usage/token'),
+        safeGetJson(`${baseUrl}/dashboard/billing/subscription`, '/dashboard/billing/subscription'),
+        safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`, '/dashboard/billing/usage'),
+        safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`, '/dashboard/billing/credit_grants'),
+        safeGetJson(`${originUrl}/key/info`, '/key/info')
       ]);
 
     providerUsage = parseProviderUsageObject(v1UsageJson);
@@ -876,6 +929,7 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
     ...rawFinal,
     ...(providerUsage ? { providerUsage } : {}),
     ...(rawMetrics ? { metrics: rawMetrics } : {}),
+    ...(probes.length ? { probes } : {}),
     ...(typeof rawFinal.remainingBalance === 'number' && rawFinal.remainingUsd === undefined
       ? { remainingUsd: rawFinal.remainingBalance }
       : {}),
