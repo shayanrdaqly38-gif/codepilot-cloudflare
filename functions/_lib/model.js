@@ -2054,31 +2054,67 @@ function extractSafeUpstreamError(errText, secrets = []) {
   return clean;
 }
 
-async function consumeChatSseResponse(response, onDelta) {
-  const reader = response.body?.getReader?.();
-  if (!reader) return null;
-  const dec = new TextDecoder();
-  let buf = '';
+function classifyInlineProviderError(errObj, secrets = []) {
+  if (!errObj) return null;
+  const rawMsg =
+    (typeof errObj === 'string' && errObj) ||
+    errObj?.message ||
+    errObj?.error?.message ||
+    (typeof errObj?.error === 'string' && errObj.error) ||
+    '';
+  const rawCode = String(errObj?.code || errObj?.error?.code || errObj?.type || errObj?.error?.type || '').toLowerCase();
+  const clean = stripSecrets(String(rawMsg || '').replace(/\s+/g, ' ').trim(), secrets).slice(0, 180);
+  const combined = `${rawCode} ${clean}`.toLowerCase();
+
+  if (/quota|insufficient|balance|credit|billing|exhausted|afford|اعتبار|سهمیه|موجودی/.test(combined)) {
+    return {
+      status: 402,
+      code: 'model_quota_exhausted',
+      message: `اعتبار یا توکن کلید API به پایان رسید${clean ? ` (${clean})` : ''}. کلید جدید را جایگزین کنید و بنویسید «ادامه» تا دقیقاً از همین نقطه ادامه یابد.`
+    };
+  }
+  if (/invalid_api_key|unauthorized|authentication|permission_denied|forbidden|api key/.test(combined)) {
+    return {
+      status: 502,
+      code: 'model_auth',
+      message: `کلید API پذیرفته نشد${clean ? ` (${clean})` : ''}. از بخش ⌁ API کلید جدید وارد کنید و بنویسید «ادامه».`
+    };
+  }
+  if (/rate_limit|too many requests|429|throttl/.test(combined)) {
+    return {
+      status: 429,
+      code: 'model_rate_limited',
+      message: `سهمیه‌ی لحظه‌ای سرویس مدل پر شد${clean ? ` (${clean})` : ''}. چند ثانیه صبر کنید یا کلید عوض کنید و بنویسید «ادامه».`
+    };
+  }
+  return {
+    status: 502,
+    code: 'model_upstream',
+    message: clean
+      ? `خطای سرویس مدل در حین پاسخ: ${clean}`
+      : 'سرویس مدل در میانه پاسخ خطا برگرداند.'
+  };
+}
+
+function createSseAccumulator(onDelta) {
   let outModel = '';
   let finishReason = 'stop';
   let contentAcc = '';
   let reasoningAcc = '';
   let usageObj = null;
+  let sawFrame = false;
+  let inlineError = null;
   const toolMap = new Map();
 
-  const handleDataLine = (rawLine) => {
-    const line = rawLine.trim();
-    if (!line.startsWith('data:')) return;
-    const payloadStr = line.slice(5).trim();
-    if (!payloadStr || payloadStr === '[DONE]') return;
-    let evt;
-    try {
-      evt = JSON.parse(payloadStr);
-    } catch {
+  const applyEventObj = (evt) => {
+    if (!evt || typeof evt !== 'object') return;
+    if (evt.error && !evt.choices?.length) {
+      inlineError = evt.error;
       return;
     }
-    if (evt?.model) outModel = String(evt.model);
-    if (evt?.usage && typeof evt.usage === 'object') usageObj = evt.usage;
+    sawFrame = true;
+    if (evt.model) outModel = String(evt.model);
+    if (evt.usage && typeof evt.usage === 'object') usageObj = evt.usage;
     const choice = evt?.choices?.[0];
     if (!choice) return;
     if (choice.finish_reason) finishReason = String(choice.finish_reason);
@@ -2089,7 +2125,24 @@ async function consumeChatSseResponse(response, onDelta) {
       if (typeof onDelta === 'function') {
         try { onDelta({ type: 'content', text: d.content }); } catch { /* ignore */ }
       }
+    } else if (Array.isArray(d.content)) {
+      for (const blk of d.content) {
+        if (!blk) continue;
+        if ((blk.type === 'thinking' || blk.type === 'reasoning') && typeof (blk.thinking || blk.text) === 'string') {
+          const rt = String(blk.thinking || blk.text);
+          reasoningAcc += rt;
+          if (typeof onDelta === 'function') {
+            try { onDelta({ type: 'reasoning', text: rt }); } catch { /* ignore */ }
+          }
+        } else if (typeof blk.text === 'string' && blk.text) {
+          contentAcc += blk.text;
+          if (typeof onDelta === 'function') {
+            try { onDelta({ type: 'content', text: blk.text }); } catch { /* ignore */ }
+          }
+        }
+      }
     }
+
     const rChunk =
       (typeof d.reasoning_content === 'string' && d.reasoning_content) ||
       (typeof d.reasoning === 'string' && d.reasoning) ||
@@ -2101,6 +2154,7 @@ async function consumeChatSseResponse(response, onDelta) {
         try { onDelta({ type: 'reasoning', text: rChunk }); } catch { /* ignore */ }
       }
     }
+
     if (Array.isArray(d.tool_calls)) {
       for (const tc of d.tool_calls) {
         const idx = Number.isInteger(tc?.index) ? tc.index : toolMap.size;
@@ -2115,37 +2169,162 @@ async function consumeChatSseResponse(response, onDelta) {
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let nlIdx;
-    while ((nlIdx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nlIdx);
-      buf = buf.slice(nlIdx + 1);
-      handleDataLine(line);
+  const handleLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    if (line.startsWith('data:')) {
+      const payloadStr = line.slice(5).trim();
+      if (!payloadStr || payloadStr === '[DONE]') return;
+      try {
+        applyEventObj(JSON.parse(payloadStr));
+      } catch {
+        /* ignore malformed partial keepalive frame */
+      }
     }
-  }
-  if (buf.trim()) handleDataLine(buf);
+  };
 
-  const toolCalls = [...toolMap.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, v]) => v);
-
-  return {
-    model: outModel,
-    choices: [
-      {
-        finish_reason: finishReason,
-        message: {
-          role: 'assistant',
-          content: contentAcc,
-          ...(reasoningAcc ? { reasoning_content: reasoningAcc } : {}),
-          ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+  const snapshot = (streamInterrupted = false) => {
+    const toolCalls = [...toolMap.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, v]) => v);
+    let hasTruncatedToolCall = false;
+    for (const tc of toolCalls) {
+      const rawArgs = String(tc?.function?.arguments || '').trim();
+      if (!tc?.function?.name) {
+        hasTruncatedToolCall = true;
+        break;
+      }
+      if (rawArgs) {
+        try {
+          JSON.parse(rawArgs);
+        } catch {
+          hasTruncatedToolCall = true;
+          break;
         }
       }
-    ],
-    ...(usageObj ? { usage: usageObj } : {})
+    }
+    return {
+      sawFrame,
+      inlineError,
+      streamInterrupted,
+      hasTruncatedToolCall,
+      rawContent: contentAcc,
+      rawReasoning: reasoningAcc,
+      rawToolCalls: toolCalls,
+      data: {
+        model: outModel,
+        interrupted: streamInterrupted,
+        choices: [
+          {
+            finish_reason: streamInterrupted ? 'interrupted' : finishReason,
+            message: {
+              role: 'assistant',
+              content: contentAcc,
+              ...(reasoningAcc ? { reasoning_content: reasoningAcc } : {}),
+              ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+            }
+          }
+        ],
+        ...(usageObj ? { usage: usageObj } : {})
+      }
+    };
+  };
+
+  return { applyEventObj, handleLine, snapshot };
+}
+
+function parseHybridTextPayload(rawText, onDelta) {
+  const cleaned = String(rawText || '').replace(/^\uFEFF/, '').trim();
+  if (!cleaned) return { kind: 'empty', data: null };
+  if (/^<!doctype\s+html|^<html\b/i.test(cleaned)) {
+    return { kind: 'html', data: null };
+  }
+
+  // 1. Standard JSON object
+  if (cleaned.startsWith('{')) {
+    try {
+      return { kind: 'json', data: JSON.parse(cleaned) };
+    } catch {
+      // Fall through: could be NDJSON (`{...}\n{...}`) or JSON followed by proxy trailer
+    }
+  }
+
+  // 2. SSE frames (`data: {...}`) returned with non-SSE Content-Type
+  if (/^data:\s*/m.test(cleaned)) {
+    const acc = createSseAccumulator(onDelta);
+    for (const line of cleaned.split(/\r?\n/)) acc.handleLine(line);
+    const snap = acc.snapshot(false);
+    if (snap.inlineError && !snap.sawFrame) return { kind: 'error_obj', error: snap.inlineError };
+    if (snap.sawFrame) return { kind: 'sse', snap, data: snap.data };
+  }
+
+  // 3. NDJSON (newline-delimited JSON chunks)
+  const lines = cleaned.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length > 1 && lines.every((l) => l.startsWith('{'))) {
+    const acc = createSseAccumulator(onDelta);
+    for (const line of lines) {
+      try { acc.applyEventObj(JSON.parse(line)); } catch { /* ignore */ }
+    }
+    const snap = acc.snapshot(false);
+    if (snap.sawFrame) return { kind: 'ndjson', snap, data: snap.data };
+  }
+
+  // 4. JSON embedded inside proxy noise / stray prefix
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      const extracted = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+      if (extracted && typeof extracted === 'object') return { kind: 'json', data: extracted };
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return { kind: 'unreadable', data: null, preview: cleaned.slice(0, 120) };
+}
+
+async function consumeChatSseResponse(response, onDelta) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return { kind: 'empty', data: null };
+  const dec = new TextDecoder();
+  const acc = createSseAccumulator(onDelta);
+  let buf = '';
+  let rawFallback = '';
+  let streamInterrupted = false;
+  let streamErrObj = null;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunkText = dec.decode(value, { stream: true });
+      if (rawFallback.length < 96_000) rawFallback += chunkText;
+      buf += chunkText;
+      let nlIdx;
+      while ((nlIdx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nlIdx);
+        buf = buf.slice(nlIdx + 1);
+        acc.handleLine(line);
+      }
+    }
+    buf += dec.decode();
+  } catch (err) {
+    streamInterrupted = true;
+    streamErrObj = err;
+  }
+  if (buf.trim()) acc.handleLine(buf);
+
+  const snap = acc.snapshot(streamInterrupted);
+  if (!snap.sawFrame && !snap.inlineError && rawFallback.trim()) {
+    // Proxy set Content-Type: text/event-stream, but actually sent plain JSON or HTML!
+    return parseHybridTextPayload(rawFallback, onDelta);
+  }
+  return {
+    kind: 'sse',
+    snap,
+    data: snap.data,
+    streamError: streamErrObj
   };
 }
 
@@ -2211,13 +2390,15 @@ export async function callModel(env, payload) {
     let variantIdx = 0;
     let netRetries = 0;
     let statusRetries = 0;
+    let forceNonStreamFallback = false;
 
     while (variantIdx < wireVariants.length) {
       const currentVariant = wireVariants[variantIdx];
+      const streamThisAttempt = useUpstreamStream && !forceNonStreamFallback;
       const body = JSON.stringify({
         model,
-        stream: useUpstreamStream,
-        ...(useUpstreamStream ? { stream_options: { include_usage: true } } : {}),
+        stream: streamThisAttempt,
+        ...(streamThisAttempt ? { stream_options: { include_usage: true } } : {}),
         ...currentVariant.params,
         messages: activeMessages,
         ...(payload.tools && payload.tools.length
@@ -2234,7 +2415,7 @@ export async function callModel(env, payload) {
           headers: {
             Authorization: `Bearer ${env.MODEL_API_KEY}`,
             'Content-Type': 'application/json',
-            Accept: useUpstreamStream ? 'text/event-stream, application/json' : 'application/json'
+            Accept: streamThisAttempt ? 'text/event-stream, application/json' : 'application/json'
           },
           body
         });
@@ -2248,33 +2429,98 @@ export async function callModel(env, payload) {
         if (cIndex + 1 < candidates.length) break;
         fail(
           error?.name === 'TimeoutError' || error?.name === 'AbortError'
-            ? 'پاسخ مدل در زمان مجاز دریافت نشد. دوباره تلاش کنید.'
-            : 'ارتباط با سرویس مدل برقرار نشد.',
+            ? 'پاسخ مدل طولانی شد و به سقف زمان مجاز رسید. پیشرفت ذخیره شد؛ بنویسید «ادامه» تا از همین نقطه ادامه یابد.'
+            : 'ارتباط با سرویس مدل برقرار نشد. پیشرفت ذخیره شد؛ بنویسید «ادامه».',
           504,
           'model_unreachable'
         );
       }
 
       if (response.ok) {
-        let data;
+        const secrets = envSecrets(env);
         const ct = String(response.headers?.get?.('content-type') || '').toLowerCase();
-        try {
-          if (ct.includes('text/event-stream')) {
-            data = await consumeChatSseResponse(response, payload.onDelta);
-          } else {
-            data = await response.json();
+        let parsedOutcome;
+        if (ct.includes('text/event-stream')) {
+          parsedOutcome = await consumeChatSseResponse(response, payload.onDelta);
+        } else {
+          let rawBodyText = '';
+          try {
+            rawBodyText = await response.text();
+            parsedOutcome = parseHybridTextPayload(rawBodyText, payload.onDelta);
+          } catch {
+            parsedOutcome = { kind: 'unreadable', data: null };
           }
-        } catch {
-          fail('پاسخ مدل قابل خواندن نبود.', 502, 'model_bad_response');
         }
+
+        const snap = parsedOutcome?.snap || null;
+        const data = parsedOutcome?.data || null;
+
+        // 1. Inline error returned inside a 200 JSON or mid-SSE stream (e.g. quota exhausted mid-generation)
+        const inlineErrRaw = snap?.inlineError || parsedOutcome?.error || (data?.error && !data?.choices?.length ? data.error : null);
+        if (inlineErrRaw) {
+          const classified = classifyInlineProviderError(inlineErrRaw, secrets);
+          const err = new Error(classified.message);
+          err.status = classified.status;
+          err.code = classified.code;
+          if (snap?.rawContent) err.partialContent = stripSecrets(snap.rawContent, secrets);
+          if (snap?.rawReasoning) err.partialReasoning = stripSecrets(snap.rawReasoning, secrets);
+          if (snap?.rawToolCalls?.length) err.partialToolCalls = snap.rawToolCalls;
+          throw err;
+        }
+
+        // 2. Empty / HTML / unreadable gateway response before any output was produced -> auto-retry!
+        if (!data || parsedOutcome.kind === 'empty' || parsedOutcome.kind === 'html' || parsedOutcome.kind === 'unreadable') {
+          if (statusRetries === 0 && cIndex === 0) {
+            statusRetries += 1;
+            if (streamThisAttempt) forceNonStreamFallback = true;
+            await sleep(450);
+            continue;
+          }
+          if (cIndex + 1 < candidates.length) break;
+          fail(
+            parsedOutcome?.kind === 'html'
+              ? 'درگاه سرویس مدل به جای JSON صفحه خطای وب (HTML/Timeout) برگرداند. آدرس/کلید API را بررسی کنید یا «ادامه» بزنید.'
+              : 'پاسخ سرویس مدل ناقص یا غیرقابل‌خواندن بود. کلید/سهمیه API را بررسی کنید و بنویسید «ادامه» تا از همین نقطه ادامه یابد.',
+            502,
+            'model_bad_response'
+          );
+        }
+
+        // 3. Mid-stream network drop: preserve partial output or checkpoint truncated tool call!
+        if (snap?.streamInterrupted) {
+          const hasAnyProgress = Boolean(snap.rawContent?.trim() || snap.rawReasoning?.trim() || snap.rawToolCalls?.length);
+          if (!hasAnyProgress && netRetries === 0 && cIndex === 0) {
+            netRetries += 1;
+            if (streamThisAttempt) forceNonStreamFallback = true;
+            await sleep(450);
+            continue;
+          }
+          if (snap.hasTruncatedToolCall || !snap.rawContent?.trim()) {
+            const err = new Error(
+              'ارتباط استریم با سرویس مدل در میانه کار قطع شد. تمام مراحل قبلی ذخیره شد؛ بنویسید «ادامه» تا دقیقاً از همین نقطه ادامه یابد.'
+            );
+            err.status = 502;
+            err.code = 'stream_interrupted';
+            if (snap.rawContent) err.partialContent = stripSecrets(snap.rawContent, secrets);
+            if (snap.rawReasoning) err.partialReasoning = stripSecrets(snap.rawReasoning, secrets);
+            if (snap.rawToolCalls?.length) err.partialToolCalls = snap.rawToolCalls;
+            throw err;
+          }
+        }
+
         const choice = data?.choices?.[0];
         const message = choice?.message;
         if (!message || typeof message !== 'object') {
-          fail('پاسخ مدل ساختار معتبری نداشت.', 502, 'model_empty');
+          if (statusRetries === 0 && cIndex === 0) {
+            statusRetries += 1;
+            if (streamThisAttempt) forceNonStreamFallback = true;
+            await sleep(450);
+            continue;
+          }
+          fail('پاسخ مدل ساختار معتبری نداشت. دوباره تلاش کنید یا «ادامه» بزنید.', 502, 'model_empty');
         }
 
-        const secrets = envSecrets(env);
-        const toolCalls = normalizeToolCalls(message.tool_calls);
+        const toolCalls = snap?.hasTruncatedToolCall ? [] : normalizeToolCalls(message.tool_calls);
         const { rawReasoning, rawContent } = extractReasoningAndText(message);
         const cleanContent = stripSecrets(rawContent, secrets);
         const cleanReasoning = rawReasoning ? stripSecrets(rawReasoning, secrets) : '';
@@ -2295,6 +2541,7 @@ export async function callModel(env, payload) {
         return {
           model: String(data.model || model),
           finishReason: String(choice.finish_reason || 'stop'),
+          interrupted: Boolean(data.interrupted || choice.finish_reason === 'interrupted'),
           reasoning: cleanReasoning,
           reasoningEffort: currentVariant.effort,
           rateLimit,

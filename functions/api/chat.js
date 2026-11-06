@@ -16,6 +16,14 @@
 
 import { route } from '../_lib/api.js';
 import {
+  buildCheckpointResumeDirective,
+  clearTurnCheckpoint,
+  extractPartialToolTarget,
+  isResumePrompt,
+  loadTurnCheckpoint,
+  saveTurnCheckpoint
+} from '../_lib/checkpoint.js';
+import {
   DEFAULT_AGENT_CONFIG,
   isTookenUrl,
   normalizeAgentConfig,
@@ -754,17 +762,40 @@ export async function onRequestPost({ request, env }) {
       let lastPromptTokens = 0;
       let latestRateLimit = null;
       let steps = 0;
+      let stepStreamedContent = '';
+      let stepStreamedReasoning = '';
+      let turnInterruptedReason = '';
+      const completedToolsLog = [];
+      let existingCheckpoint = null;
+      let resumingFromCheckpoint = false;
 
       (async () => {
         try {
+          existingCheckpoint = await loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null);
+          resumingFromCheckpoint = Boolean(
+            existingCheckpoint && (data?.resumeCheckpoint === true || isResumePrompt(userText))
+          );
+          if (existingCheckpoint && !resumingFromCheckpoint) {
+            await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
+            existingCheckpoint = null;
+          }
+
           send('status', {
-            phase: 'thinking',
+            phase: resumingFromCheckpoint ? 'resuming' : 'thinking',
             sandbox: sb,
             linuxRunner: linux,
             reasoningEffort,
             reasoningSupported: reasoningSpec.supported,
             maxSteps,
-            powerProfile: powerPlan.axes
+            powerProfile: powerPlan.axes,
+            ...(resumingFromCheckpoint
+              ? {
+                  resumedFrom: {
+                    completedSteps: existingCheckpoint.completedSteps || 0,
+                    touchedFiles: existingCheckpoint.touchedFiles || []
+                  }
+                }
+              : {})
           });
 
           const history = await listMessages(env, conversation.id);
@@ -814,17 +845,42 @@ export async function onRequestPost({ request, env }) {
           messages.push(...working.recent);
           await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
 
+          // Inject surgical checkpoint continuation briefing on the wire when resuming («ادامه»)
+          if (resumingFromCheckpoint && existingCheckpoint) {
+            const directive = buildCheckpointResumeDirective(existingCheckpoint, workspace);
+            if (directive) {
+              for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
+                if (messages[mi]?.role === 'user') {
+                  if (typeof messages[mi].content === 'string') {
+                    messages[mi] = { ...messages[mi], content: `${messages[mi].content}\n\n${directive}` };
+                  } else if (Array.isArray(messages[mi].content)) {
+                    messages[mi] = {
+                      ...messages[mi],
+                      content: [...messages[mi].content, { type: 'text', text: `\n\n${directive}` }]
+                    };
+                  }
+                  break;
+                }
+              }
+            }
+          }
+
           let autoRepairAttempts = 0;
+          const MUTATING_LIVE_SET = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
 
           while (steps < maxSteps) {
             steps += 1;
+            stepStreamedContent = '';
+            stepStreamedReasoning = '';
             const inputChars = estimateMessagesTextChars(messages);
             if (inputChars > powerPlan.maxTurnInputChars) {
-              finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً از دستور `/compact` استفاده کنید یا گفتگوی تازه‌ای بسازید.';
+              turnInterruptedReason = 'context_limit';
+              finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً از دستور `/compact` استفاده کنید و سپس بنویسید «ادامه».';
               break;
             }
 
             let deltaChars = 0;
+            send('status', { phase: steps > 1 ? 'working' : (resumingFromCheckpoint ? 'resuming' : 'thinking'), step: steps, maxSteps });
             const result = await callModel(effectiveEnv, {
               ...(selectedModel ? { model: selectedModel } : {}),
               ...(reasoningEffort !== null ? { reasoningEffort } : {}),
@@ -836,9 +892,13 @@ export async function onRequestPost({ request, env }) {
                 if (!chunk?.text) return;
                 deltaChars += chunk.text.length;
                 if (chunk.type === 'content') {
+                  stepStreamedContent += chunk.text;
                   send('delta', { text: chunk.text, step: steps });
-                } else if (chunk.type === 'reasoning' && deltaChars <= powerPlan.thinkingDeltaLimit) {
-                  send('thinking_delta', { text: chunk.text, step: steps });
+                } else if (chunk.type === 'reasoning') {
+                  stepStreamedReasoning += chunk.text;
+                  if (deltaChars <= powerPlan.thinkingDeltaLimit) {
+                    send('thinking_delta', { text: chunk.text, step: steps });
+                  }
                 }
               }
             });
@@ -878,6 +938,8 @@ export async function onRequestPost({ request, env }) {
               newMessages.push(stored);
               messages.push(toWire(stored));
               send('tool', {
+                step: steps,
+                maxSteps,
                 calls: assistant.tool_calls.map((call) => ({
                   id: call.id,
                   name: call.function.name,
@@ -885,6 +947,7 @@ export async function onRequestPost({ request, env }) {
                 }))
               });
 
+              let stepMutatedWorkspace = false;
               for (const call of assistant.tool_calls) {
                 let args = {};
                 try {
@@ -907,6 +970,10 @@ export async function onRequestPost({ request, env }) {
                 } catch (error) {
                   outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
                 }
+                if (outcome.ok) {
+                  const argHint = args?.path || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
+                  completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
+                }
                 const toolResult = {
                   role: 'tool',
                   tool_call_id: call.id,
@@ -919,16 +986,43 @@ export async function onRequestPost({ request, env }) {
                   id: call.id,
                   name: call.function.name,
                   ok: outcome.ok,
+                  step: steps,
                   result: toolResult.content.slice(0, 4000)
                 });
+
+                // Stream live file updates to the UI & mark for immediate D1 flush!
+                if (outcome.ok && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
+                  stepMutatedWorkspace = true;
+                  const p = String(args.path);
+                  const deleted = workspace.files[p] === undefined;
+                  send('live_file', {
+                    path: p,
+                    deleted,
+                    content: deleted ? '' : String(workspace.files[p] || ''),
+                    step: steps,
+                    editCount: turn.editCount
+                  });
+                }
+              }
+
+              // Persist workspace to D1 immediately after every mutating step so zero file edits can ever be lost!
+              if (stepMutatedWorkspace) {
+                await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
+                  .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
+                  .run()
+                  .catch(() => {});
               }
               continue;
             }
 
-            // Autonomous Self-Repair Gate when boosted Power Engine is active:
-            // If any modified file currently has a syntax/validation error, do not let the turn
-            // stop prematurely — feed the exact validation errors back into the loop to fix them!
-            if (powerPlan.autoRepairValidation && autoRepairAttempts < 2 && steps < maxSteps) {
+            if (result.interrupted) {
+              turnInterruptedReason = 'stream_cutoff';
+            } else if (result.finishReason === 'length') {
+              turnInterruptedReason = 'length_cutoff';
+            }
+
+            // Autonomous Self-Repair Gate when boosted Power Engine is active (skip if stream itself cut off):
+            if (!turnInterruptedReason && powerPlan.autoRepairValidation && autoRepairAttempts < 2 && steps < maxSteps) {
               const brokenFiles = [];
               for (const p of turn.touched) {
                 if (p.startsWith('(') || workspace.files[p] === undefined) continue;
@@ -951,6 +1045,7 @@ export async function onRequestPost({ request, env }) {
             }
 
             finalText = String(assistant.content || '').trim() || 'انجام شد.';
+            stepStreamedContent = '';
             newMessages.push({
               role: 'assistant',
               content: finalText,
@@ -960,15 +1055,17 @@ export async function onRequestPost({ request, env }) {
               created_at: Date.now()
             });
             messages.push({ role: 'assistant', content: finalText });
-            send('assistant', { content: finalText });
+            send('assistant', { content: finalText, interrupted: Boolean(turnInterruptedReason) });
             break;
           }
 
           if (!finalText) {
-            finalText =
-              newMessages.length > 0
-                ? 'به سقف مراحل ابزار رسیدم. کار انجام‌شده ذخیره شد؛ در پیام بعدی بنویسید «ادامه بده» تا بقیه‌اش را کامل کنم.'
-                : 'پاسخی دریافت نشد. دوباره تلاش کنید.';
+            if (newMessages.length > 0) {
+              turnInterruptedReason = 'step_limit';
+              finalText = 'به سقف مراحل این نوبت رسیدم و تمام فایل‌ها و تغییرات تا همین نقطه ذخیره شدند. بنویسید «ادامه» تا دقیقاً از مرحله‌ی بعدی ادامه دهم.';
+            } else {
+              finalText = 'پاسخی دریافت نشد. دوباره تلاش کنید.';
+            }
             if (!newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
               newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
             }
@@ -983,6 +1080,23 @@ export async function onRequestPost({ request, env }) {
             await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
               .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
               .run();
+          }
+
+          let savedCheckpoint = null;
+          const touchedList = [...turn.touched].filter((p) => !p.startsWith('('));
+          if (turnInterruptedReason) {
+            savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
+              prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
+              originalGoal: userText,
+              reason: turnInterruptedReason,
+              stepsCompleted: steps,
+              touchedFiles: touchedList,
+              deletedFiles: [...turn.deleted],
+              completedTools: completedToolsLog,
+              partialContent: turnInterruptedReason === 'step_limit' ? '' : finalText
+            }).catch(() => null);
+          } else if (resumingFromCheckpoint || existingCheckpoint) {
+            await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
           }
 
           const outputChars = newMessages.reduce(
@@ -1024,7 +1138,7 @@ export async function onRequestPost({ request, env }) {
             ...(latestRateLimit ? { rateLimit: latestRateLimit } : {}),
             modelReasoning: getModelReasoningSpec(effectiveModelId, effectiveEnv),
             conversation: conversationView(latest),
-            touchedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
+            touchedFiles: touchedList,
             deletedFiles: [...turn.deleted],
             workspaceDirty: hasWorkspaceChanges,
             workspace: hasWorkspaceChanges ? workspace : undefined,
@@ -1039,6 +1153,11 @@ export async function onRequestPost({ request, env }) {
             steps,
             maxSteps,
             powerProfile: powerPlan.axes,
+            interrupted: Boolean(turnInterruptedReason),
+            interruptedReason: turnInterruptedReason || null,
+            resumable: Boolean(savedCheckpoint),
+            checkpoint: savedCheckpoint,
+            resumedFromCheckpoint: resumingFromCheckpoint,
             sandbox: sb,
             linuxRunner: linux,
             context: {
@@ -1048,22 +1167,83 @@ export async function onRequestPost({ request, env }) {
             }
           });
         } catch (error) {
+          const partialContent = stripSecrets(
+            String(error?.partialContent || stepStreamedContent || '').trim(),
+            envSecrets(effectiveEnv)
+          );
+          const partialReasoning = stripSecrets(
+            String(error?.partialReasoning || stepStreamedReasoning || '').trim(),
+            envSecrets(effectiveEnv)
+          );
+          const interruptedToolCall = extractPartialToolTarget(error?.partialToolCalls);
+          const touchedList = [...turn.touched].filter((p) => !p.startsWith('('));
+          const hasChanges = touchedList.length > 0 || turn.deleted.size > 0 || turn.workspaceChanged;
+          const errCode = String(error?.code || 'chat_failed');
+          const errMsg = error?.status ? error.message : 'خطا در پردازش درخواست. پیشرفت ذخیره شد؛ بنویسید «ادامه».';
+          const reason =
+            errCode === 'model_quota_exhausted'
+              ? 'quota_exhausted'
+              : errCode === 'model_auth'
+                ? 'auth_failed'
+                : errCode === 'model_rate_limited'
+                  ? 'rate_limited'
+                  : errCode === 'stream_interrupted' || errCode === 'model_bad_response'
+                    ? 'stream_cutoff'
+                    : errCode === 'model_timeout' || errCode === 'model_unreachable'
+                      ? 'timeout'
+                      : 'error';
+
+          let savedCheckpoint = null;
           try {
             const repairedPartial = repairToolGroups(newMessages);
-            if (repairedPartial.length) await appendMessages(env, conversation, repairedPartial);
-            if (turn.touched.size || turn.deleted.size || turn.workspaceChanged) {
+            if (partialContent) {
+              repairedPartial.push({
+                role: 'assistant',
+                content: partialContent,
+                ...(partialReasoning ? { reasoning: partialReasoning.slice(0, 10_000) } : {}),
+                created_at: Date.now()
+              });
+            }
+            if (repairedPartial.length) {
+              await appendMessages(env, conversation, repairedPartial);
+              const statsNow = await messageStats(env, conversation.id);
+              await env.DB.prepare('UPDATE conversations SET message_count=?, last_message_at=?, updated_at=? WHERE id=? AND owner=?')
+                .bind(statsNow.count, Date.now(), Date.now(), conversation.id, identity.owner)
+                .run();
+            }
+            if (hasChanges) {
               await env.DB.prepare('UPDATE conversations SET workspace=?, updated_at=? WHERE id=? AND owner=?')
                 .bind(JSON.stringify(workspace), Date.now(), conversation.id, identity.owner)
                 .run();
             }
+            savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
+              prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
+              originalGoal: userText,
+              reason,
+              errorCode: errCode,
+              errorMessage: errMsg,
+              stepsCompleted: Math.max(0, steps - 1),
+              touchedFiles: touchedList,
+              deletedFiles: [...turn.deleted],
+              completedTools: completedToolsLog,
+              interruptedToolCall,
+              partialContent
+            });
           } catch {
             // Persisting the error report matters more than this best effort.
           }
+
           send('error', {
-            error: error?.status ? error.message : 'خطا در پردازش درخواست. دوباره تلاش کنید.',
-            code: error?.code || 'chat_failed',
-            savedFiles: [...turn.touched].filter((p) => !p.startsWith('(')),
-            partial: newMessages.length > 0
+            error: errMsg,
+            code: errCode,
+            reason,
+            resumable: true,
+            partialContent,
+            savedFiles: touchedList,
+            deletedFiles: [...turn.deleted],
+            workspace: hasChanges ? workspace : undefined,
+            checkpoint: savedCheckpoint,
+            partial: newMessages.length > 0 || Boolean(partialContent)
           });
         } finally {
           close();
