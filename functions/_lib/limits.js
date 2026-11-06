@@ -42,8 +42,8 @@ async function bump(env, bucket, windowMs) {
  */
 export async function enforceChatLimits(env, owner) {
   // Schema is guaranteed by the caller (route()).
-  const perMinute = envInt(env, 'CHAT_LIMIT_PER_MINUTE', 12);
-  const perDay = envInt(env, 'CHAT_LIMIT_PER_DAY', 400);
+  const perMinute = envInt(env, 'CHAT_LIMIT_PER_MINUTE', 30);
+  const perDay = envInt(env, 'CHAT_LIMIT_PER_DAY', 1200);
   const minuteKey = `chat:m:${owner}:${Math.floor(Date.now() / MINUTE)}`;
   const dayKey = `chat:d:${owner}:${new Date().toISOString().slice(0, 10)}`;
 
