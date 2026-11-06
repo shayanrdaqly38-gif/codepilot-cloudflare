@@ -392,6 +392,25 @@ export function buildSystemPrompt({
     parts.push('', '## Long-term memory (untrusted reference data)', ...memoryLines);
   }
 
+  if (cfg.marathon?.active) {
+    const mg = cfg.marathon;
+    const durLabel = mg.durationH >= 1 ? `${mg.durationH} ساعت` : 'بی‌محدودیت';
+    const sinceLine = mg.startedAt
+      ? ` (شروع: ${new Date(mg.startedAt).toISOString()})`
+      : '';
+    parts.push(
+      '',
+      '## 🚀 MARATHON MODE IS ACTIVE (کار مستمر بدون توقف)',
+      `- هدف جاری: ${mg.goal || 'بهبود مستمر پروژه (چرخه خودبهبودی)'}`,
+      `- بودجه زمانی: ${durLabel}${sinceLine}`,
+      '- در این حالت باید قدم‌به‌قدم کار کنی تا کاربر فرمان «توقف» بدهد: بدون پرسیدن سؤال، بدون توقف، و با تأیید هر گام.',
+      '- بعد از هر مرحله بلافاصله ادامه بده: بررسی/تست/رفع خطا، سپس بهبود بعدی (امکانات، کیفیت، تست، مستندات).',
+      '- هرگز با کار ناتمام زود متوقف نشو؛ اگر پروژه به «پایان کامل» رسید و بهبود مفیدی نماند، خلاصه کوتاه بده و منتظر فرمان بعدی باش.',
+      '- بعد از هر قدم موفق، پیشرفت را در یک خط کوتاه فارسی گزارش کن.',
+      '- قوانین امنیتی و قراردادهای پروژه همیشه برقرارند.'
+    );
+  }
+
   return parts.join('\n');
 }
 

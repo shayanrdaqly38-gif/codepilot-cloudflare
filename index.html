@@ -941,6 +941,21 @@ body[data-theme="claude-day"] .resume-ckpt-head{color:var(--claude-deep)}
   .composer-buddy{display:none}
   .suggestions{grid-template-columns:1fr}
 }
+.marathon-card{margin:10px 12px;padding:12px;border:1px solid var(--line-strong);border-radius:14px;background:linear-gradient(145deg,rgba(217,105,65,.10),transparent 60%);display:flex;flex-direction:column;gap:10px}
+.marathon-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:800;color:var(--claude-bright)}
+body[data-theme="claude-day"] .marathon-head{color:var(--claude-deep)}
+.marathon-toggle{min-height:30px;padding:3px 12px;border-radius:999px;border:1px solid var(--line-strong);background:var(--editor-bg);color:var(--text-soft);font-size:11px;font-weight:700;cursor:pointer}
+.marathon-toggle.on{background:linear-gradient(135deg,#ffb347,#ff8c42);color:#3a1c00;border-color:#ffb347;box-shadow:0 4px 14px #ff8c4240}
+.marathon-field{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--muted)}
+.marathon-field select{min-height:34px;background:var(--editor-bg);color:var(--text);border:1px solid var(--line-strong);border-radius:9px;padding:4px 8px;font-size:11.5px;width:100%}
+.marathon-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.marathon-actions button{min-height:36px;border-radius:10px;font-size:11.5px;font-weight:800;border:1px solid var(--line-strong);background:transparent;color:var(--text);cursor:pointer}
+.marathon-actions .primary{background:linear-gradient(135deg,#ffb347,#ff8c42);color:#3a1c00;border-color:#ffb347}
+.marathon-actions .stop{background:#c0392b22;color:#ff8a80;border-color:#c0392b66}
+.marathon-status{font-size:10.5px;color:var(--claude-bright);direction:ltr;text-align:right;line-height:1.6}
+body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
+@keyframes maraPulse{0%,100%{opacity:1}50%{opacity:.55}}
+#marathonStatus.pulse{animation:maraPulse 1.6s ease-in-out infinite}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
@@ -1019,6 +1034,33 @@ body[data-theme="claude-day"] .resume-ckpt-head{color:var(--claude-deep)}
       <div class="section-title">فایل‌های پروژه</div>
       <div class="project" id="repoLine">⌂ مخزن متصل نیست</div>
       <div id="tree" class="tree"></div>
+    </div>
+    <div class="marathon-card" id="marathonCard">
+      <div class="marathon-head">
+        <span>🚀 حالت ماراتن</span>
+        <button type="button" class="marathon-toggle" id="marathonToggle" role="switch" aria-checked="false">خاموش</button>
+      </div>
+      <div class="marathon-body" id="marathonBody" hidden>
+        <label class="marathon-field">هدف کار مستمر
+          <select id="marathonGoalSel">
+            <option value="بهبود مستمر کل ریپو (خودبهبودی)">کل ریپو (خودبهبودی)</option>
+            <option value="پیشرفته‌کردن بازی دوز (dooz.html)">بازی دوز (dooz.html)</option>
+          </select>
+        </label>
+        <label class="marathon-field">مدت
+          <select id="marathonDurSel">
+            <option value="0">بی‌محدودیت</option>
+            <option value="1">۱ ساعت</option>
+            <option value="3">۳ ساعت</option>
+            <option value="8">۸ ساعت</option>
+          </select>
+        </label>
+        <div class="marathon-actions">
+          <button type="button" id="marathonStart" class="primary">▶ شروع</button>
+          <button type="button" id="marathonStop" class="stop" hidden>⏹ توقف</button>
+        </div>
+        <div class="marathon-status" id="marathonStatus"></div>
+      </div>
     </div>
     <div class="sidebar-foot">
       <button onclick="newFile()">＋ فایل جدید</button>
@@ -1729,12 +1771,12 @@ async function api(path, options = {}) {
   if (init.body && !init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
   let res;
   let data = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       res = await fetch(path, init);
     } catch {
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 500));
         continue;
       }
       throw new Error('ارتباط با سرور برقرار نشد.');
@@ -1744,8 +1786,8 @@ async function api(path, options = {}) {
     if (type.includes('application/json')) {
       try { data = await res.json(); } catch { data = null; }
     }
-    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt < 2) {
-      await new Promise((r) => setTimeout(r, 650 * (attempt + 1)));
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt === 0) {
+      await new Promise((r) => setTimeout(r, 600));
       continue;
     }
     break;
@@ -3672,13 +3714,6 @@ function editorKey(event) {
 
 async function saveEditor(notify = false) {
   if (!state.conversationId) return;
-  // While the server-side agent is actively streaming & saving `live_file` updates in D1,
-  // defer background client autosave so it never collides with busy Worker isolates (avoiding 503 `ذخیره نشد`).
-  if (state.busy && !notify) {
-    clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(() => saveEditor(false), 2500);
-    return;
-  }
   const name = state.workspace.active;
   if (name) state.workspace.files[name] = $('editor').value;
   try {
@@ -3693,14 +3728,8 @@ async function saveEditor(notify = false) {
     setSync('on', 'ذخیره شد');
     if (notify) toast('فایل در D1 ذخیره شد');
   } catch (error) {
-    if (notify) {
-      setSync('', 'ذخیره نشد');
-      toast('ذخیره ناموفق: ' + error.message);
-    } else {
-      // Quietly schedule one delayed retry for background autosave instead of flashing scary 503 errors
-      clearTimeout(state.saveTimer);
-      state.saveTimer = setTimeout(() => saveEditor(false), 4000);
-    }
+    setSync('', 'ذخیره نشد');
+    toast('ذخیره ناموفق: ' + error.message);
   }
 }
 
@@ -3906,17 +3935,14 @@ function renderCheckpointCardHtml(ckpt) {
   if (!ckpt || !ckpt.active) return '';
   const filesCount = Array.isArray(ckpt.touchedFiles) ? ckpt.touchedFiles.length : 0;
   const stepsCount = Number(ckpt.completedSteps) || 0;
-  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed';
-  const isRateLimit = ckpt.reason === 'rate_limited';
+  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed' || ckpt.reason === 'rate_limited';
   const headline = isQuotaOrKey
-    ? '⏸ توقف به علت اتمام شارژ یا کلید API — نقطه دقیق کار ذخیره شد'
-    : isRateLimit
-      ? '⏳ سقف سرعت لحظه‌ای سرویس مدل (429) — پیشرفت تا همین لحظه ذخیره شد'
-      : ckpt.reason === 'step_limit'
-        ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
-        : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
-          ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
-          : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
+    ? '⏸ توقف به علت اتمام توکن/کلید API — نقطه دقیق کار ذخیره شد'
+    : ckpt.reason === 'step_limit'
+      ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
+      : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
+        ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
+        : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
   const detail = ckpt.errorMessage || 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.';
   const metaParts = [];
   if (stepsCount > 0) metaParts.push(`${faNum(stepsCount)} گام انجام‌شده`);
@@ -4784,12 +4810,8 @@ async function sendMessage(overrideText, opts = {}) {
 
   const isSilentAutoResume = Boolean(opts.silentAutoResume);
   const autoRetryCount = Number(opts._autoRetryCount || 0);
-  const waveCount = Number(opts._waveCount || 0);
-  const priorWaveTouched = Array.isArray(opts._waveTouched) ? opts._waveTouched : [];
-  const priorWaveDeleted = Array.isArray(opts._waveDeleted) ? opts._waveDeleted : [];
   const msgCountBeforeTurn = state.messages.length;
   let scheduleAutoResumeNext = 0;
-  let nextWaveChainPayload = null;
 
   if (!isSilentAutoResume) {
     const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
@@ -4845,6 +4867,11 @@ async function sendMessage(overrideText, opts = {}) {
       detailThinking: state.agentConfig?.detailThinking || 'medium',
       ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
+      ...(opts.marathon !== undefined
+        ? { marathon: opts.marathon }
+        : getMarathonState().active
+          ? { marathon: getMarathonState() }
+          : {}),
       ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
       ...(isSilentAutoResume ? { silentAutoResume: true } : {}),
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
@@ -4881,33 +4908,19 @@ async function sendMessage(overrideText, opts = {}) {
     pendingAttachments = [];
     renderAttachments();
     const result = await consumeStream(response, bubble);
-    const mergedTouched = [...new Set([...priorWaveTouched, ...(result.touchedFiles || [])])];
-    const mergedDeleted = [...new Set([...priorWaveDeleted, ...(result.deletedFiles || [])])];
-
     if (result.ok) {
-      if (result.waveContinue && waveCount < 8) {
-        // Multi-Wave Chaining: wave finished cleanly below Cloudflare's 50-subrequest ceiling -> spin up next wave!
-        nextWaveChainPayload = {
-          resumeCheckpoint: true,
-          silentAutoResume: true,
-          _waveCount: waveCount + 1,
-          _waveTouched: mergedTouched,
-          _waveDeleted: mergedDeleted
-        };
-      } else {
-        await reloadCurrentConversation();
-        renderTurnNotices();
-        if (state.diffs?.length) {
-          const bubbles = $('chat').querySelectorAll('.msg.assistant');
-          const lastBubble = bubbles[bubbles.length - 1];
-          if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
-            lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
-          }
+      await reloadCurrentConversation();
+      renderTurnNotices();
+      if (state.diffs?.length) {
+        const bubbles = $('chat').querySelectorAll('.msg.assistant');
+        const lastBubble = bubbles[bubbles.length - 1];
+        if (lastBubble && !lastBubble.querySelector('.turn-diff-card')) {
+          lastBubble.insertAdjacentHTML('beforeend', renderTurnDiffCardHtml(state.diffs));
         }
-        if (state.repo && state.agentConfig?.autoCommitGh !== false && (mergedTouched.length || mergedDeleted.length)) {
-          const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
-          commitChangesAtomically(mergedTouched, mergedDeleted, '', badge).catch(() => {});
-        }
+      }
+      if (state.repo && state.agentConfig?.autoCommitGh !== false && (result.touchedFiles.length || result.deletedFiles.length)) {
+        const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
+        commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
       }
     } else if (result.clientNetworkDropped) {
       // Browser <-> Cloudflare SSE connection blipped (e.g. VPN/mobile switch).
@@ -4960,21 +4973,11 @@ async function sendMessage(overrideText, opts = {}) {
     } else if (result.resumable) {
       await reloadCurrentConversation({ syncWorkspace: true });
       const ckReason = state.activeCheckpoint?.reason || '';
-      if (ckReason === 'wave_continue' && waveCount < 8) {
-        nextWaveChainPayload = {
-          resumeCheckpoint: true,
-          silentAutoResume: true,
-          _waveCount: waveCount + 1,
-          _waveTouched: mergedTouched,
-          _waveDeleted: mergedDeleted
-        };
-      } else {
-        const canAutoContinue =
-          (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
-          autoRetryCount < 1;
-        if (canAutoContinue) {
-          scheduleAutoResumeNext = autoRetryCount + 1;
-        }
+      const canAutoContinue =
+        (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
+        autoRetryCount < 1;
+      if (canAutoContinue) {
+        scheduleAutoResumeNext = autoRetryCount + 1;
       }
     }
   } catch (error) {
@@ -4999,23 +5002,13 @@ async function sendMessage(overrideText, opts = {}) {
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
     syncAgentUi();
     loadConversations();
-    if (nextWaveChainPayload) {
-      setSync('busy', `🌊 انتقال خودکار به موج ${faNum((nextWaveChainPayload._waveCount || 1) + 1)}…`);
-      setTimeout(() => {
-        if (!state.busy) {
-          sendMessage('ادامه', nextWaveChainPayload);
-        }
-      }, 350);
-    } else if (scheduleAutoResumeNext > 0) {
+    if (scheduleAutoResumeNext > 0) {
       setTimeout(() => {
         if (!state.busy) {
           sendMessage('ادامه', {
             resumeCheckpoint: true,
             silentAutoResume: true,
-            _autoRetryCount: scheduleAutoResumeNext,
-            _waveCount: waveCount,
-            _waveTouched: priorWaveTouched,
-            _waveDeleted: priorWaveDeleted
+            _autoRetryCount: scheduleAutoResumeNext
           });
         }
       }, 900);
@@ -5026,7 +5019,6 @@ async function sendMessage(overrideText, opts = {}) {
 async function consumeStream(response, bubble) {
   let persisted = false;
   let resumableStop = false;
-  let waveContinue = false;
   let serverErrorReceived = false;
   let clientNetworkDropped = false;
   const reader = response.body.getReader();
@@ -5053,10 +5045,6 @@ async function consumeStream(response, bubble) {
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
-      } else if (data.phase === 'rate_limit_wait') {
-        const waitSec = Math.max(1, Math.ceil((Number(data.waitMs) || 2500) / 1000));
-        setSync('busy', `مکث خودکار ${faNum(waitSec)} ثانیه برای شارژ سهمیه لحظه‌ای…`);
-        if (vEl) vEl.textContent = `${stepPrefix()}⏳ سهمیه لحظه‌ای (429) — مکث خودکار ${faNum(waitSec)} ثانیه و ادامه…`;
       } else if (data.phase === 'auto-heal') {
         setSync('busy', 'بازاتصال خودکار بدون توقف…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔄 بازاتصال خودکار به سرویس مدل بدون قطع کار (${faNum(data.attempt || 1)}/۳)…`;
@@ -5219,17 +5207,8 @@ async function consumeStream(response, bubble) {
         bubble.appendChild(acts);
       }
       persisted = true;
-      waveContinue = Boolean(data.waveContinue);
-      if (waveContinue) {
-        state.activeCheckpoint = null; // Automatic wave handoff — do not display manual pause banner!
-        const wNum = faNum(data.waveNumber || 1);
-        const cSteps = faNum(data.cumulativeSteps || data.steps || 0);
-        textArea.innerHTML = `<span class="tiny" style="color:var(--claude-amber)">🌊 موج ${wNum} ذخیره شد (${cSteps} گام) — شروع خودکار موج بعدی با سهمیه تازه کلودفلر…</span>`;
-        setSync('busy', `موج ${wNum} ذخیره شد · شروع موج بعدی…`);
-      } else {
-        state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
-        setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
-      }
+      state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
+      setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
     } else if (event === 'error') {
       serverErrorReceived = true;
       bubble.querySelector('.claude-spinner-bar')?.remove();
@@ -5308,7 +5287,6 @@ async function consumeStream(response, bubble) {
   }
   return {
     ok: persisted,
-    waveContinue,
     resumable: resumableStop,
     clientNetworkDropped,
     text: assistantText,
@@ -6173,6 +6151,104 @@ async function commitFile(path) {
 }
 
 /* --------------------------------- start --------------------------------- */
+
+/* --------------------- Marathon Mode (کار مستمر) --------------------- */
+const MARATHON_KEY = 'cp-marathon-v1';
+const DEFAULT_MARATHON = { active: false, goal: '', durationH: 0, startedAt: null };
+
+function getMarathonState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(MARATHON_KEY));
+    if (s && typeof s === 'object') return { ...DEFAULT_MARATHON, ...s };
+  } catch { /* ignore */ }
+  return { ...DEFAULT_MARATHON };
+}
+
+function persistMarathon(patch) {
+  const s = { ...getMarathonState(), ...patch };
+  try { localStorage.setItem(MARATHON_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+  return s;
+}
+
+function setMarathonSelect(id, value) {
+  const el = $(id);
+  if (!el) return;
+  el.value = value;
+  if (el.selectedIndex < 0) el.selectedIndex = 0;
+}
+
+function renderMarathonUI() {
+  const s = getMarathonState();
+  const toggle = $('marathonToggle');
+  const body = $('marathonBody');
+  if (toggle) {
+    toggle.textContent = s.active ? 'روشن' : 'خاموش';
+    toggle.classList.toggle('on', s.active);
+    toggle.setAttribute('aria-checked', String(s.active));
+  }
+  if (body) body.hidden = !s.active;
+  if (!s.active) {
+    const st = $('marathonStatus');
+    if (st) { st.textContent = ''; st.classList.remove('pulse'); }
+    const startBtn = $('marathonStart');
+    const stopBtn = $('marathonStop');
+    if (startBtn) startBtn.hidden = false;
+    if (stopBtn) stopBtn.hidden = true;
+    setMarathonSelect('marathonGoalSel', s.goal || 'بهبود مستمر کل ریپو (خودبهبودی)');
+    setMarathonSelect('marathonDurSel', String(s.durationH || 0));
+    return;
+  }
+  const elapsed = Date.now() - s.startedAt;
+  const mins = Math.max(0, Math.floor(elapsed / 60000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const budget = s.durationH >= 1 ? ` · بودجه ${s.durationH}h` : ' · بی‌محدودیت';
+  const st = $('marathonStatus');
+  if (st) {
+    st.textContent = `فعال از ${h}:${String(m).padStart(2, '0')}${budget}`;
+    st.classList.add('pulse');
+  }
+  const startBtn = $('marathonStart');
+  const stopBtn = $('marathonStop');
+  if (startBtn) startBtn.hidden = true;
+  if (stopBtn) stopBtn.hidden = false;
+  if (s.durationH >= 1 && elapsed >= s.durationH * 3600000) {
+    stopMarathon('end');
+  }
+}
+
+function startMarathon() {
+  const goalSel = $('marathonGoalSel');
+  const durSel = $('marathonDurSel');
+  const goal = (goalSel && goalSel.value) || DEFAULT_MARATHON.goal;
+  const durationH = Number((durSel && durSel.value) || 0);
+  const s = persistMarathon({ active: true, goal, durationH, startedAt: Date.now() });
+  renderMarathonUI();
+  toast('🚀 ماراتن فعال شد: ' + goal);
+  sendMessage('🚀 حالت ماراتن را فعال می‌کنم. هدف: ' + goal + '. بدون مکث قدم‌به‌قدم کار کن، تست و تأیید انجام بده و طبق قانون ماراتن تا فرمان «توقف» ادامه بده.', { marathon: s });
+}
+
+function stopMarathon(reason = 'manual') {
+  persistMarathon({ active: false, startedAt: null });
+  renderMarathonUI();
+  const cmd = reason === 'end'
+    ? '⏹ بودجه زمانی ماراتن تمام شد: کار را جمع‌بندی کن و متوقف شو.'
+    : '⏹ فرمان توقف ماراتن: کار فعلی را مرتب جمع‌بندی کن و منتظر دستور بعدی باش.';
+  if (!state.busy) {
+    sendMessage(cmd, { marathon: { active: false } });
+  } else {
+    toast('⏹ ماراتن متوقف شد (بعد از پایان چرخه جاری اعمال می‌شود)');
+  }
+}
+
+$('marathonToggle').addEventListener('click', () => {
+  const s = getMarathonState();
+  if (s.active) stopMarathon('manual'); else startMarathon();
+});
+$('marathonStart').addEventListener('click', startMarathon);
+$('marathonStop').addEventListener('click', () => stopMarathon('manual'));
+setInterval(renderMarathonUI, 30000);
+renderMarathonUI();
 
 window.addEventListener('DOMContentLoaded', boot);
 
