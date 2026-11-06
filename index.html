@@ -909,6 +909,32 @@ body[data-theme="claude-day"] .power-axis-desc{color:var(--claude-deep)}
   .power-pill{padding:3px 7px!important;font-size:10.5px}
   .mode-pill{padding:3px 7px!important;font-size:10.5px}
 }
+
+/* Live Agent Checkpoint & Exact-Point Resume Card + Inline Token Swap */
+.resume-checkpoint-card{
+  margin-top:8px;padding:11px 13px;border-radius:14px;
+  background:linear-gradient(145deg,rgba(232,123,82,.14),rgba(54,43,36,.92));
+  border:1.5px solid var(--claude);box-shadow:0 8px 24px rgba(0,0,0,.22);
+  direction:rtl;text-align:right;animation:msgEnter .2s ease;
+}
+body[data-theme="claude-day"] .resume-checkpoint-card{
+  background:linear-gradient(145deg,rgba(217,105,65,.11),rgba(244,237,227,.96));
+}
+.resume-ckpt-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:700;color:var(--claude-bright)}
+body[data-theme="claude-day"] .resume-ckpt-head{color:var(--claude-deep)}
+.resume-ckpt-msg{font-size:11.5px;color:var(--text-soft);margin-top:5px;line-height:1.65}
+.resume-ckpt-meta{font-size:10.5px;color:var(--muted);margin-top:4px}
+.resume-ckpt-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:9px}
+.resume-ckpt-actions button{min-height:33px!important;padding:5px 11px;border-radius:10px!important;font-size:11.5px;font-weight:700}
+.inline-token-swap{
+  display:none;margin-top:9px;padding-top:9px;border-top:1px dashed var(--line-strong);
+  gap:6px;flex-direction:column;
+}
+.inline-token-swap.open{display:flex}
+.inline-token-swap input{
+  min-height:36px;padding:6px 10px;border-radius:9px;border:1px solid var(--line-strong);
+  background:var(--editor-bg);color:var(--text);font:12px ui-monospace,monospace;direction:ltr;text-align:left;
+}
 @media(max-width:760px){
   .chatbox{margin:0 10px 6px;padding:9px 10px}
   .claude-statusline{padding:4px 10px max(6px,env(safe-area-inset-bottom));font-size:10px}
@@ -3033,6 +3059,7 @@ async function newConversation(open = true) {
       pinned: false
     };
     state.conversations.unshift(conv);
+    state.activeCheckpoint = null;
     renderConversations();
     if (open) {
       await openConversation(result.id, { fresh: true });
@@ -3056,6 +3083,7 @@ async function openConversation(id, { fresh = false } = {}) {
     const data = await api(`${API.conversations}/${encodeURIComponent(id)}`);
     state.conversationId = id;
     state.messages = data.messages || [];
+    state.activeCheckpoint = data.checkpoint || null;
     state.workspace = normalizeWorkspace(data.workspace || {});
     localStorage.setItem('cp-last-conversation', id);
     const conv = state.conversations.find((c) => c.id === id);
@@ -3861,6 +3889,114 @@ function runPreview() {
 
 /* ---------------------------------- chat --------------------------------- */
 
+function renderCheckpointCardHtml(ckpt) {
+  if (!ckpt || !ckpt.active) return '';
+  const filesCount = Array.isArray(ckpt.touchedFiles) ? ckpt.touchedFiles.length : 0;
+  const stepsCount = Number(ckpt.completedSteps) || 0;
+  const isQuotaOrKey = ckpt.reason === 'quota_exhausted' || ckpt.reason === 'auth_failed' || ckpt.reason === 'rate_limited';
+  const headline = isQuotaOrKey
+    ? '⏸ توقف به علت اتمام توکن/کلید API — نقطه دقیق کار ذخیره شد'
+    : ckpt.reason === 'step_limit'
+      ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
+      : '⏸ ارتباط در میانه کار قطع شد — پیشرفت تا همین لحظه ذخیره شد';
+  const detail = ckpt.errorMessage || 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.';
+  const metaParts = [];
+  if (stepsCount > 0) metaParts.push(`${faNum(stepsCount)} گام انجام‌شده`);
+  if (filesCount > 0) metaParts.push(`💾 ${faNum(filesCount)} فایل ذخیره‌شده (${ckpt.touchedFiles.slice(0, 4).join(', ')})`);
+  if (ckpt.interruptedToolCall?.name) {
+    metaParts.push(`نقطه توقف: ${ckpt.interruptedToolCall.name}${ckpt.interruptedToolCall.targetPath ? ` (${ckpt.interruptedToolCall.targetPath})` : ''}`);
+  } else if (ckpt.partialTextChars > 0) {
+    metaParts.push(`متن ذخیره‌شده تا نقطه قطع: ${faNum(ckpt.partialTextChars)} کاراکتر`);
+  }
+  const curBase = state.provider?.baseUrl || state.provider?.effectiveBaseUrl || '';
+  return `<div class="resume-checkpoint-card">
+    <div class="resume-ckpt-head">
+      <span>${esc(headline)}</span>
+      <span style="font-size:10.5px;color:var(--claude-amber)">کلمه «ادامه» هم کار می‌کند</span>
+    </div>
+    <div class="resume-ckpt-msg">${esc(detail)}</div>
+    ${metaParts.length ? `<div class="resume-ckpt-meta">${esc(metaParts.join(' · '))}</div>` : ''}
+    <div class="resume-ckpt-actions">
+      <button type="button" class="primary" onclick="resumeFromCheckpoint()">▶ ادامه دقیق از همین نقطه</button>
+      <button type="button" onclick="toggleInlineTokenSwap(this)">🔑 تعویض سریع توکن API</button>
+      <button type="button" onclick="openApiConnection()">⌁ تنظیمات API</button>
+    </div>
+    <div class="inline-token-swap${isQuotaOrKey ? ' open' : ''}">
+      <input type="password" class="ckpt-key-input" placeholder="کلید/توکن جدید API را اینجا الصاق کنید (sk-... / zro_... / tc_live_...)" autocomplete="off">
+      <input type="url" class="ckpt-url-input" value="${esc(curBase)}" placeholder="آدرس Base URL (اختیاری — مثلاً https://tooken.club/v1)">
+      <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+        <button type="button" class="primary" onclick="swapTokenAndResumeNow(this)">✔ ذخیره توکن جدید و ادامه فوری ▶</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderActiveCheckpointBanner() {
+  const chat = $('chat');
+  if (!chat) return;
+  chat.querySelectorAll('.resume-checkpoint-card').forEach((el) => el.remove());
+  if (!state.activeCheckpoint || !state.activeCheckpoint.active) return;
+  chat.insertAdjacentHTML('beforeend', renderCheckpointCardHtml(state.activeCheckpoint));
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function toggleInlineTokenSwap(btn) {
+  const card = btn?.closest?.('.resume-checkpoint-card');
+  const box = card?.querySelector?.('.inline-token-swap');
+  if (!box) return openApiConnection();
+  box.classList.toggle('open');
+  if (box.classList.contains('open')) box.querySelector('.ckpt-key-input')?.focus();
+}
+
+async function swapTokenAndResumeNow(btn) {
+  const card = btn?.closest?.('.resume-checkpoint-card');
+  const keyInput = card?.querySelector?.('.ckpt-key-input');
+  const urlInput = card?.querySelector?.('.ckpt-url-input');
+  const apiKey = (keyInput?.value || '').trim();
+  const baseUrl = (urlInput?.value || '').trim();
+  if (!apiKey) {
+    toast('لطفاً ابتدا کلید/توکن جدید API را وارد کنید');
+    keyInput?.focus();
+    return;
+  }
+  const origLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'در حال ثبت توکن جدید…';
+  try {
+    const res = await api(API.config, {
+      method: 'POST',
+      body: JSON.stringify({ apiKey, ...(baseUrl ? { baseUrl } : {}) })
+    });
+    state.provider = res.provider || null;
+    state.defaultModel = res.model || state.defaultModel;
+    if (Array.isArray(res.models)) {
+      state.availableModels = res.models;
+      if (state.selectedModel && res.models.length && !res.models.some((m) => m.id === state.selectedModel)) {
+        state.selectedModel = '';
+        try { localStorage.removeItem(MODEL_STORE); } catch { /* ignore */ }
+      }
+    }
+    syncModelState();
+    renderModelList();
+    syncProviderSettingsForm();
+    state.providerQuota = null;
+    state.rateLimit = null;
+    renderTopTokenBadge();
+    refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
+    toast('✔ توکن جدید ثبت شد — در حال ادامه دقیق از نقطه قطع‌شدن…');
+    await sendMessage('ادامه', { resumeCheckpoint: true });
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = origLabel;
+    toast('خطا در ثبت توکن جدید: ' + err.message);
+  }
+}
+
+function resumeFromCheckpoint() {
+  if (state.busy) return;
+  sendMessage('ادامه', { resumeCheckpoint: true });
+}
+
 function renderChat() {
   const chat = $('chat');
   chat.innerHTML = '';
@@ -3869,6 +4005,9 @@ function renderChat() {
     return;
   }
   for (const message of state.messages) appendMessageElement(message);
+  if (state.activeCheckpoint?.active) {
+    chat.insertAdjacentHTML('beforeend', renderCheckpointCardHtml(state.activeCheckpoint));
+  }
   chat.scrollTop = chat.scrollHeight;
 }
 
@@ -4214,6 +4353,7 @@ const CLAUDE_SPINNER_VERBS = [
 ];
 
 const SLASH_COMMANDS = [
+  { cmd: '/continue', args: '', desc: 'ادامه دقیق کار ناتمام از همان نقطه‌ای که قطع یا متوقف شده بود' },
   { cmd: '/power', args: '[ultra|max|very-hard|hard|medium|low]', desc: 'موتور تقویت ۴محوره هوش مصنوعی (طول کار، جزئیات، پیشرفته‌سازی، حساسیت)' },
   { cmd: '/plan', args: '[درخواست]', desc: 'ورود به حالت Plan (طراحی نقشه بدون دست‌زدن به فایل‌ها)' },
   { cmd: '/suggest', args: '[درخواست]', desc: 'ورود به حالت Suggest (ارائه کد پیشنهادی بدون اعمال خودکار)' },
@@ -4427,6 +4567,9 @@ async function executeSlashCommand(rawText) {
   const rest = (m[2] || '').trim();
 
   switch (cmd) {
+    case '/continue':
+    case '/resume':
+      return sendMessage(rest || 'ادامه', { resumeCheckpoint: true });
     case '/power': {
       const arg = rest.toLowerCase().trim();
       const aliasMap = {
@@ -4605,6 +4748,7 @@ async function sendMessage(overrideText, opts = {}) {
 
   state.busy = true;
   toggleTopDrawer(false);
+  $('chat')?.querySelectorAll('.resume-checkpoint-card').forEach((el) => el.remove());
   document.body.classList.add('is-working');
   $('sendBtn').disabled = true;
   $('sendBtn').textContent = '✳…';
@@ -4672,6 +4816,7 @@ async function sendMessage(overrideText, opts = {}) {
       detailThinking: state.agentConfig?.detailThinking || 'medium',
       ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
+      ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
     let response;
@@ -4720,11 +4865,19 @@ async function sendMessage(overrideText, opts = {}) {
         const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
         commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
       }
+    } else if (result.resumable) {
+      await reloadCurrentConversation({ syncWorkspace: true });
     }
   } catch (error) {
-    bubble.className = 'msg assistant error';
-    bubble.textContent = 'خطا: ' + error.message;
-    state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+    const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
+    if (!existingText) {
+      bubble.className = 'msg assistant error';
+      bubble.textContent = 'خطا: ' + error.message;
+      state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+    } else {
+      bubble.insertAdjacentHTML('beforeend', `<div class="notice bad" style="margin-top:8px">خطا: ${esc(error.message)}</div>`);
+    }
+    if (state.activeCheckpoint?.active) renderActiveCheckpointBanner();
   } finally {
     clearInterval(spinTimer);
     bubble.querySelector('.claude-spinner-bar')?.remove();
@@ -4742,26 +4895,54 @@ async function sendMessage(overrideText, opts = {}) {
 
 async function consumeStream(response, bubble) {
   let persisted = false;
+  let resumableStop = false;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let assistantText = '';
   let streamedDraft = '';
   let streamedThink = '';
+  let currentStep = 1;
+  let currentMaxSteps = 20;
   let touchedFiles = [];
   let deletedFiles = [];
   const thinkArea = bubble.querySelector('.think-stream');
   const textArea = bubble.querySelector('.msg-text');
   textArea.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
 
+  const stepPrefix = () => (currentStep > 1 ? `[گام ${faNum(currentStep)}/${faNum(currentMaxSteps)}] ` : '');
+
   const handle = (event, data) => {
     if (event === 'status') {
+      if (Number(data.step) > 0) currentStep = Number(data.step);
+      if (Number(data.maxSteps) > 0) currentMaxSteps = Number(data.maxSteps);
+      const vEl = bubble.querySelector('.claude-verb');
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
-        const vEl = bubble.querySelector('.claude-verb');
-        if (vEl) vEl.textContent = '🔧 کنترل کیفیت خودکار و رفع خطاهای کد…';
+        if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
+      } else if (data.phase === 'resuming') {
+        setSync('busy', 'ادامه دقیق از نقطه قطع‌شدن…');
+        if (vEl) vEl.textContent = '⚡ ادامه دقیق از نقطه قطع‌شدن قبلی…';
       } else {
-        setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : 'در حال کار…');
+        setSync('busy', data.phase === 'thinking' ? 'مدل در حال فکر کردن…' : `زنده · گام ${faNum(currentStep)}…`);
+        if (vEl && currentStep > 1) vEl.textContent = `${stepPrefix()}در حال اجرای زنجیره‌ای عامل…`;
+      }
+    } else if (event === 'live_file') {
+      if (data.path) {
+        if (data.deleted) {
+          delete state.workspace.files[data.path];
+          if (state.workspace.active === data.path) {
+            state.workspace.active = Object.keys(state.workspace.files)[0] || '';
+          }
+        } else {
+          state.workspace.files[data.path] = String(data.content ?? '');
+          state.workspace.active = data.path;
+          if (state.repo) state.dirtyFiles.add(data.path);
+        }
+        renderTree();
+        renderEditor();
+        const vEl = bubble.querySelector('.claude-verb');
+        if (vEl) vEl.textContent = `${stepPrefix()}⚡ زنده: ${data.deleted ? 'حذف' : 'ذخیره'} ${data.path}`;
       }
     } else if (event === 'thinking_delta') {
       streamedThink += String(data.text || '');
@@ -4895,8 +5076,32 @@ async function consumeStream(response, bubble) {
         bubble.appendChild(acts);
       }
       persisted = true;
-      setSync('on', 'ذخیره شد در D1');
+      state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
+      setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
     } else if (event === 'error') {
+      bubble.querySelector('.claude-spinner-bar')?.remove();
+      textArea.classList.remove('stream-cursor');
+      if (data.workspace) {
+        state.workspace = normalizeWorkspace(data.workspace);
+        for (const p of data.savedFiles || []) {
+          if (state.repo) state.dirtyFiles.add(p);
+        }
+        renderTree();
+        renderEditor();
+      }
+      const preserved = String(data.partialContent || streamedDraft || '').trim();
+      if (preserved) {
+        assistantText = preserved;
+        textArea.innerHTML = renderMarkdownish(preserved);
+      } else if (!streamedDraft && textArea.querySelector('.typing')) {
+        textArea.innerHTML = `<span class="tiny" style="color:var(--claude-bright)">⏸ ${esc(data.error || 'متوقف شد')}</span>`;
+      }
+      if (data.checkpoint && data.resumable) {
+        state.activeCheckpoint = data.checkpoint;
+        resumableStop = true;
+        renderActiveCheckpointBanner();
+        return;
+      }
       throw new Error(data.error || 'خطای پردازش');
     }
   };
@@ -4923,15 +5128,31 @@ async function consumeStream(response, bubble) {
       }
     }
   } catch (error) {
-    bubble.className = 'msg assistant error';
-    bubble.textContent = 'خطا: ' + error.message;
-    state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+    const kept = String(streamedDraft || assistantText || '').trim();
+    if (kept) {
+      assistantText = kept;
+      textArea.classList.remove('stream-cursor');
+      textArea.innerHTML = renderMarkdownish(kept);
+      state.activeCheckpoint = state.activeCheckpoint || {
+        active: true,
+        reason: 'stream_cutoff',
+        errorMessage: error.message || 'ارتباط استریم قطع شد. بنویسید «ادامه» تا از همین نقطه ادامه یابد.',
+        partialTextChars: kept.length,
+        touchedFiles
+      };
+      resumableStop = true;
+      renderActiveCheckpointBanner();
+    } else {
+      bubble.className = 'msg assistant error';
+      bubble.textContent = 'خطا: ' + error.message;
+      state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+    }
   } finally {
     if (!assistantText && !bubble.textContent.trim()) {
       bubble.innerHTML = '<span class="tiny">بدون پاسخ</span>';
     }
   }
-  return { ok: persisted, text: assistantText, touchedFiles, deletedFiles };
+  return { ok: persisted, resumable: resumableStop, text: assistantText, touchedFiles, deletedFiles };
 }
 
 function cssEscape(value) {
@@ -4957,11 +5178,17 @@ function renderTurnNotices() {
  * Re-read the conversation from D1 after a turn so the client shows exactly
  * what was persisted (server-assigned seq numbers, redacted text, tool groups).
  */
-async function reloadCurrentConversation() {
+async function reloadCurrentConversation({ syncWorkspace = false } = {}) {
   if (!state.conversationId) return;
   try {
     const data = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}`);
     state.messages = data.messages || [];
+    state.activeCheckpoint = data.checkpoint || null;
+    if (syncWorkspace && data.workspace) {
+      state.workspace = normalizeWorkspace(data.workspace);
+      renderTree();
+      renderEditor();
+    }
     const conv = state.conversations.find((c) => c.id === state.conversationId);
     if (conv && data.conversation) Object.assign(conv, data.conversation);
     renderChat();

@@ -5,11 +5,15 @@
 
 import { route, methodNotAllowed } from '../../../_lib/api.js';
 import { getConversation, listMessages, conversationView } from '../../../_lib/store.js';
+import { loadTurnCheckpoint } from '../../../_lib/checkpoint.js';
 
 export async function onRequestGet({ request, env, params }) {
   return route(request, env, async ({ identity }) => {
     const conversation = await getConversation(env, identity.owner, params.id);
-    const rawMessages = await listMessages(env, conversation.id);
+    const [rawMessages, checkpoint] = await Promise.all([
+      listMessages(env, conversation.id),
+      loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null)
+    ]);
     const messages = rawMessages.map((m) => {
       if (!Array.isArray(m?.attachments) || !m.attachments.some((a) => typeof a?.data === 'string' && a.data.length > 300_000)) {
         return m;
@@ -37,7 +41,8 @@ export async function onRequestGet({ request, env, params }) {
         summaryUpdatedAt: conversation.summary_updated_at
       },
       messages,
-      workspace
+      workspace,
+      checkpoint
     };
   });
 }
