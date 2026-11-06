@@ -589,12 +589,32 @@ assert.equal(dom2.window.document.getElementById('sendBtn').disabled, true);
 // --- marathon auto-continue: بعد از اتمام هر چرخه، بدون دخالت کاربر «ادامه» فرستاده می‌شود
 window.localStorage.setItem('cp_marathon_auto', '1');
 window.__CP_MARATHON_DELAY = 25; // سرعت‌بخشی تست (پیش‌فرض واقعی: ۳۵۰۰ms)
-window.startMarathon();
+window.startMarathon({ goalOverride: 'بهبود ماژول احراز هویت و تست‌ها' });
 await wait(900);
 const autoChatText = $('chat').textContent;
 assert.ok(autoChatText.includes('ادامه'), 'auto-continue did not fire; chat=' + autoChatText.slice(0, 300));
 assert.ok($('marathonStatus').textContent.includes('⏳ ادامهٔ خودکار'), 'status counter missing: ' + $('marathonStatus').textContent);
-// خاموش‌کردن خودکار تا چرخه‌های بعدی در تست‌های بعدی اجرا نشوند
+assert.equal($('topMarathonPill').hidden, false, 'top marathon pill visible on active marathon conversation');
+assert.equal($('slMarathonBadge').hidden, false, 'drawer marathon badge visible on active marathon conversation');
+
+// Cross-conversation isolation: switching to c-new must hide active Marathon pill & prevent leaking into c-new
+window.pauseMarathon();
+assert.equal(window.getMarathonState().paused, true, 'pauseMarathon sets paused=true');
+assert.equal(window.getEffectiveMarathonForTurn(), null, 'paused marathon is not injected into turn');
+await window.openConversation('c-1');
+
+// Stop marathon locally without firing wasteful extra LLM call
+const callsBeforeStopMara = calls.length;
+window.stopMarathon('manual');
+await wait(60);
+const chatCallsAfterStopMara = calls.slice(callsBeforeStopMara).filter((c) => String(c.url).endsWith('/api/chat'));
+assert.equal(chatCallsAfterStopMara.length, 0, 'stopMarathon must not wastefully call /api/chat when idle');
+assert.equal($('topMarathonPill').hidden, true, 'top marathon pill hidden after stop');
+
+// Slash command `/marathon status` renders status card locally
+await window.executeSlashCommand('/marathon status');
+assert.ok($('chat').textContent.includes('وضعیت حالت ماراتن'), '/marathon status prints summary card');
+
 window.localStorage.setItem('cp_marathon_auto', '0');
 window.cancelMarathonAuto();
 
