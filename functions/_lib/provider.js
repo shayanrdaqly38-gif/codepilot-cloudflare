@@ -284,7 +284,7 @@ function normalizeMarathon(m, baseM = {}) {
   const durNum = Number(src.durationH);
   return {
     active: typeof src.active === 'boolean' ? src.active : !!b.active,
-    goal: typeof src.goal === 'string' ? src.goal.slice(0, 600) : (b.goal || ''),
+    goal: typeof src.goal === 'string' ? src.goal.slice(0, 600).trim() : (b.goal || ''),
     durationH: Number.isFinite(durNum) ? Math.min(24, Math.max(0, durNum)) : (Number(b.durationH) || 0),
     startedAt:
       Number.isFinite(Number(src.startedAt)) && Number(src.startedAt) > 0

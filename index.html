@@ -956,6 +956,7 @@ body[data-theme="claude-day"] .marathon-head{color:var(--claude-deep)}
 body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
 @keyframes maraPulse{0%,100%{opacity:1}50%{opacity:.55}}
 #marathonStatus.pulse{animation:maraPulse 1.6s ease-in-out infinite}
+.marathon-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:800;color:#3a1c00;background:linear-gradient(135deg,#ffb347,#ff8c42);border-radius:999px;padding:2px 8px;animation:maraPulse 1.6s ease-in-out infinite}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
@@ -1010,6 +1011,7 @@ body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
       </span>
       <span class="sr" id="slModeText"></span>
       <span class="sr" id="slStyleText"></span>
+      <span class="marathon-badge" id="slMarathonBadge" hidden>🚀 ماراتن</span>
     </div>
   </div>
 </section>
@@ -1059,7 +1061,7 @@ body[data-theme="claude-day"] .marathon-status{color:var(--claude-deep)}
           <button type="button" id="marathonStart" class="primary">▶ شروع</button>
           <button type="button" id="marathonStop" class="stop" hidden>⏹ توقف</button>
         </div>
-        <div class="marathon-status" id="marathonStatus"></div>
+        <div class="marathon-status" id="marathonStatus" role="status" aria-live="polite"></div>
       </div>
     </div>
     <div class="sidebar-foot">
@@ -6198,7 +6200,7 @@ function renderMarathonUI() {
     setMarathonSelect('marathonDurSel', String(s.durationH || 0));
     return;
   }
-  const elapsed = Date.now() - s.startedAt;
+  const elapsed = Date.now() - (s.startedAt || Date.now());
   const mins = Math.max(0, Math.floor(elapsed / 60000));
   const h = Math.floor(mins / 60);
   const m = mins % 60;
