@@ -441,6 +441,31 @@ assert.equal($('providerBaseUrlInput').value, 'https://openrouter.ai/api/v1', 'O
 assert.equal(window.cleanClientCredential('\u200eBearer   sk-or-v1-mobile-paste\u200f', true), 'sk-or-v1-mobile-paste', 'cleans mobile RTL/Bearer paste');
 window.closeModal('settingsModal');
 
+// Progressive zero-lag rendering of ALL 450+ OpenRouter models (chunked infinite scroll + instant search across all 450)
+window.eval(`state.availableModels = Array.from({ length: 450 }, (_, i) => ({
+  id: i === 0 ? 'omega-next-v1' : 'vendor-' + (i % 15) + '/openrouter-model-' + String(i).padStart(3, '0') + ':free',
+  title: i === 0 ? 'Omega Next V1' : 'OpenRouter Model ' + i,
+  subtitle: 'Fast model #' + i,
+  reasoning: { supported: true, levels: ['low', 'medium', 'high'], defaultEffort: 'medium' }
+}))`);
+window.openModelModal();
+assert.equal($('selectModelHeading').textContent, 'Select model (450)', 'shows full 450 model count');
+assert.equal($('allModelsHeading').textContent, 'All models (450)', 'All models view shows full 450 count');
+assert.equal($('featuredModelList').querySelectorAll('.sheet-item').length, 80, 'initial chunk renders 80 items for zero lag');
+assert.ok($('featuredModelList').querySelector('[data-role="featured-load-more"]'), 'shows progressive load-more bar');
+window.appendMoreFeaturedModels(100);
+assert.equal($('featuredModelList').querySelectorAll('.sheet-item').length, 180, 'progressive scroll/button appends +100 items without re-creating DOM');
+window.appendMoreFeaturedModels(400);
+assert.equal($('featuredModelList').querySelectorAll('.sheet-item').length, 450, 'all 450 models can be browsed in the list');
+assert.equal($('featuredModelList').querySelector('[data-role="featured-load-more"]'), null, 'load-more bar disappears once all 450 rendered');
+window.onModelSearchInput('openrouter-model-449');
+assert.equal($('featuredModelList').querySelectorAll('.sheet-item[data-model-id]').length, 1, 'instant search finds model #449 across full 450 catalog');
+window.onModelSearchInput('');
+assert.equal($('modelGrid').querySelectorAll('.model-card').length, 80, 'All models grid also starts with fast 80-card chunk');
+window.appendMoreGridModels(100);
+assert.equal($('modelGrid').querySelectorAll('.model-card').length, 180, 'All models grid progressively appends +100 cards');
+window.closeModal('modelModal');
+
 // --- top-bar live remaining tokens pill (#tokenQuotaBtn) & quota inspector (#quotaModal)
 assert.ok($('tokenQuotaBtn'), 'top header must display #tokenQuotaBtn');
 assert.equal($('tokenQuotaText').textContent, '🪙 750,000 tok', 'shows exact live remaining tokens from provider API');
