@@ -25,8 +25,9 @@
 | اجرا | اختیاری: Sandbox واقعی (Durable Object + Container)؛ در غیر این صورت شل مجازی با اعلام صریح |
 | رازداری | پاک‌سازی کلید/توکن در پیام‌ها، حافظه، خروجی ابزار و پاسخ مدل؛ کلیدها فقط در Secrets |
 | محدودیت مصرف | سقف درخواست در دقیقه/روز به‌ازای هر حساب (`rate_limits`) |
-| تست | ۲۱ تست بک‌اند (SQLite واقعی + Access جعلی) و تست دودی رابط کاربری |
+| تست | +۳۰ تست بک‌اند (SQLite واقعی + Access جعلی) و تست دودی رابط کاربری |
 | UI | استریم SSE، ترمینال مجازی، کاوشگر فایل، تنظیمات حافظه، خروجی JSON و حذف داده |
+| دانلود اشیاء | هر فایل تولیدشده با هینت نام در fence (مثلاً ```html portfolio.html) خودکار به آرتیفکت تبدیل می‌شود؛ کارت دانلود، پیش‌نمایش sandbox، کپی محتوا/لینک و بسته ZIP کل گفتگو — همه owner-scoped در D1 |
 
 ## ساختار پروژه
 
@@ -51,6 +52,11 @@ functions/_lib/patch.js                 اعمال search/replace + diff
 functions/_lib/search.js                جست‌وجوی متن/regex و فهرست نمادها
 functions/_lib/validate.js              اعتبارسنجی ساختاری + اسکن اعتبارنامه
 functions/_lib/versions.js              تاریخچه‌ی نسخه‌ها در D1
+functions/_lib/artifacts.js            ذخیره/خواندن/دانلود آرتیفکت + بسته ZIP
+functions/api/artifacts/index.js        فهرست و ZIP آرتیفکت‌های یک گفتگو
+functions/api/artifacts/[id].js        متادیتا، دانلود، پیش‌نمایش، حذف آرتیفکت
+functions/api/state/workspace-file.js  دانلود فایل‌های Workspace (با نشست)
+tests/artifacts.test.mjs               تست‌های آرتیفکت (pure + D1)
 functions/_lib/sandbox.js               اجرای واقعی (اختیاری) با fallback صادقانه
 functions/api/state/search/index.js     جست‌وجوی سروری
 functions/api/state/versions/index.js   تاریخچه و بازگردانی
