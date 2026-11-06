@@ -225,7 +225,13 @@ export const DEFAULT_AGENT_CONFIG = Object.freeze({
   theme: 'claude-warm',
   reducedMotion: false,
   mascot: true,
-  goal: ''
+  goal: '',
+  marathon: {
+    active: false,
+    goal: '',
+    durationH: 0,
+    startedAt: null
+  }
 });
 
 function normalizePowerLevel(val, fallback = 'medium') {
@@ -267,7 +273,23 @@ export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
     theme,
     reducedMotion: typeof src.reducedMotion === 'boolean' ? src.reducedMotion : base.reducedMotion,
     mascot: typeof src.mascot === 'boolean' ? src.mascot : base.mascot,
-    goal: typeof src.goal === 'string' ? src.goal.slice(0, 600) : base.goal
+    goal: typeof src.goal === 'string' ? src.goal.slice(0, 600) : base.goal,
+    marathon: normalizeMarathon(src.marathon, base.marathon)
+  };
+}
+
+function normalizeMarathon(m, baseM = {}) {
+  const src = m && typeof m === 'object' ? m : {};
+  const b = baseM && typeof baseM === 'object' ? baseM : {};
+  const durNum = Number(src.durationH);
+  return {
+    active: typeof src.active === 'boolean' ? src.active : !!b.active,
+    goal: typeof src.goal === 'string' ? src.goal.slice(0, 600) : (b.goal || ''),
+    durationH: Number.isFinite(durNum) ? Math.min(24, Math.max(0, durNum)) : (Number(b.durationH) || 0),
+    startedAt:
+      Number.isFinite(Number(src.startedAt)) && Number(src.startedAt) > 0
+        ? Number(src.startedAt)
+        : (b.startedAt || null)
   };
 }
 

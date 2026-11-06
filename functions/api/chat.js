@@ -660,25 +660,15 @@ export async function onRequestPost(context) {
     request,
     env,
     async ({ identity, data, setCookie, waitUntil }) => {
-      const conversationId = String(data?.conversationId || '');
-      const preloadedWaveCkpt = conversationId
-        ? await loadTurnCheckpoint(env, identity.owner, conversationId).catch(() => null)
-        : null;
-      const isWaveContinuation = Boolean(
-        data?.silentAutoResume === true && preloadedWaveCkpt?.active && preloadedWaveCkpt?.reason === 'wave_continue'
-      );
-      if (!isWaveContinuation) {
-        await enforceChatLimits(env, identity.owner);
-      }
+      await enforceChatLimits(env, identity.owner);
 
+      const conversationId = String(data?.conversationId || '');
       const attachments = await resolveUploadRefs(env, identity.owner, data?.attachments);
       const userText = (typeof data?.message === 'string' ? data.message.trim() : '') || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
-      const subreqTracker = { count: 1 };
-      effectiveEnv._subreq = subreqTracker;
       const incomingPower =
         data?.powerProfile && typeof data.powerProfile === 'object' ? data.powerProfile : {};
       const agentConfig = normalizeAgentConfig(
@@ -695,7 +685,8 @@ export async function onRequestPost(context) {
           ...(data?.workStamina ? { workStamina: data.workStamina } : {}),
           ...(data?.detailThinking ? { detailThinking: data.detailThinking } : {}),
           ...(data?.ambitionLevel ? { ambitionLevel: data.ambitionLevel } : {}),
-          ...(data?.humanSensitivity ? { humanSensitivity: data.humanSensitivity } : {})
+          ...(data?.humanSensitivity ? { humanSensitivity: data.humanSensitivity } : {}),
+          ...(data?.marathon && typeof data.marathon === 'object' ? { marathon: data.marathon } : {})
         },
         effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG
       );
@@ -917,20 +908,9 @@ export async function onRequestPost(context) {
           }
 
           let autoRepairAttempts = 0;
-          let hitWaveBoundary = false;
           const MUTATING_LIVE_SET = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
-          const EXTERNAL_FETCH_TOOLS = new Set(['run_command', 'web_search', 'fetch_url']);
-          const safeWaveSteps = Math.max(2, Math.min(Number(effectiveEnv.WAVE_STEP_BUDGET) || 24, 34));
-          const safeSubreqCap = Math.max(4, Math.min(Number(effectiveEnv.WAVE_SUBREQ_BUDGET) || 34, 42));
-          const priorCompletedSteps = resumingFromCheckpoint ? Number(existingCheckpoint?.completedSteps) || 0 : 0;
-          const remainingTotalSteps = Math.max(4, maxSteps - priorCompletedSteps);
-          const waveMaxSteps = Math.min(remainingTotalSteps, safeWaveSteps);
 
-          while (steps < waveMaxSteps) {
-            if (steps > 0 && subreqTracker.count >= safeSubreqCap) {
-              hitWaveBoundary = true;
-              break;
-            }
+          while (steps < maxSteps) {
             steps += 1;
             stepStreamedContent = '';
             stepStreamedReasoning = '';
@@ -947,12 +927,7 @@ export async function onRequestPost(context) {
 
             let deltaChars = 0;
             let lastToolDeltaPing = 0;
-            send('status', {
-              phase: steps > 1 ? 'working' : (resumingFromCheckpoint ? 'resuming' : 'thinking'),
-              step: priorCompletedSteps + steps,
-              waveStep: steps,
-              maxSteps
-            });
+            send('status', { phase: steps > 1 ? 'working' : (resumingFromCheckpoint ? 'resuming' : 'thinking'), step: steps, maxSteps });
             let result;
             try {
               result = await callModel(effectiveEnv, {
@@ -963,16 +938,6 @@ export async function onRequestPost(context) {
                 messages,
                 tools,
                 onDelta: (chunk) => {
-                  if (chunk?.type === 'rate_limit_wait') {
-                    send('status', {
-                      phase: 'rate_limit_wait',
-                      waitMs: chunk.waitMs || 2500,
-                      attempt: chunk.attempt || 1,
-                      step: priorCompletedSteps + steps,
-                      maxSteps
-                    });
-                    return;
-                  }
                   if (chunk?.type === 'tool_delta') {
                     const nowMs = Date.now();
                     if (nowMs - lastToolDeltaPing >= 1200) {
@@ -981,7 +946,7 @@ export async function onRequestPost(context) {
                         phase: 'tool_streaming',
                         toolName: chunk.name || 'tool',
                         chars: chunk.totalChars || 0,
-                        step: priorCompletedSteps + steps,
+                        step: steps,
                         maxSteps
                       });
                     }
@@ -991,21 +956,16 @@ export async function onRequestPost(context) {
                   deltaChars += chunk.text.length;
                   if (chunk.type === 'content') {
                     stepStreamedContent += chunk.text;
-                    send('delta', { text: chunk.text, step: priorCompletedSteps + steps });
+                    send('delta', { text: chunk.text, step: steps });
                   } else if (chunk.type === 'reasoning') {
                     stepStreamedReasoning += chunk.text;
                     if (deltaChars <= powerPlan.thinkingDeltaLimit) {
-                      send('thinking_delta', { text: chunk.text, step: priorCompletedSteps + steps });
+                      send('thinking_delta', { text: chunk.text, step: steps });
                     }
                   }
                 }
               });
             } catch (stepErr) {
-              if (stepErr?.code === 'subrequest_limit') {
-                steps = Math.max(0, steps - 1);
-                hitWaveBoundary = true;
-                break;
-              }
               // Seamless Server-Side Auto-Heal when an upstream SSE socket resets mid-stream!
               if (stepErr?.code === 'stream_interrupted' && autoHealCount < MAX_AUTO_HEALS) {
                 autoHealCount += 1;
@@ -1083,9 +1043,6 @@ export async function onRequestPost(context) {
                   args = {};
                 }
                 let outcome;
-                if (EXTERNAL_FETCH_TOOLS.has(call.function.name)) {
-                  subreqTracker.count += 1;
-                }
                 try {
                   outcome = await executeTool({
                     env,
@@ -1209,22 +1166,14 @@ export async function onRequestPost(context) {
             break;
           }
 
-          let isWaveHandoff = false;
-          const cumulativeStepsNow = priorCompletedSteps + steps;
-          const nextWaveNumber = (Number(existingCheckpoint?.waveNumber) || 0) + 1;
-
           if (!finalText) {
-            if ((hitWaveBoundary || (newMessages.length > 0 && steps >= waveMaxSteps)) && cumulativeStepsNow < maxSteps) {
-              // Clean Multi-Wave Handoff BEFORE Cloudflare Workers' 50-subrequest limit!
-              isWaveHandoff = true;
-              turnInterruptedReason = 'wave_continue';
-            } else if (newMessages.length > 0) {
+            if (newMessages.length > 0) {
               turnInterruptedReason = 'step_limit';
               finalText = 'به سقف مراحل این نوبت رسیدم و تمام فایل‌ها و تغییرات تا همین نقطه ذخیره شدند. بنویسید «ادامه» تا دقیقاً از مرحله‌ی بعدی ادامه دهم.';
             } else {
               finalText = 'پاسخی دریافت نشد. دوباره تلاش کنید.';
             }
-            if (finalText && !newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
+            if (!newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
               newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
             }
           }
@@ -1247,12 +1196,11 @@ export async function onRequestPost(context) {
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
               originalGoal: userText,
               reason: turnInterruptedReason,
-              waveNumber: isWaveHandoff ? nextWaveNumber : undefined,
               stepsCompleted: steps,
               touchedFiles: touchedList,
               deletedFiles: [...turn.deleted],
               completedTools: completedToolsLog,
-              partialContent: isWaveHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
+              partialContent: turnInterruptedReason === 'step_limit' ? '' : finalText
             }).catch(() => null);
           } else if (resumingFromCheckpoint || existingCheckpoint) {
             await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
@@ -1310,13 +1258,10 @@ export async function onRequestPost(context) {
             validation,
             commands: turn.commands,
             steps,
-            cumulativeSteps: cumulativeStepsNow,
             maxSteps,
-            waveContinue: isWaveHandoff,
-            waveNumber: isWaveHandoff ? nextWaveNumber : undefined,
             powerProfile: powerPlan.axes,
-            interrupted: Boolean(turnInterruptedReason && !isWaveHandoff),
-            interruptedReason: isWaveHandoff ? null : turnInterruptedReason || null,
+            interrupted: Boolean(turnInterruptedReason),
+            interruptedReason: turnInterruptedReason || null,
             resumable: Boolean(savedCheckpoint),
             checkpoint: savedCheckpoint,
             resumedFromCheckpoint: resumingFromCheckpoint,
@@ -1349,13 +1294,11 @@ export async function onRequestPost(context) {
                 ? 'auth_failed'
                 : errCode === 'model_rate_limited'
                   ? 'rate_limited'
-                  : errCode === 'subrequest_limit'
-                    ? 'wave_continue'
-                    : errCode === 'stream_interrupted' || errCode === 'model_bad_response'
-                      ? 'stream_cutoff'
-                      : errCode === 'model_timeout' || errCode === 'model_unreachable'
-                        ? 'timeout'
-                        : 'error';
+                  : errCode === 'stream_interrupted' || errCode === 'model_bad_response'
+                    ? 'stream_cutoff'
+                    : errCode === 'model_timeout' || errCode === 'model_unreachable'
+                      ? 'timeout'
+                      : 'error';
 
           let savedCheckpoint = null;
           try {
