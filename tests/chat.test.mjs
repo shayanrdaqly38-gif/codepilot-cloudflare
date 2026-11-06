@@ -789,5 +789,135 @@ test('resilient model parser + live checkpoint resume: recovers mislabelled SSE,
   }
 });
 
+test('zero-cutoff streaming: streams even without env.CF_PAGES, breaks immediately on [DONE] despite hanging/resetting proxy sockets, strips rejected stream_options, and auto-heals real mid-stream drops inside one turn', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+  const original = globalThis.fetch;
+
+  try {
+    // 1. Proxy sends `data: [DONE]` and NEVER closes the HTTP stream -> must finish in <150ms without hanging!
+    const enc = new TextEncoder();
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      const bodyObj = JSON.parse(init.body);
+      assert.equal(bodyObj.stream, true, 'must enable stream:true whenever onDelta is passed even without env.CF_PAGES');
+      const hangingStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            enc.encode(
+              'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"پاسخ سریع بدون هنگ"}}]}\n\n' +
+                'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
+                'data: [DONE]\n\n'
+            )
+          );
+          // Intentionally NEVER call controller.close()!
+        }
+      });
+      return new Response(hangingStream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+
+    const t0 = Date.now();
+    const fastRes = await modelLib.callModel(env, {
+      model: 'claude-sonnet-5-5',
+      messages: [{ role: 'user', content: 'سلام' }],
+      onDelta: () => {}
+    });
+    assert.ok(Date.now() - t0 < 1500, 'must break immediately upon [DONE] instead of hanging on open proxy socket');
+    assert.equal(fastRes.interrupted, false, 'must NOT mark [DONE] stream as interrupted');
+    assert.equal(fastRes.message.content, 'پاسخ سریع بدون هنگ');
+
+    // 2. Proxy sends `finish_reason: "stop"` (without `[DONE]`) and then violently resets TCP socket + rejects `stream_options` on attempt 1
+    let optAttempt = 0;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      optAttempt += 1;
+      const bodyObj = JSON.parse(init.body);
+      if (optAttempt === 1) {
+        assert.ok(bodyObj.stream_options, 'first attempt includes stream_options');
+        return new Response('{"error":{"message":"Unknown parameter: stream_options"}}', { status: 400 });
+      }
+      assert.equal(bodyObj.stream_options, undefined, 'retry strips unsupported stream_options');
+      let stepRead = 0;
+      const resetAfterStopStream = new ReadableStream({
+        pull(controller) {
+          stepRead += 1;
+          if (stepRead === 1) {
+            controller.enqueue(
+              enc.encode(
+                'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"کامل قبل از ریست"},"finish_reason":"stop"}]}\n\n'
+              )
+            );
+          } else {
+            controller.error(new Error('peer closed connection without TLS close_notify'));
+          }
+        }
+      });
+      return new Response(resetAfterStopStream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+
+    const resetAfterStopRes = await modelLib.callModel(env, {
+      model: 'claude-sonnet-5-5',
+      messages: [{ role: 'user', content: 'تست ریست بعد از اتمام' }],
+      onDelta: () => {}
+    });
+    assert.equal(resetAfterStopRes.interrupted, false, 'socket reset AFTER finish_reason:stop must NOT trigger stream cutoff');
+    assert.equal(resetAfterStopRes.message.content, 'کامل قبل از ریست');
+
+    // 3. Genuine mid-stream drop halfway through an answer -> `/api/chat` auto-heals inside the SAME SSE turn without stopping!
+    const healConv = await (
+      await stateApi.onRequestPost(
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+      )
+    ).json();
+
+    let healStep = 0;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      healStep += 1;
+      if (healStep === 1) {
+        let chunkIdx = 0;
+        const midCrashStream = new ReadableStream({
+          pull(controller) {
+            chunkIdx += 1;
+            if (chunkIdx === 1) {
+              controller.enqueue(
+                enc.encode('data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"نیمه اول پاسخ — "}}]}\n\n')
+              );
+            } else {
+              controller.error(new Error('TCP reset mid-generation'));
+            }
+          }
+        });
+        return new Response(midCrashStream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      // Auto-heal attempt 2 inside the SAME /api/chat request finishes seamlessly:
+      return new Response(
+        'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"نیمه دوم بدون توقف کامل شد!"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+      );
+    };
+
+    const healRes = await chat.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: healConv.id, message: 'یک متن دو تکه بنویس' }
+        }),
+        env
+      )
+    );
+    const healEvents = await parseSse(healRes);
+    assert.equal(healEvents.find((e) => e.name === 'error'), undefined, 'auto-healed turn must NOT emit error');
+    assert.ok(healEvents.some((e) => e.name === 'status' && e.data?.phase === 'auto-heal'), 'emitted auto-heal status');
+    const healDone = healEvents.find((e) => e.name === 'done');
+    assert.ok(healDone, 'auto-healed turn finished with done');
+    assert.equal(healDone.data.interrupted, false, 'final done is NOT marked interrupted');
+    assert.equal(healDone.data.resumable, false, 'no manual resume banner needed after auto-heal');
+    assert.equal(healDone.data.content, 'نیمه اول پاسخ — نیمه دوم بدون توقف کامل شد!');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 
 

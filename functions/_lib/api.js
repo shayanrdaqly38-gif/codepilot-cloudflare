@@ -20,15 +20,15 @@ export function reply(body, status, setCookie) {
 
 /**
  * Wrap a handler with auth + error handling.
- * The handler receives ({ identity, env, request, url, data, setCookie }).
+ * The handler receives ({ identity, env, request, url, data, setCookie, waitUntil }).
  */
-export async function route(request, env, handler, { write = false, body = 0 } = {}) {
+export async function route(request, env, handler, { write = false, body = 0, waitUntil = null } = {}) {
   try {
     const url = new URL(request.url);
     const { identity, setCookie } = await session(request, env, { write });
     let data = null;
     if (body) data = await readJson(request, body);
-    const result = await handler({ identity, env, request, url, data, setCookie });
+    const result = await handler({ identity, env, request, url, data, setCookie, waitUntil });
     if (result instanceof Response) {
       if (setCookie && !result.headers.get('Set-Cookie')) {
         const copy = new Response(result.body, result);

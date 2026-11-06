@@ -2099,6 +2099,8 @@ function classifyInlineProviderError(errObj, secrets = []) {
 function createSseAccumulator(onDelta) {
   let outModel = '';
   let finishReason = 'stop';
+  let sawExplicitFinish = false;
+  let sawDone = false;
   let contentAcc = '';
   let reasoningAcc = '';
   let usageObj = null;
@@ -2117,7 +2119,10 @@ function createSseAccumulator(onDelta) {
     if (evt.usage && typeof evt.usage === 'object') usageObj = evt.usage;
     const choice = evt?.choices?.[0];
     if (!choice) return;
-    if (choice.finish_reason) finishReason = String(choice.finish_reason);
+    if (choice.finish_reason) {
+      finishReason = String(choice.finish_reason);
+      sawExplicitFinish = true;
+    }
     const d = choice.delta || choice.message || {};
 
     if (typeof d.content === 'string' && d.content) {
@@ -2165,6 +2170,15 @@ function createSseAccumulator(onDelta) {
           prev.function.arguments += tc.function.arguments;
         }
         toolMap.set(idx, prev);
+        if (typeof onDelta === 'function') {
+          try {
+            onDelta({
+              type: 'tool_delta',
+              name: prev.function.name || 'tool',
+              totalChars: prev.function.arguments.length
+            });
+          } catch { /* ignore */ }
+        }
       }
     }
   };
@@ -2174,7 +2188,11 @@ function createSseAccumulator(onDelta) {
     if (!line) return;
     if (line.startsWith('data:')) {
       const payloadStr = line.slice(5).trim();
-      if (!payloadStr || payloadStr === '[DONE]') return;
+      if (!payloadStr) return;
+      if (payloadStr === '[DONE]') {
+        sawDone = true;
+        return;
+      }
       try {
         applyEventObj(JSON.parse(payloadStr));
       } catch {
@@ -2183,7 +2201,9 @@ function createSseAccumulator(onDelta) {
     }
   };
 
-  const snapshot = (streamInterrupted = false) => {
+  const isComplete = () => sawDone;
+
+  const snapshot = (rawStreamInterrupted = false) => {
     const toolCalls = [...toolMap.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([, v]) => v);
@@ -2203,8 +2223,17 @@ function createSseAccumulator(onDelta) {
         }
       }
     }
+    // If upstream already sent `[DONE]` or an explicit `finish_reason` (`stop`/`tool_calls`) with non-truncated tools,
+    // a subsequent ungraceful TCP reset by the proxy is NOT a mid-stream cutoff!
+    const completedCleanly =
+      !inlineError &&
+      !hasTruncatedToolCall &&
+      (sawDone || (sawExplicitFinish && (finishReason === 'stop' || finishReason === 'tool_calls')));
+    const streamInterrupted = Boolean(rawStreamInterrupted && !completedCleanly);
     return {
       sawFrame,
+      sawDone,
+      sawExplicitFinish,
       inlineError,
       streamInterrupted,
       hasTruncatedToolCall,
@@ -2230,7 +2259,7 @@ function createSseAccumulator(onDelta) {
     };
   };
 
-  return { applyEventObj, handleLine, snapshot };
+  return { applyEventObj, handleLine, isComplete, snapshot };
 }
 
 function parseHybridTextPayload(rawText, onDelta) {
@@ -2307,8 +2336,13 @@ async function consumeChatSseResponse(response, onDelta) {
         buf = buf.slice(nlIdx + 1);
         acc.handleLine(line);
       }
+      if (acc.isComplete()) {
+        // Upstream sent `data: [DONE]` — stop immediately so proxies that keep sockets open or reset TCP never trigger false timeouts!
+        try { await reader.cancel(); } catch { /* ignore */ }
+        break;
+      }
     }
-    buf += dec.decode();
+    if (!acc.isComplete()) buf += dec.decode();
   } catch (err) {
     streamInterrupted = true;
     streamErrObj = err;
@@ -2363,10 +2397,12 @@ export async function callModel(env, payload) {
     180_000
   );
   const allowFailover = Boolean(env.CF_PAGES) && env.MODEL_FALLBACK !== 'off' && isTooken;
+  // Always stream upstream whenever `onDelta` is provided (such as `/api/chat`), regardless of `env.CF_PAGES`
+  // (which Cloudflare Pages sets at build time, NOT at Functions runtime!), preventing 90-100s non-streaming 524 timeouts!
   const useUpstreamStream =
     payload.upstreamStream === true ||
-    (payload.upstreamStream !== false && /moonmath\.ai/i.test(baseUrl)) ||
-    (payload.upstreamStream !== false && Boolean(env.CF_PAGES) && typeof payload.onDelta === 'function');
+    (payload.upstreamStream !== false && typeof payload.onDelta === 'function') ||
+    (payload.upstreamStream !== false && /moonmath\.ai/i.test(baseUrl));
   const candidates = [requestedModel];
   if (allowFailover) {
     for (const candidate of FALLBACK_MODELS) {
@@ -2391,6 +2427,7 @@ export async function callModel(env, payload) {
     let netRetries = 0;
     let statusRetries = 0;
     let forceNonStreamFallback = false;
+    let omitStreamOptions = false;
 
     while (variantIdx < wireVariants.length) {
       const currentVariant = wireVariants[variantIdx];
@@ -2398,7 +2435,7 @@ export async function callModel(env, payload) {
       const body = JSON.stringify({
         model,
         stream: streamThisAttempt,
-        ...(streamThisAttempt ? { stream_options: { include_usage: true } } : {}),
+        ...(streamThisAttempt && !omitStreamOptions ? { stream_options: { include_usage: true } } : {}),
         ...currentVariant.params,
         messages: activeMessages,
         ...(payload.tools && payload.tools.length
@@ -2486,16 +2523,16 @@ export async function callModel(env, payload) {
           );
         }
 
-        // 3. Mid-stream network drop: preserve partial output or checkpoint truncated tool call!
+        // 3. Mid-stream network drop: if no visible prose was emitted yet, auto-retry transparently before throwing!
         if (snap?.streamInterrupted) {
-          const hasAnyProgress = Boolean(snap.rawContent?.trim() || snap.rawReasoning?.trim() || snap.rawToolCalls?.length);
-          if (!hasAnyProgress && netRetries === 0 && cIndex === 0) {
+          const hasVisibleProse = Boolean(snap.rawContent?.trim());
+          if (!hasVisibleProse && netRetries < 2 && cIndex === 0) {
             netRetries += 1;
-            if (streamThisAttempt) forceNonStreamFallback = true;
-            await sleep(450);
+            if (netRetries === 2 && streamThisAttempt) forceNonStreamFallback = true;
+            await sleep(450 * netRetries);
             continue;
           }
-          if (snap.hasTruncatedToolCall || !snap.rawContent?.trim()) {
+          if (snap.hasTruncatedToolCall || !hasVisibleProse) {
             const err = new Error(
               'ارتباط استریم با سرویس مدل در میانه کار قطع شد. تمام مراحل قبلی ذخیره شد؛ بنویسید «ادامه» تا دقیقاً از همین نقطه ادامه یابد.'
             );
@@ -2563,6 +2600,17 @@ export async function callModel(env, payload) {
       const errText = await response.text().catch(() => '');
       const safeDetail = extractSafeUpstreamError(errText, envSecrets(env));
       if (safeDetail) lastErrDetail = safeDetail;
+
+      // Some OpenAI-compatible proxies (Anthropic/Gemini bridges, older OneAPI) reject `stream_options` with 400/422:
+      if (
+        (status === 400 || status === 422) &&
+        streamThisAttempt &&
+        !omitStreamOptions &&
+        /stream_options|include_usage/i.test(errText)
+      ) {
+        omitStreamOptions = true;
+        continue;
+      }
 
       // Runtime self-learning & seamless fallback when a model rejects a reasoning_effort value
       if ((status === 400 || status === 422) && currentVariant.effort !== null) {
