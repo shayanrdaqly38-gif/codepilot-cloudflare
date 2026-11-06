@@ -396,8 +396,11 @@ function estimateMessagesTextChars(messages) {
 /**
  * Execute one tool call. Mutates `workspace` and fills `turn` with everything the
  * UI needs (edits, deletions, validation, diffs, thinking).
+ * `signal` (when provided) is the turn-level abort signal: it is forwarded to
+ * external tools (web_search / fetch_url / run_command) so a user stop cancels
+ * in-flight tool work immediately instead of waiting for a network timeout.
  */
-async function executeTool({ env, owner, conversation, name, args, workspace, turn, send }) {
+async function executeTool({ env, owner, conversation, name, args, workspace, turn, send, signal }) {
   if (!args || typeof args !== 'object') return { text: 'Error: invalid arguments', ok: false };
 
   switch (name) {
@@ -629,14 +632,14 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
     }
 
     case 'run_command': {
-      const result = await runCommand(env, { command: String(args.command || ''), workspace });
+      const result = await runCommand(env, { command: String(args.command || ''), workspace, externalSignal: signal });
       turn.commands.push({ command: String(args.command || ''), mode: result.mode, ok: result.ok });
       if (result.mode === 'virtual' && result.ok) turn.touched.add('(shell)');
       return { ok: result.ok, text: result.text };
     }
 
     case 'web_search': {
-      return searchWeb(env, { query: String(args.query || ''), limit: args.limit });
+      return searchWeb(env, { query: String(args.query || ''), limit: args.limit, externalSignal: signal });
     }
 
     case 'fetch_url': {
@@ -645,7 +648,8 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
         method: args.method,
         headers: args.headers,
         body: args.body,
-        maxChars: args.maxChars
+        maxChars: args.maxChars,
+        externalSignal: signal
       });
     }
 
@@ -1114,7 +1118,8 @@ export async function onRequestPost(context) {
                     args,
                     workspace,
                     turn,
-                    send
+                    send,
+                    signal: turnReg.signal
                   });
                 } catch (error) {
                   outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
