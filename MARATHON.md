@@ -10,6 +10,7 @@
 3. حذف کامل بازی دوز (dooz.html) و همه ارجاع‌ها از ریپو.
 4. بازبینی ساختاری: تعادل تگ‌ها، صحت همه توابع ارجاع‌شده (رفع sfx.death)، اضافه‌شدن فنر (pad) به ۴ مرحله.
 5. مرز صداقت: اجرای واقعی کامل بازی در container میسر نبود (mount فقط بخشی از ریپو را دارد)؛ اما **۱۱ تست واقعی هستهٔ موتور** (ابزارهای ریاضی + فیزیک پرش) در کانتینر واقعی با `node --input-type=module` اجرا و تأیید شد (TOTAL: 11 passed, 0 failed).
+6. چرخهٔ ۴: **اجرای واقعی در کانتینر**: پارس ESM هر ۲۲ ماژول `functions/` با `vm.SourceTextModule` → ۲۲/۲۲ سالم؛ عدم وجود missing export در مسیرهای `functions/api` (0)؛ تأیید استاتیک `wrangler.toml` (binding=DB بدون [vars]) و خوانش `schema.sql`.
 
 ## ⏭ صف بعدی (resume point)
 - اجرای `node --test tests/super-nova.test.mjs` روی Node ≥۲۲.
