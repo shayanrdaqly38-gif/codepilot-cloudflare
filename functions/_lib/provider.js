@@ -589,7 +589,7 @@ export async function saveDiscoveredSpec(env, baseUrl, modelId, spec) {
 async function modelsMetaKey(baseUrl) {
   const norm = effectiveBaseUrlFromEnv({ MODEL_BASE_URL: baseUrl }).toLowerCase();
   const hash = await sha256Hex(norm);
-  return `mcat:${hash.slice(0, 20)}`;
+  return `mcat2:${hash.slice(0, 20)}`;
 }
 
 export async function loadCachedProviderModels(env, baseUrl) {
@@ -613,9 +613,10 @@ export async function saveCachedProviderModels(env, baseUrl, models) {
   try {
     await ensureSchema(env);
     const key = await modelsMetaKey(baseUrl);
-    const slim = models.slice(0, 220);
+    const slim = models.length > 2_000 ? models.slice(0, 2_000) : models;
     const serialized = JSON.stringify({ at: Date.now(), models: slim });
-    if (serialized.length > 180_000) return;
+    const byteLen = new TextEncoder().encode(serialized).byteLength;
+    if (byteLen > 850_000) return;
     await env.DB.prepare(
       `INSERT INTO meta(key, value) VALUES(?, ?)
        ON CONFLICT(key) DO UPDATE SET value=excluded.value`

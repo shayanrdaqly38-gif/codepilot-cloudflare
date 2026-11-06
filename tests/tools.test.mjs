@@ -1441,7 +1441,7 @@ test('OpenRouter (openrouter.ai/api/v1): saves key atomically without 503 CPU sp
     assert.equal(saveRes.provider.keyHint, 'sk-o••••6789');
     assert.ok(saveRes.models.length >= 8, 'fallback OpenRouter models returned immediately');
 
-    // 3. Phase 2 `/api/models?refresh=1` parses 443-model ~2MB JSON fast, prioritizes flagship models, and caches in D1
+    // 3. Phase 2 `/api/models?refresh=1` parses ALL 443+ models (~2MB JSON) with zero dropped models and caches ALL in D1 `mcat2:`
     const modelsRes = await (
       await modelsApi.onRequestGet(
         ctx(req('/api/models?refresh=1', { headers: { Cookie: cookie } }), env)
@@ -1450,17 +1450,19 @@ test('OpenRouter (openrouter.ai/api/v1): saves key atomically without 503 CPU sp
     assert.equal(modelsRes.ok, true);
     assert.equal(modelsRes.source, 'remote');
     assert.equal(modelsRes.defaultModel, 'anthropic/claude-sonnet-4.5');
-    assert.ok(modelsRes.models.length <= 225, 'giant 443-model list capped to <=225 to stay under Cloudflare CPU limit');
+    assert.equal(modelsRes.models.length, 444, '100% of all 443 OpenRouter models + openrouter/auto preserved without capping');
     assert.equal(modelsRes.models[0].id, 'anthropic/claude-sonnet-4.5', 'flagship coding model prioritized at index 0');
     assert.ok(modelsRes.models.some((m) => m.id === '@preset/my-coding-router'), 'supports OpenRouter @preset IDs');
+    assert.ok(modelsRes.models.some((m) => m.id === 'community-org/model-variant-439:free'), 'tail model #439 preserved in full list');
 
-    // 4. Subsequent cold boot `GET /api/config` reads D1 cache with ZERO extra `/models` fetches!
+    // 4. Subsequent cold boot `GET /api/config` reads ALL 444 models from D1 cache with ZERO extra `/models` fetches!
     const countBeforeBoot = modelsFetchCount;
     const bootCfg = await (
       await configApi.onRequestGet(ctx(req('/api/config', { headers: { Cookie: cookie } }), env))
     ).json();
     assert.equal(modelsFetchCount, countBeforeBoot, 'GET /api/config uses D1 cache without re-fetching 2MB OpenRouter /models');
     assert.equal(bootCfg.model, 'anthropic/claude-sonnet-4.5');
+    assert.equal(bootCfg.models.length, 444, 'D1 cache preserves all 444 models on boot');
 
     // 5. `GET /api/health?probe=1` probes OpenRouter with `HTTP-Referer`, `X-Title`, and smart default model (NOT `claude-sonnet-5-5`)
     const healthApi = await import(`${root}/api/health.js`);
