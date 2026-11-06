@@ -318,17 +318,159 @@ export function extractRateLimitHeaders(headers) {
   };
 }
 
-function parseQuotaFromObject(raw, sourceLabel = 'provider') {
+function toNum(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function firstNum(...vals) {
+  for (const v of vals) {
+    const n = toNum(v);
+    if (n !== null) return n;
+  }
+  return null;
+}
+
+/**
+ * Extract strictly non-sensitive numeric/boolean/currency metrics (up to 2 levels deep)
+ * so the UI can display exact provider numbers without ever exposing IDs, keys, or strings.
+ */
+function extractSafeMetrics(raw, depth = 0) {
+  if (!raw || typeof raw !== 'object' || depth > 2) return null;
+  const out = {};
+  let count = 0;
+  for (const [k, v] of Object.entries(raw)) {
+    if (count >= 32) break;
+    if (/secret|password|hash|jwt|cookie|authorization/i.test(k)) continue;
+    if (typeof v === 'boolean') {
+      out[k] = v;
+      count += 1;
+    } else if (typeof v === 'number' && Number.isFinite(v)) {
+      out[k] = v;
+      count += 1;
+    } else if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (/^(RUB|USD|EUR|CNY|GBP|USDT|KZT|BYN|TRY|AED|IRR)$/i.test(trimmed)) {
+        out[k] = trimmed.toUpperCase();
+        count += 1;
+      } else if (/^-?\d+(?:\.\d+)?$/.test(trimmed) && !/id$/i.test(k)) {
+        const n = Number(trimmed);
+        if (Number.isFinite(n)) {
+          out[k] = n;
+          count += 1;
+        }
+      }
+    } else if (v && typeof v === 'object' && !Array.isArray(v) && depth < 2) {
+      const sub = extractSafeMetrics(v, depth + 1);
+      if (sub && Object.keys(sub).length > 0) {
+        out[k] = sub;
+        count += 1;
+      }
+    } else if (Array.isArray(v) && depth === 0 && k === 'balance_infos' && v[0] && typeof v[0] === 'object') {
+      const sub = extractSafeMetrics(v[0], 2);
+      if (sub) {
+        out[k] = [sub];
+        count += 1;
+      }
+    }
+  }
+  return count > 0 ? out : null;
+}
+
+function parseProviderUsageObject(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : raw;
-  const info = obj.info && typeof obj.info === 'object' ? obj.info : obj;
+  const totalsObj =
+    (obj.totals && typeof obj.totals === 'object' ? obj.totals : null) ||
+    (obj.summary && typeof obj.summary === 'object' ? obj.summary : null) ||
+    (obj.usage && typeof obj.usage === 'object' ? obj.usage : null);
 
-  // 1. Explicit unlimited flag or huge sentinel limit (OneAPI / NewAPI / Tooken)
+  const promptTokens = firstNum(
+    obj.prompt_tokens,
+    obj.input_tokens,
+    obj.total_prompt_tokens,
+    obj.total_input_tokens,
+    totalsObj?.prompt_tokens,
+    totalsObj?.input_tokens
+  );
+  const completionTokens = firstNum(
+    obj.completion_tokens,
+    obj.output_tokens,
+    obj.total_completion_tokens,
+    obj.total_output_tokens,
+    totalsObj?.completion_tokens,
+    totalsObj?.output_tokens
+  );
+  const reasoningTokens = firstNum(
+    obj.reasoning_tokens,
+    obj.total_reasoning_tokens,
+    totalsObj?.reasoning_tokens
+  );
+  const totalTokens = firstNum(
+    obj.total_tokens,
+    obj.tokens_used,
+    obj.used_tokens,
+    obj.tokens,
+    totalsObj?.total_tokens,
+    totalsObj?.tokens,
+    promptTokens !== null || completionTokens !== null
+      ? (promptTokens || 0) + (completionTokens || 0) + (reasoningTokens || 0)
+      : null
+  );
+  const requests = firstNum(
+    obj.requests,
+    obj.total_requests,
+    obj.request_count,
+    obj.count,
+    totalsObj?.requests,
+    totalsObj?.total_requests,
+    totalsObj?.count
+  );
+  const totalCost = firstNum(
+    obj.total_cost,
+    obj.cost,
+    obj.spent,
+    obj.total_spent,
+    obj.total_usage_usd,
+    totalsObj?.total_cost,
+    totalsObj?.cost,
+    totalsObj?.spent
+  );
+  const currency = String(obj.currency || totalsObj?.currency || '').trim().toUpperCase() || null;
+
+  if (totalTokens === null && requests === null && totalCost === null) return null;
+  return {
+    ...(totalTokens !== null ? { totalTokens: Math.round(totalTokens) } : {}),
+    ...(promptTokens !== null ? { promptTokens: Math.round(promptTokens) } : {}),
+    ...(completionTokens !== null ? { completionTokens: Math.round(completionTokens) } : {}),
+    ...(reasoningTokens !== null ? { reasoningTokens: Math.round(reasoningTokens) } : {}),
+    ...(requests !== null ? { requests: Math.round(requests) } : {}),
+    ...(totalCost !== null ? { totalCost: Number(totalCost.toFixed(6)) } : {}),
+    ...(currency ? { currency } : {})
+  };
+}
+
+function parseQuotaFromObject(raw, sourceLabel = 'provider', defaultCurrency = 'USD') {
+  if (!raw || typeof raw !== 'object' || raw.error) return null;
+  const obj = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : raw;
+  const info = obj.info && typeof obj.info === 'object' ? obj.info : obj;
+  const balObj = obj.balance && typeof obj.balance === 'object' && !Array.isArray(obj.balance) ? obj.balance : null;
+  const tokObj = obj.tokens && typeof obj.tokens === 'object' && !Array.isArray(obj.tokens) ? obj.tokens : null;
+  const bonusObj = obj.bonus && typeof obj.bonus === 'object' && !Array.isArray(obj.bonus) ? obj.bonus : null;
+  const keyObj =
+    (obj.key && typeof obj.key === 'object' && !Array.isArray(obj.key) ? obj.key : null) ||
+    (obj.api_key && typeof obj.api_key === 'object' && !Array.isArray(obj.api_key) ? obj.api_key : null);
+
+  // 1. Explicit unlimited flag or huge sentinel limit (OneAPI / NewAPI)
   if (
     obj.unlimited_quota === true ||
     obj.is_unlimited === true ||
     obj.unlimited === true ||
-    (typeof obj.hard_limit_usd === 'number' && obj.hard_limit_usd >= 99_999_999)
+    (toNum(obj.hard_limit_usd) !== null && toNum(obj.hard_limit_usd) >= 99_999_999)
   ) {
     return { supported: true, unlimited: true, source: sourceLabel };
   }
@@ -336,112 +478,87 @@ function parseQuotaFromObject(raw, sourceLabel = 'provider') {
   // 2. DeepSeek `/user/balance` format (`balance_infos: [{ currency, total_balance }]`)
   if (Array.isArray(obj.balance_infos) && obj.balance_infos.length > 0) {
     const b = obj.balance_infos.find((x) => x?.currency === 'USD') || obj.balance_infos[0];
-    const bal = Number(b?.total_balance);
-    if (Number.isFinite(bal)) {
+    const bal = toNum(b?.total_balance);
+    if (bal !== null) {
       return {
         supported: true,
         unlimited: false,
         remainingBalance: bal,
-        currency: String(b.currency || 'USD'),
+        currency: String(b.currency || defaultCurrency).toUpperCase(),
         source: sourceLabel
       };
     }
   }
 
-  // 3. Explicit token count fields (`remaining_tokens`, `tokens_remaining`, `available_tokens`, `remain_quota`, etc.)
-  const remTok = Number(
-    obj.remaining_tokens ??
-      obj.tokens_remaining ??
-      obj.available_tokens ??
-      obj.token_balance ??
-      obj.left_tokens ??
-      obj.remain_tokens
-  );
-  const limTok = Number(obj.token_limit ?? obj.max_tokens_quota ?? obj.total_tokens_limit ?? obj.tokens_limit);
-  const usedTok = Number(obj.tokens_used ?? obj.used_tokens ?? obj.total_tokens_used);
-  if (Number.isFinite(remTok) && remTok >= 0) {
+  // 3. OpenRouter `/credits` (`total_credits`, `total_usage`) or `/key` (`limit`, `limit_remaining`, `usage`)
+  const orTotalCredits = toNum(obj.total_credits);
+  const orTotalUsage = toNum(obj.total_usage);
+  if (orTotalCredits !== null && orTotalUsage !== null) {
     return {
       supported: true,
       unlimited: false,
-      remainingTokens: Math.floor(remTok),
-      ...(Number.isFinite(limTok) && limTok > 0 ? { limitTokens: Math.floor(limTok) } : {}),
-      ...(Number.isFinite(usedTok) && usedTok >= 0 ? { usedTokens: Math.floor(usedTok) } : {}),
-      source: sourceLabel
-    };
-  }
-  if (Number.isFinite(limTok) && limTok > 0 && Number.isFinite(usedTok) && usedTok >= 0) {
-    return {
-      supported: true,
-      unlimited: false,
-      remainingTokens: Math.max(0, Math.floor(limTok - usedTok)),
-      limitTokens: Math.floor(limTok),
-      usedTokens: Math.floor(usedTok),
-      source: sourceLabel
-    };
-  }
-
-  // 4. OpenRouter `/credits` (`total_credits`, `total_usage`) or `/key` (`limit`, `limit_remaining`, `usage`)
-  if (typeof obj.total_credits === 'number' && typeof obj.total_usage === 'number') {
-    return {
-      supported: true,
-      unlimited: false,
-      remainingBalance: Math.max(0, Number((obj.total_credits - obj.total_usage).toFixed(4))),
-      limitBalance: obj.total_credits,
-      usedBalance: obj.total_usage,
+      remainingBalance: Math.max(0, Number((orTotalCredits - orTotalUsage).toFixed(4))),
+      limitBalance: orTotalCredits,
+      usedBalance: orTotalUsage,
       currency: 'USD',
       source: sourceLabel
     };
   }
-  if (obj.limit !== undefined && (typeof obj.limit_remaining === 'number' || obj.limit === null)) {
-    if (obj.limit === null && typeof obj.usage === 'number') {
+  if (obj.limit !== undefined && (toNum(obj.limit_remaining) !== null || obj.limit === null)) {
+    const lr = toNum(obj.limit_remaining);
+    const lim = toNum(obj.limit);
+    const usg = toNum(obj.usage);
+    if (obj.limit === null && usg !== null && obj.balance === undefined && obj.remaining_tokens === undefined) {
       return {
         supported: true,
         unlimited: true,
-        usedBalance: obj.usage,
+        usedBalance: usg,
         currency: 'USD',
         source: sourceLabel
       };
     }
-    if (typeof obj.limit_remaining === 'number') {
+    if (lr !== null) {
       return {
         supported: true,
         unlimited: false,
-        remainingBalance: Math.max(0, Number(obj.limit_remaining.toFixed(4))),
-        ...(typeof obj.limit === 'number' ? { limitBalance: obj.limit } : {}),
-        ...(typeof obj.usage === 'number' ? { usedBalance: obj.usage } : {}),
-        currency: 'USD',
+        remainingBalance: Math.max(0, Number(lr.toFixed(4))),
+        ...(lim !== null ? { limitBalance: lim } : {}),
+        ...(usg !== null ? { usedBalance: usg } : {}),
+        currency: String(obj.currency || defaultCurrency).toUpperCase(),
         source: sourceLabel
       };
     }
   }
 
-  // 5. LiteLLM `/key/info` (`max_budget`, `spend`)
-  if (typeof info.max_budget === 'number' && info.max_budget > 0) {
-    const spend = Number(info.spend) || 0;
+  // 4. LiteLLM `/key/info` (`max_budget`, `spend`)
+  const maxBudget = toNum(info.max_budget);
+  if (maxBudget !== null && maxBudget > 0) {
+    const spend = toNum(info.spend) || 0;
     return {
       supported: true,
       unlimited: false,
-      remainingBalance: Math.max(0, Number((info.max_budget - spend).toFixed(4))),
-      limitBalance: info.max_budget,
+      remainingBalance: Math.max(0, Number((maxBudget - spend).toFixed(4))),
+      limitBalance: maxBudget,
       usedBalance: spend,
-      currency: 'USD',
+      currency: String(info.currency || defaultCurrency).toUpperCase(),
       source: sourceLabel
     };
   }
 
-  // 6. NewAPI / OneAPI `/api/usage/token` (`total_granted`, `total_used`, `total_available`)
-  if (typeof obj.total_available === 'number' && obj.total_available >= 0) {
-    // Values >= 10,000 in OneAPI/NewAPI `/api/usage/token` are raw token-quota units (500,000 = $1 ~ 500k tokens);
-    // smaller decimals in `/dashboard/billing/credit_grants` are USD credits.
-    const isQuotaUnits = obj.total_available >= 10_000 || (typeof obj.total_granted === 'number' && obj.total_granted >= 10_000);
+  // 5. NewAPI / OneAPI `/api/usage/token` (`total_granted`, `total_used`, `total_available`)
+  const totalAvail = toNum(obj.total_available);
+  const totalGranted = toNum(obj.total_granted);
+  const totalUsed = toNum(obj.total_used);
+  if (totalAvail !== null && totalAvail >= 0 && obj.balance === undefined && obj.bonus_tokens === undefined) {
+    const isQuotaUnits = totalAvail >= 10_000 || (totalGranted !== null && totalGranted >= 10_000);
     if (isQuotaUnits) {
       return {
         supported: true,
         unlimited: false,
-        remainingTokens: Math.floor(obj.total_available),
-        ...(typeof obj.total_granted === 'number' ? { limitTokens: Math.floor(obj.total_granted) } : {}),
-        ...(typeof obj.total_used === 'number' ? { usedTokens: Math.floor(obj.total_used) } : {}),
-        remainingBalance: Number((obj.total_available / 500_000).toFixed(2)),
+        remainingTokens: Math.floor(totalAvail),
+        ...(totalGranted !== null ? { limitTokens: Math.floor(totalGranted) } : {}),
+        ...(totalUsed !== null ? { usedTokens: Math.floor(totalUsed) } : {}),
+        remainingBalance: Number((totalAvail / 500_000).toFixed(2)),
         currency: 'USD',
         source: sourceLabel
       };
@@ -449,22 +566,148 @@ function parseQuotaFromObject(raw, sourceLabel = 'provider') {
     return {
       supported: true,
       unlimited: false,
-      remainingBalance: Number(obj.total_available.toFixed(4)),
-      ...(typeof obj.total_granted === 'number' ? { limitBalance: obj.total_granted } : {}),
-      ...(typeof obj.total_used === 'number' ? { usedBalance: obj.total_used } : {}),
-      currency: 'USD',
+      remainingBalance: Number(totalAvail.toFixed(4)),
+      ...(totalGranted !== null ? { limitBalance: totalGranted } : {}),
+      ...(totalUsed !== null ? { usedBalance: totalUsed } : {}),
+      currency: String(obj.currency || defaultCurrency).toUpperCase(),
       source: sourceLabel
     };
   }
 
-  // 7. Generic balance fields (`remaining_balance`, `credit_balance`, `balance`, `credits`)
-  const genericBal = Number(obj.remaining_balance ?? obj.credit_balance ?? obj.balance ?? obj.credits);
-  if (Number.isFinite(genericBal) && genericBal >= 0) {
+  // 6. Tooken Club (`/v1/balance`) & universal token + monetary balance payloads
+  // Extract BOTH token balance (e.g. bonus_tokens / remaining_tokens) AND monetary balance (e.g. RUB / USD)!
+  const directRemTok = firstNum(
+    obj.remaining_tokens,
+    obj.tokens_remaining,
+    obj.available_tokens,
+    obj.tokens_available,
+    obj.token_balance,
+    obj.tokens_balance,
+    obj.total_tokens_remaining,
+    obj.left_tokens,
+    obj.remain_tokens,
+    obj.tokens_left,
+    tokObj?.remaining,
+    tokObj?.available,
+    tokObj?.balance,
+    balObj?.remaining_tokens,
+    balObj?.tokens_remaining,
+    balObj?.tokens,
+    typeof obj.tokens !== 'object' ? obj.tokens : null
+  );
+  const bonusTok = firstNum(
+    obj.bonus_tokens_remaining,
+    obj.bonus_tokens_available,
+    obj.bonus_tokens,
+    obj.free_tokens_remaining,
+    obj.free_tokens,
+    tokObj?.bonus,
+    bonusObj?.remaining,
+    bonusObj?.available,
+    bonusObj?.tokens
+  );
+  const paidTok = firstNum(obj.paid_tokens_remaining, obj.paid_tokens, tokObj?.paid);
+  const limTok = firstNum(
+    obj.token_limit,
+    obj.tokens_limit,
+    obj.max_tokens_quota,
+    obj.total_tokens_limit,
+    obj.granted_tokens,
+    obj.initial_tokens,
+    tokObj?.limit,
+    tokObj?.granted,
+    tokObj?.total,
+    keyObj?.token_limit,
+    keyObj?.tokens_limit
+  );
+  const usedTok = firstNum(
+    obj.tokens_used,
+    obj.used_tokens,
+    obj.total_tokens_used,
+    obj.spent_tokens,
+    tokObj?.used,
+    tokObj?.spent
+  );
+
+  let remTok = directRemTok;
+  if (remTok === null && bonusTok !== null) {
+    remTok = bonusTok + (paidTok && paidTok > 0 ? paidTok : 0);
+  } else if (remTok === null && limTok !== null && limTok > 0 && usedTok !== null && usedTok >= 0) {
+    remTok = Math.max(0, limTok - usedTok);
+  }
+  const keyRemTok = firstNum(obj.key_tokens_remaining, keyObj?.remaining_tokens, keyObj?.tokens_remaining);
+  if (keyRemTok !== null && keyRemTok >= 0 && (remTok === null || keyRemTok < remTok)) {
+    remTok = keyRemTok;
+  }
+
+  const detectedCurrency = String(
+    obj.currency || balObj?.currency || keyObj?.currency || defaultCurrency
+  )
+    .trim()
+    .toUpperCase();
+
+  const spendableBal = firstNum(
+    obj.available_balance,
+    obj.spendable_balance,
+    obj.effective_balance,
+    balObj?.available,
+    balObj?.spendable,
+    obj.currency || balObj ? obj.available : null,
+    obj.remaining_balance,
+    obj.balance_remaining,
+    obj.credit_balance,
+    balObj?.remaining,
+    balObj?.amount,
+    balObj?.balance,
+    typeof obj.balance !== 'object' ? obj.balance : null,
+    obj.credits
+  );
+  const reservedBal = firstNum(
+    obj.reserved_balance,
+    obj.reserved,
+    obj.hold_balance,
+    obj.hold,
+    balObj?.reserved,
+    balObj?.hold
+  );
+  const limitBal = firstNum(
+    obj.balance_limit,
+    obj.credit_limit,
+    obj.key_limit,
+    balObj?.limit,
+    keyObj?.limit,
+    typeof obj.limit !== 'object' ? obj.limit : null
+  );
+  const usedBal = firstNum(
+    obj.used_balance,
+    obj.spent_balance,
+    obj.spent,
+    obj.total_spent,
+    balObj?.used,
+    balObj?.spent,
+    keyObj?.spent,
+    keyObj?.used
+  );
+  const keyRemBal = firstNum(obj.key_remaining, keyObj?.remaining, keyObj?.available);
+
+  let effectiveBal = spendableBal;
+  if (keyRemBal !== null && keyRemBal >= 0 && (effectiveBal === null || keyRemBal < effectiveBal)) {
+    effectiveBal = keyRemBal;
+  }
+
+  if ((remTok !== null && remTok >= 0) || (effectiveBal !== null && effectiveBal >= 0)) {
     return {
       supported: true,
       unlimited: false,
-      remainingBalance: Number(genericBal.toFixed(4)),
-      currency: String(obj.currency || 'USD'),
+      ...(remTok !== null && remTok >= 0 ? { remainingTokens: Math.floor(remTok) } : {}),
+      ...(bonusTok !== null && bonusTok >= 0 ? { bonusTokens: Math.floor(bonusTok) } : {}),
+      ...(limTok !== null && limTok > 0 ? { limitTokens: Math.floor(limTok) } : {}),
+      ...(usedTok !== null && usedTok >= 0 ? { usedTokens: Math.floor(usedTok) } : {}),
+      ...(effectiveBal !== null && effectiveBal >= 0 ? { remainingBalance: Number(effectiveBal.toFixed(4)) } : {}),
+      ...(reservedBal !== null && reservedBal > 0 ? { reservedBalance: Number(reservedBal.toFixed(4)) } : {}),
+      ...(limitBal !== null && limitBal > 0 ? { limitBalance: Number(limitBal.toFixed(4)) } : {}),
+      ...(usedBal !== null && usedBal >= 0 ? { usedBalance: Number(usedBal.toFixed(4)) } : {}),
+      currency: detectedCurrency || defaultCurrency,
       source: sourceLabel
     };
   }
@@ -522,79 +765,117 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
   };
 
   let result = null;
+  let providerUsage = null;
+  let rawMetrics = null;
   const lowerBase = baseUrl.toLowerCase();
+  const hostName = (() => {
+    try { return new URL(baseUrl).hostname; } catch { return 'provider'; }
+  })();
 
   if (lowerBase.includes('openrouter.ai')) {
     const [creditsJson, keyJson] = await Promise.all([
       safeGetJson(`${baseUrl}/credits`).catch(() => null),
       safeGetJson(`${baseUrl}/key`).catch(() => null)
     ]);
-    result = parseQuotaFromObject(keyJson, 'openrouter-key') || parseQuotaFromObject(creditsJson, 'openrouter-credits');
-    if (result && creditsJson?.data && typeof creditsJson.data.total_credits === 'number') {
-      const remCredits = Math.max(0, Number((creditsJson.data.total_credits - (creditsJson.data.total_usage || 0)).toFixed(4)));
-      if (result.unlimited) {
-        result.unlimited = false;
-        result.remainingBalance = remCredits;
-        result.limitBalance = creditsJson.data.total_credits;
-        result.usedBalance = creditsJson.data.total_usage || 0;
+    rawMetrics = extractSafeMetrics(creditsJson) || extractSafeMetrics(keyJson);
+    result =
+      parseQuotaFromObject(creditsJson, 'openrouter.ai/api/v1/credits', 'USD') ||
+      parseQuotaFromObject(keyJson, 'openrouter.ai/api/v1/key', 'USD');
+    // Respect stricter per-key cap if set on `/key`
+    const keyParsed = parseQuotaFromObject(keyJson, 'openrouter.ai/api/v1/key', 'USD');
+    if (result && keyParsed && !keyParsed.unlimited && typeof keyParsed.remainingBalance === 'number') {
+      if (typeof result.remainingBalance !== 'number' || keyParsed.remainingBalance < result.remainingBalance) {
+        result = keyParsed;
       }
     }
   } else if (lowerBase.includes('deepseek.com')) {
     const dsJson = await safeGetJson(`${originUrl}/user/balance`).catch(() => null);
-    result = parseQuotaFromObject(dsJson, 'deepseek-balance');
+    rawMetrics = extractSafeMetrics(dsJson);
+    result = parseQuotaFromObject(dsJson, 'api.deepseek.com/user/balance', 'USD');
+  } else if (lowerBase.includes('tooken.club')) {
+    // Native Tooken Club live balance & usage endpoints (`/v1/balance` + `/v1/usage`)
+    const [v1BalanceJson, v1UsageJson] = await Promise.all([
+      safeGetJson(`${baseUrl}/balance`).catch(() => null),
+      safeGetJson(`${baseUrl}/usage`).catch(() => null)
+    ]);
+    rawMetrics = extractSafeMetrics(v1BalanceJson);
+    providerUsage = parseProviderUsageObject(v1UsageJson);
+    result = parseQuotaFromObject(v1BalanceJson, `${hostName}/v1/balance`, 'RUB');
+    if (result && providerUsage && result.usedTokens === undefined && providerUsage.totalTokens !== undefined) {
+      result.usedTokens = providerUsage.totalTokens;
+    }
   } else {
-    // Universal probe for `tooken.club`, OneAPI/NewAPI, LiteLLM, and OpenAI-compatible gateways
+    // Universal probe for OneAPI/NewAPI, LiteLLM, Tooken-like `/v1/balance`, and OpenAI-compatible gateways
     const now = new Date();
     const start = new Date(now.getTime() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10);
     const end = new Date(now.getTime() + 24 * 3600 * 1000).toISOString().slice(0, 10);
 
-    const [tokenUsageJson, subJson, billUsageJson, creditGrantsJson, keyInfoJson] = await Promise.all([
-      safeGetJson(`${originUrl}/api/usage/token`).catch(() => null),
-      safeGetJson(`${baseUrl}/dashboard/billing/subscription`).catch(() => null),
-      safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`).catch(() => null),
-      safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`).catch(() => null),
-      safeGetJson(`${originUrl}/key/info`).catch(() => null)
-    ]);
+    const [v1BalanceJson, v1UsageJson, tokenUsageJson, subJson, billUsageJson, creditGrantsJson, keyInfoJson] =
+      await Promise.all([
+        safeGetJson(`${baseUrl}/balance`).catch(() => null),
+        safeGetJson(`${baseUrl}/usage`).catch(() => null),
+        safeGetJson(`${originUrl}/api/usage/token`).catch(() => null),
+        safeGetJson(`${baseUrl}/dashboard/billing/subscription`).catch(() => null),
+        safeGetJson(`${baseUrl}/dashboard/billing/usage?start_date=${start}&end_date=${end}`).catch(() => null),
+        safeGetJson(`${baseUrl}/dashboard/billing/credit_grants`).catch(() => null),
+        safeGetJson(`${originUrl}/key/info`).catch(() => null)
+      ]);
 
-    result = parseQuotaFromObject(tokenUsageJson, 'token-quota');
+    providerUsage = parseProviderUsageObject(v1UsageJson);
+    rawMetrics =
+      extractSafeMetrics(v1BalanceJson) ||
+      extractSafeMetrics(tokenUsageJson) ||
+      extractSafeMetrics(subJson) ||
+      extractSafeMetrics(creditGrantsJson) ||
+      extractSafeMetrics(keyInfoJson);
 
-    if (!result && subJson && typeof subJson === 'object') {
-      if (subJson.unlimited_quota === true || (typeof subJson.hard_limit_usd === 'number' && subJson.hard_limit_usd >= 99_999_999)) {
+    result =
+      parseQuotaFromObject(v1BalanceJson, `${hostName}/v1/balance`, 'USD') ||
+      parseQuotaFromObject(tokenUsageJson, `${hostName}/api/usage/token`, 'USD');
+
+    if (!result && subJson && typeof subJson === 'object' && !subJson.error) {
+      const hardLim = toNum(subJson.hard_limit_usd);
+      const billUsed = toNum(billUsageJson?.total_usage);
+      if (subJson.unlimited_quota === true || (hardLim !== null && hardLim >= 99_999_999)) {
         result = {
           supported: true,
           unlimited: true,
-          ...(typeof billUsageJson?.total_usage === 'number'
-            ? { usedBalance: Number((billUsageJson.total_usage / 100).toFixed(4)), currency: 'USD' }
-            : {}),
-          source: 'billing-subscription'
+          ...(billUsed !== null ? { usedBalance: Number((billUsed / 100).toFixed(4)), currency: 'USD' } : {}),
+          source: `${hostName}/dashboard/billing/subscription`
         };
-      } else if (typeof subJson.hard_limit_usd === 'number' && subJson.hard_limit_usd > 0) {
-        const usedUsd = typeof billUsageJson?.total_usage === 'number' ? billUsageJson.total_usage / 100 : 0;
-        const remUsd = Math.max(0, Number((subJson.hard_limit_usd - usedUsd).toFixed(4)));
+      } else if (hardLim !== null && hardLim > 0) {
+        const usedUsd = billUsed !== null ? billUsed / 100 : 0;
+        const remUsd = Math.max(0, Number((hardLim - usedUsd).toFixed(4)));
         result = {
           supported: true,
           unlimited: false,
           remainingBalance: remUsd,
-          limitBalance: Number(subJson.hard_limit_usd.toFixed(4)),
+          limitBalance: Number(hardLim.toFixed(4)),
           usedBalance: Number(usedUsd.toFixed(4)),
           currency: 'USD',
-          source: 'billing-subscription'
+          source: `${hostName}/dashboard/billing/subscription`
         };
       } else {
-        result = parseQuotaFromObject(subJson, 'billing-subscription');
+        result = parseQuotaFromObject(subJson, `${hostName}/dashboard/billing/subscription`, 'USD');
       }
     }
 
     if (!result) {
       result =
-        parseQuotaFromObject(creditGrantsJson, 'credit-grants') ||
-        parseQuotaFromObject(keyInfoJson, 'key-info');
+        parseQuotaFromObject(creditGrantsJson, `${hostName}/dashboard/billing/credit_grants`, 'USD') ||
+        parseQuotaFromObject(keyInfoJson, `${hostName}/key/info`, 'USD');
+    }
+
+    if (result && providerUsage && result.usedTokens === undefined && providerUsage.totalTokens !== undefined) {
+      result.usedTokens = providerUsage.totalTokens;
     }
   }
 
   const rawFinal = result || { supported: false, unlimited: false, source: 'none' };
   const finalData = {
     ...rawFinal,
+    ...(providerUsage ? { providerUsage } : {}),
+    ...(rawMetrics ? { metrics: rawMetrics } : {}),
     ...(typeof rawFinal.remainingBalance === 'number' && rawFinal.remainingUsd === undefined
       ? { remainingUsd: rawFinal.remainingBalance }
       : {}),

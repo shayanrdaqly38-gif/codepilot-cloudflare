@@ -434,18 +434,20 @@ window.closeModal('settingsModal');
 
 // --- top-bar live remaining tokens pill (#tokenQuotaBtn) & quota inspector (#quotaModal)
 assert.ok($('tokenQuotaBtn'), 'top header must display #tokenQuotaBtn');
-assert.equal($('tokenQuotaText').textContent, '🪙 750K', 'shows live remaining tokens from provider API');
+assert.equal($('tokenQuotaText').textContent, '🪙 750,000 tok', 'shows exact live remaining tokens from provider API');
 window.openQuotaModal();
 assert.ok($('quotaModal').classList.contains('open'));
 assert.ok($('quotaModalBody').textContent.includes('750,000 tok'));
 assert.ok($('quotaModalBody').textContent.includes('tooken.club/api/usage/token'));
 
-// Fallback to manual tokenCap when provider does not expose balance endpoint
+// Fallback when provider does not expose balance endpoint: NEVER fake context window size as remaining tokens!
 db.mockQuota = { supported: false, reason: 'no_balance_endpoint' };
+window.eval('state.rateLimit = null');
 await window.refreshProviderQuota({ live: true, force: true, silent: true });
+assert.equal($('tokenQuotaText').textContent, '🪙 مصرف: 5,200', 'honestly shows actual used tokens, never fake context window');
 $('tokenCapInput').value = '100000';
 await window.saveTokenCap(false);
-assert.equal($('tokenQuotaText').textContent, '🪙 94.8K', 'deducts 5,200 used tokens from 100,000 manual cap');
+assert.equal($('tokenQuotaText').textContent, '🪙 94,800 tok', 'deducts 5,200 used tokens from 100,000 manual cap');
 await window.saveTokenCap(true);
 window.closeModal('quotaModal');
 
