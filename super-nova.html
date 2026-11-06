@@ -1769,6 +1769,7 @@ function banner(msg, sub) {
 }
 let devOn = false, godMode = false, freezeTime = false;
 let devFps = 0, devFpsAcc = 0, devFrames = 0;
+let lastGlobalError = '';
 function toggleDev() {
   devOn = !devOn;
   const el = $('dev'); if (el) el.classList.toggle('show', devOn);
@@ -1787,6 +1788,7 @@ function refreshDevPanel() {
     `enemies: ${G ? G.enemies.filter(e => !e.dead).length : '-'}`,
     `boss: ${boss && G.bossFight ? boss.hp + '/' + boss.maxHp : '-'} god: ${godMode} freeze: ${freezeTime}`
   ];
+  if (lastGlobalError) lines.push('ERR: ' + lastGlobalError);
   el.textContent = lines.join('\n');
 }
 function rebuildLevel() {
@@ -1984,6 +1986,7 @@ function wire() {
 function boot() {
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('error', e => { lastGlobalError = e.message || String(e); });
   wire();
   syncSoundBtns();
   SAVE.unlocked = Math.max(1, SAVE.unlocked || 1);

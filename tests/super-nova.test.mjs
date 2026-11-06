@@ -163,5 +163,11 @@ check('لمس دروازه پایان مرحله را فعال می‌کند', T
 // --- ذخیره‌سازی و باز کردن مرحلهٔ بعد ---
 check('پیشرفت مرحله در ذخیره ثبت می‌شود', Number(lsData['nova_save'] || '{}').toString ? true : false);
 
+// --- هوک stepFrames ---
+check('هوک stepFrames موجود است', typeof T.stepFrames === 'function');
+T.startLevel(0);
+T.stepFrames(10);
+check('stepFrames بدون خطا اجرا می‌شود', T.getState().state === 'play');
+
 console.log('\nTOTAL:', pass, 'passed,', fail, 'failed');
 process.exit(fail ? 1 : 0);
