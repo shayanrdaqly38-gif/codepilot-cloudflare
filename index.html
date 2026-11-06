@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" id="metaThemeColor" content="#211b17">
+<meta name="mobile-web-app-capable" content="yes">
 <title>CodePilot — محیط توسعه هوشمند Claude Code &amp; Codex</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23E87B52'/><text x='16' y='22.5' font-size='19' font-weight='900' text-anchor='middle' fill='%231F1612'>✳</text></svg>">
 <style>
@@ -988,6 +990,101 @@ body[data-theme="claude-day"] .msg.user.auto-cycle{color:var(--claude-deep);back
 .load-older-wrap{display:flex;justify-content:center;padding:4px 0 8px}
 .load-older-wrap button{min-height:32px;padding:5px 14px;border-radius:999px;font-size:11.5px;background:var(--panel-2,#1b2433);border:1px solid var(--line-strong);color:var(--text-soft);cursor:pointer}
 .conv-loading-state{padding:22px 14px;text-align:center;color:var(--muted);font-size:12.5px}
+
+/* =========================================================================
+   Mobile UX, Visual Polish, Scrollbar Aesthetics, Code Fence Headers & FAB
+   ========================================================================= */
+.chat,.scroll,.editor,.terminal,#featuredModelList,#modelGrid,.floating-palette{
+  scrollbar-width:thin;
+  scrollbar-color:var(--line-strong) transparent;
+  overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;
+}
+.chat::-webkit-scrollbar,.scroll::-webkit-scrollbar,.editor::-webkit-scrollbar,.terminal::-webkit-scrollbar,#featuredModelList::-webkit-scrollbar,#modelGrid::-webkit-scrollbar,.floating-palette::-webkit-scrollbar{width:6px;height:6px}
+.chat::-webkit-scrollbar-track,.scroll::-webkit-scrollbar-track,.editor::-webkit-scrollbar-track,.terminal::-webkit-scrollbar-track{background:transparent}
+.chat::-webkit-scrollbar-thumb,.scroll::-webkit-scrollbar-thumb,.editor::-webkit-scrollbar-thumb,.terminal::-webkit-scrollbar-thumb,#featuredModelList::-webkit-scrollbar-thumb,#modelGrid::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:999px}
+.chat::-webkit-scrollbar-thumb:hover,.scroll::-webkit-scrollbar-thumb:hover{background:var(--claude)}
+
+.right{position:relative}
+.scroll-bottom-fab{
+  position:absolute;bottom:106px;left:50%;transform:translateX(-50%) translateY(0);
+  z-index:9;display:inline-flex;align-items:center;gap:6px;
+  min-height:34px!important;padding:6px 14px!important;border-radius:999px!important;
+  background:rgba(43,34,29,.88);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--claude);color:var(--text);font-size:11.5px;font-weight:700;
+  box-shadow:0 8px 24px rgba(0,0,0,.36),0 0 0 2px var(--claude-glow);
+  transition:opacity .18s ease,transform .18s ease;
+}
+body[data-theme="claude-day"] .scroll-bottom-fab{background:rgba(255,250,244,.92);color:var(--text)}
+body[data-theme="midnight"] .scroll-bottom-fab{background:rgba(22,27,37,.9);border-color:#6ca0f6}
+.scroll-bottom-fab[hidden]{display:none!important}
+.scroll-bottom-fab:hover{background:var(--panel2);transform:translateX(-50%) translateY(-2px)}
+.scroll-bottom-fab .fab-dot{width:7px;height:7px;border-radius:50%;background:var(--claude-bright);display:none;animation:pulse 1s infinite}
+.scroll-bottom-fab.streaming .fab-dot{display:inline-block}
+
+/* Mobile One-Tap Quick View Bar (<= 760px) */
+.mobile-view-bar{display:none}
+@media(max-width:760px){
+  .mobile-view-bar{
+    display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;flex:none;
+    padding:5px 8px;background:var(--bg-elev,var(--panel));border-bottom:1px solid var(--line);
+    direction:rtl;
+  }
+  .mobile-view-bar button{
+    min-height:35px!important;padding:4px 6px!important;border-radius:10px!important;
+    font-size:11.5px;font-weight:650;background:transparent;border:1px solid transparent;
+    color:var(--muted);display:inline-flex;align-items:center;justify-content:center;gap:4px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .mobile-view-bar button[aria-pressed="true"]{
+    background:var(--claude-tint);border-color:rgba(232,123,82,.52);color:var(--claude-bright);
+    box-shadow:0 2px 10px rgba(0,0,0,.14);
+  }
+  body[data-theme="claude-day"] .mobile-view-bar button[aria-pressed="true"]{color:var(--claude-deep)}
+  .mobile-view-bar .m-preview-btn{color:var(--green);border-color:rgba(130,217,160,.28);background:rgba(130,217,160,.08)}
+  .m-dirty-pill{
+    font-size:9.5px;font-weight:800;padding:0 5px;border-radius:999px;
+    background:var(--claude);color:var(--on-primary,#1f130d);line-height:1.5;
+  }
+  .m-dirty-pill[hidden]{display:none!important}
+  .scroll-bottom-fab{bottom:98px;padding:6px 13px!important;font-size:11.5px}
+}
+@media(hover:none) and (pointer:coarse){
+  button:active,.sheet-item:active,.model-card:active,.conv:active{transform:scale(.98)}
+  .comp-icon-btn{width:36px;height:36px;min-width:36px;min-height:36px!important}
+  .send-pill{min-height:36px!important;padding:5px 14px!important}
+}
+
+/* Rich Code Blocks with Language Header + One-Tap Copy & Markdown Polish */
+.code-fence-wrap{
+  margin:8px 0;border-radius:11px;overflow:hidden;border:1px solid var(--line);
+  background:var(--code-bg,#14100d);direction:ltr;text-align:left;
+  box-shadow:0 4px 16px rgba(0,0,0,.14);
+}
+.code-fence-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:5px 10px;background:rgba(255,255,255,.035);border-bottom:1px solid var(--line);
+  font:600 11px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);
+}
+body[data-theme="claude-day"] .code-fence-head{background:rgba(0,0,0,.04)}
+.code-fence-head .code-lang{text-transform:lowercase;letter-spacing:.02em;color:var(--claude-bright)}
+body[data-theme="claude-day"] .code-fence-head .code-lang{color:var(--claude-deep)}
+.copy-code-btn{
+  min-height:24px!important;padding:2px 8px!important;border-radius:7px!important;
+  font-size:10.5px;font-family:inherit;background:var(--panel2);border:1px solid var(--line);
+  color:var(--text-soft);direction:rtl;
+}
+.copy-code-btn:hover{border-color:var(--claude);color:var(--text)}
+.copy-code-btn.copied{border-color:var(--green);color:var(--green)}
+.code-fence-wrap pre{margin:0!important;border:0!important;border-radius:0!important;padding:11px 13px!important;background:transparent!important}
+.md-h2{display:block;font-size:14.5px;font-weight:800;color:var(--text);margin:8px 0 3px;line-height:1.55}
+.md-h3{display:block;font-size:13.5px;font-weight:750;color:var(--claude-bright);margin:6px 0 2px;line-height:1.55}
+body[data-theme="claude-day"] .md-h3{color:var(--claude-deep)}
+.md-hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+.msg.user .user-msg-acts{display:flex;justify-content:flex-end;gap:4px;margin-top:5px;opacity:.68}
+.msg.user:hover .user-msg-acts{opacity:1}
+.msg.user .user-msg-acts button{min-height:24px!important;padding:1px 7px!important;font-size:10px;border-radius:7px!important;background:rgba(0,0,0,.18);border-color:transparent;color:var(--text-soft)}
+body[data-theme="claude-day"] .msg.user .user-msg-acts button{background:rgba(0,0,0,.06)}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
@@ -1014,6 +1111,13 @@ body[data-theme="claude-day"] .msg.user.auto-cycle{color:var(--claude-deep);back
     </button>
   </div>
 </header>
+
+<nav class="mobile-view-bar" id="mobileViewBar" aria-label="تغییر سریع نما در موبایل">
+  <button type="button" data-workspace-view="chat" aria-pressed="true" onclick="setWorkspaceView('chat')">💬 گفتگو</button>
+  <button type="button" data-workspace-view="editor" aria-pressed="false" onclick="setWorkspaceView('editor')">📝 کدها <span class="m-dirty-pill" id="mobileDirtyBadge" hidden>۰</span></button>
+  <button type="button" data-workspace-view="terminal" aria-pressed="false" onclick="setWorkspaceView('terminal')">⌨ ترمینال</button>
+  <button type="button" class="m-preview-btn" onclick="runPreview()" title="اجرای پیش‌نمایش زنده">▶ اجرا</button>
+</nav>
 
 <section class="top-drawer" id="topDrawer" aria-label="کشوی ابزارها و تنظیمات">
   <div class="top-drawer-inner">
@@ -1175,6 +1279,10 @@ body[data-theme="claude-day"] .msg.user.auto-cycle{color:var(--claude-deep);back
 
   <aside class="right">
     <div class="chat" id="chat"></div>
+    <button type="button" class="scroll-bottom-fab" id="scrollBottomBtn" hidden onclick="scrollChatToBottom(true)" aria-label="پرش به پایین گفتگو" title="پرش به آخرین پیام">
+      <span class="fab-dot" aria-hidden="true"></span>
+      <span data-role="fab-label">↓ پایین گفتگو</span>
+    </button>
     <div class="chatbox">
       <svg class="composer-buddy claude-pixel-svg" viewBox="0 0 16 12" aria-hidden="true">
         <rect x="3" y="1" width="10" height="8" rx="1" fill="#E87B52"/>
@@ -1617,7 +1725,9 @@ function setWorkspaceView(view) {
   if (!['chat', 'editor', 'terminal'].includes(view)) return;
   document.body.dataset.view = view;
   document.querySelectorAll('[data-workspace-view]').forEach(button => {
-    button.setAttribute('aria-pressed', String(button.dataset.workspaceView === view));
+    const isActive = button.dataset.workspaceView === view;
+    button.setAttribute('aria-pressed', String(isActive));
+    button.classList.toggle('active', isActive);
   });
   const lbl = $('topDrawerLabel');
   if (lbl) {
@@ -2791,6 +2901,10 @@ function applyTheme(themeId, persistLocal = false) {
   state.agentConfig.theme = next;
   const metaColor = document.querySelector('meta[name="color-scheme"]');
   if (metaColor) metaColor.setAttribute('content', next === 'claude-day' ? 'light' : 'dark');
+  const metaTheme = $('metaThemeColor');
+  if (metaTheme) {
+    metaTheme.setAttribute('content', next === 'claude-day' ? '#FAF5EE' : next === 'midnight' ? '#101216' : '#211b17');
+  }
   document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.themeChoice === next);
   });
@@ -3134,6 +3248,7 @@ async function boot() {
   syncAgentUi();
   syncModelState();
   renderTerminalIntro();
+  initMobileAndChatUxListeners();
   setSync('busy', 'در حال بررسی نشست…');
   try {
     const auth = await api(API.auth);
@@ -3144,7 +3259,7 @@ async function boot() {
     if (auth.auth === 'dev-fallback') {
       $('warnBar').classList.add('show');
       document.documentElement.style.setProperty('--warnbar-h', '38px');
-      document.querySelector('.layout').style.height = 'calc(100vh - 52px - 38px)';
+      document.querySelector('.layout').style.height = 'calc(100dvh - 52px - 38px)';
       setSync('on', 'حالت تک‌کاربره · ' + (auth.user.email || ''));
     }
   } catch (error) {
@@ -4155,9 +4270,18 @@ function snapshotWorkspace() {
   return { files: state.workspace.files, active: state.workspace.active };
 }
 
+function syncMobileDirtyBadge() {
+  const pill = $('mobileDirtyBadge');
+  if (!pill) return;
+  const count = state.dirtyFiles ? state.dirtyFiles.size : 0;
+  pill.hidden = count === 0;
+  if (count > 0) pill.textContent = faNum(count);
+}
+
 function renderTree() {
   const tree = $('tree');
   tree.innerHTML = '';
+  syncMobileDirtyBadge();
   const names = Object.keys(state.workspace.files).sort();
   $('repoLine').textContent = state.repo
     ? `⌂ ${state.repo.owner}/${state.repo.repo} · ${state.repo.branch}`
@@ -4648,6 +4772,114 @@ function claudeMascotSvg() {
   </svg>`;
 }
 
+let chatUxBound = false;
+
+function isChatNearBottom(threshold = 150) {
+  const chat = $('chat');
+  if (!chat) return true;
+  if (!chat.clientHeight || !chat.scrollHeight) return true;
+  return chat.scrollHeight - chat.scrollTop - chat.clientHeight <= threshold;
+}
+
+function updateScrollBottomFab() {
+  const btn = $('scrollBottomBtn');
+  const chat = $('chat');
+  if (!btn || !chat) return;
+  const hasOverflow = chat.scrollHeight - chat.clientHeight > 160;
+  const farFromBottom = !isChatNearBottom(160);
+  const show = hasOverflow && farFromBottom;
+  btn.hidden = !show;
+  if (show) {
+    btn.classList.toggle('streaming', Boolean(state.busy));
+    const lbl = btn.querySelector('[data-role="fab-label"]');
+    if (lbl) lbl.textContent = state.busy ? '↓ ادامه پاسخ زنده' : '↓ پایین گفتگو';
+  }
+}
+
+function scrollChatToBottom(smooth = false) {
+  const chat = $('chat');
+  if (!chat) return;
+  if (smooth && typeof chat.scrollTo === 'function') {
+    chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
+  } else {
+    chat.scrollTop = chat.scrollHeight;
+  }
+  const btn = $('scrollBottomBtn');
+  if (btn) btn.hidden = true;
+}
+
+function maybeAutoScrollChat() {
+  const chat = $('chat');
+  if (!chat) return;
+  if (isChatNearBottom(180)) {
+    chat.scrollTop = chat.scrollHeight;
+  } else {
+    updateScrollBottomFab();
+  }
+}
+
+function initMobileAndChatUxListeners() {
+  if (chatUxBound) return;
+  chatUxBound = true;
+  const chat = $('chat');
+  if (chat) {
+    chat.addEventListener('scroll', updateScrollBottomFab, { passive: true });
+    chat.addEventListener('click', (event) => {
+      const copyBtn = event.target?.closest?.('[data-role="copy-fence"]');
+      if (!copyBtn) return;
+      const wrap = copyBtn.closest('.code-fence-wrap');
+      const pre = wrap?.querySelector('pre');
+      if (!pre) return;
+      navigator.clipboard?.writeText(pre.textContent || '');
+      copyBtn.classList.add('copied');
+      const prev = copyBtn.textContent;
+      copyBtn.textContent = '✓ کپی شد';
+      toast('کد کپی شد');
+      setTimeout(() => {
+        copyBtn.classList.remove('copied');
+        copyBtn.textContent = prev || '⧉ کپی کد';
+      }, 1500);
+    });
+  }
+
+  // One-handed RTL edge swipe on mobile: swipe left from right edge opens sidebar, swipe right closes it
+  let touchStartX = null;
+  let touchStartY = null;
+  let startedAtRightEdge = false;
+  document.addEventListener(
+    'touchstart',
+    (ev) => {
+      if (window.innerWidth > 760 || !ev.touches || ev.touches.length !== 1) {
+        touchStartX = null;
+        return;
+      }
+      const t = ev.touches[0];
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+      startedAtRightEdge = t.clientX >= window.innerWidth - 28;
+    },
+    { passive: true }
+  );
+  document.addEventListener(
+    'touchend',
+    (ev) => {
+      if (touchStartX === null || !ev.changedTouches || !ev.changedTouches.length) return;
+      const t = ev.changedTouches[0];
+      const dx = t.clientX - touchStartX;
+      const dy = t.clientY - touchStartY;
+      const sidebarOpen = Boolean(document.querySelector('.sidebar.show'));
+      touchStartX = null;
+      if (Math.abs(dy) > 48) return;
+      if (!sidebarOpen && startedAtRightEdge && dx < -48) {
+        toggleSidebar(true);
+      } else if (sidebarOpen && dx > 52) {
+        toggleSidebar(false);
+      }
+    },
+    { passive: true }
+  );
+}
+
 function welcomeHtml() {
   const modeMeta = AGENT_MODE_META[state.agentConfig?.mode || 'auto-edit'] || AGENT_MODE_META['auto-edit'];
   const modelTxt = state.modelLabel && state.modelLabel !== '—' ? state.modelLabel : 'خودکار';
@@ -4665,6 +4897,7 @@ function welcomeHtml() {
     <div class="suggestions">
       <button type="button" onclick="quickPrompt('/plan معماری پروژه را تحلیل کن و نقشه ارتقا بده.')">🧭 تحلیل معماری</button>
       <button type="button" onclick="executeSlashCommand('/review')">🔍 بازبینی کد (/review)</button>
+      <button type="button" onclick="quickPrompt('رابط کاربری، تجربه موبایل و جزئیات بصری پروژه را بررسی و ارتقا بده.')">✨ ارتقای UI و موبایل</button>
       <button type="button" onclick="scaffoldAgentsMdFile()">📄 ساخت AGENTS.md</button>
     </div>
   </div>`;
@@ -4716,10 +4949,15 @@ function appendMessageElement(message, batchContainer = null) {
     return div;
   }
   if (role === 'user') {
-    if (message.autoContinue || /^(?:ادامه(?:\s*—\s*چرخه|\s+از\s+نقطه\s+ذخیره\s+ماراتن))/u.test(String(message.content || '').trim())) {
+    const isAutoCycle = Boolean(
+      message.autoContinue || /^(?:ادامه(?:\s*—\s*چرخه|\s+از\s+نقطه\s+ذخیره\s+ماراتن))/u.test(String(message.content || '').trim())
+    );
+    if (isAutoCycle) {
       div.classList.add('auto-cycle');
     }
-    div.textContent = message.content || '';
+    const textSpan = document.createElement('div');
+    textSpan.textContent = message.content || '';
+    div.appendChild(textSpan);
     for (const file of message.attachments || []) {
       const label = document.createElement('div');
       label.textContent = `📎 ${file.name}`;
@@ -4731,6 +4969,14 @@ function appendMessageElement(message, batchContainer = null) {
         image.style.cssText = 'max-width:100%;max-height:220px;border-radius:8px;display:block';
         div.appendChild(image);
       }
+    }
+    if (!isAutoCycle && message.content) {
+      const uActs = document.createElement('div');
+      uActs.className = 'user-msg-acts';
+      uActs.innerHTML = '<button type="button" title="کپی پیام">⧉ کپی</button><button type="button" title="قرار دادن در کادر پیام">✎ ویرایش</button>';
+      uActs.children[0].onclick = () => { navigator.clipboard?.writeText(message.content || ''); toast('پیام کپی شد'); };
+      uActs.children[1].onclick = () => quickPrompt(message.content || '');
+      div.appendChild(uActs);
     }
   } else {
     let thinkBlocks = '';
@@ -4783,16 +5029,29 @@ function toolLineHtml(id, name, detail, done) {
   return `<div class="tool-line ${done ? 'done' : ''}" data-tool-id="${esc(id)}">${label}<span style="color:#6f7d92">·</span><span style="overflow:hidden;text-overflow:ellipsis">${esc(short)}</span></div>`;
 }
 
-// Minimal, safe markdown: code fences + inline code + line breaks. No raw HTML.
+// Safe, rich markdown: code fences with language header + 1-tap copy, headings, bold, inline code. Zero raw HTML.
 function renderMarkdownish(text) {
   const parts = String(text).split(/```/);
   return parts
     .map((part, index) => {
       if (index % 2 === 1) {
-        const body = part.replace(/^[a-zA-Z0-9_-]*\n/, '');
-        return `<pre>${esc(body)}</pre>`;
+        const langMatch = part.match(/^([a-zA-Z0-9_+#.-]{1,24})\r?\n/);
+        const lang = langMatch ? langMatch[1] : 'code';
+        const body = langMatch ? part.slice(langMatch[0].length) : part.replace(/^\r?\n/, '');
+        return (
+          `<div class="code-fence-wrap">` +
+          `<div class="code-fence-head"><span class="code-lang">${esc(lang)}</span>` +
+          `<button type="button" class="copy-code-btn" data-role="copy-fence">⧉ کپی کد</button></div>` +
+          `<pre>${esc(body)}</pre>` +
+          `</div>`
+        );
       }
-      return esc(part).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+      return esc(part)
+        .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(?:^|\n)###\s+([^\n]+)/g, '\n<span class="md-h3">$1</span>')
+        .replace(/(?:^|\n)##\s+([^\n]+)/g, '\n<span class="md-h2">$1</span>')
+        .replace(/(?:^|\n)---(?=\n|$)/g, '\n<hr class="md-hr">');
     })
     .join('');
 }
@@ -5838,7 +6097,7 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       streamedThink = '';
       if (thinkArea && (data.thought || data.plan || data.encrypted)) {
         thinkArea.insertAdjacentHTML('beforeend', renderThinkHtml(data.thought, data.plan, Boolean(data.thought || data.plan), data));
-        $('chat').scrollTop = $('chat').scrollHeight;
+        maybeAutoScrollChat();
       }
     } else if (event === 'delta') {
       streamedDraft += String(data.text || '');
@@ -5846,7 +6105,7 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       textArea.innerHTML = renderMarkdownish(streamedDraft);
       const verbEl = bubble.querySelector('.claude-verb');
       if (verbEl) verbEl.textContent = 'در حال نگارش زنده پاسخ…';
-      $('chat').scrollTop = $('chat').scrollHeight;
+      maybeAutoScrollChat();
     } else if (event === 'tool') {
       streamedDraft = '';
       textArea.classList.remove('stream-cursor');
@@ -5856,7 +6115,7 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
         if (verbEl) verbEl.textContent = `${TOOL_LABELS[call.name] || call.name}…`;
         bubble.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.name, call.arguments, false));
       }
-      $('chat').scrollTop = $('chat').scrollHeight;
+      maybeAutoScrollChat();
     } else if (event === 'tool_result') {
       if (data.name === 'think') return;
       const line = bubble.querySelector(`[data-tool-id="${cssEscape(data.id)}"]`);
@@ -5872,10 +6131,11 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       assistantText = data.content || '';
       textArea.classList.remove('stream-cursor');
       textArea.innerHTML = renderMarkdownish(assistantText);
-      $('chat').scrollTop = $('chat').scrollHeight;
+      maybeAutoScrollChat();
     } else if (event === 'done') {
       bubble.querySelector('.claude-spinner-bar')?.remove();
       textArea.classList.remove('stream-cursor');
+      updateScrollBottomFab();
       touchedFiles = Array.isArray(data.touchedFiles) ? data.touchedFiles : [];
       deletedFiles = Array.isArray(data.deletedFiles) ? data.deletedFiles : [];
       if (data.workspace) {
@@ -6689,7 +6949,7 @@ async function syncRepoWorkspace({ persist = true } = {}) {
     .filter(
       (item) =>
         item.type === 'blob' &&
-        item.size < 350_000 &&
+        item.size < 900_000 &&
         !item.path.startsWith('.git') &&
         !item.path.startsWith('node_modules/') &&
         SYNC_EXT_RE.test(item.path.split('/').pop() || item.path)

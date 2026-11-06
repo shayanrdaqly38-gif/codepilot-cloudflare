@@ -448,3 +448,65 @@ test('multi-MB Persian workspace overflows cleanly to workspace_files, clones se
   assert.ok(litePage2.messages.at(-1).seq < litePage1.oldestSeq, 'beforeSeq returns strictly older messages');
 });
 
+test('500KB+ index.html and multi-file workspace persist cleanly without truncation or oversized D1 SQL statements', async () => {
+  const { cookie: c } = await signIn();
+
+  const created = await (
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          headers: { Cookie: c },
+          body: { action: 'create', title: 'large-index-workspace' }
+        }),
+        env
+      )
+    )
+  ).json();
+  assert.equal(created.ok, true);
+
+  const largeIndexHtml =
+    '<!doctype html>\n<html><body>\n' +
+    '<!-- ui-mobile-block -->\n'.repeat(21000) +
+    '<div id="tailMarker">OK</div>\n</body></html>';
+  assert.ok(largeIndexHtml.length > 500_000, 'test index.html exceeds 500KB');
+  const companionA = '// module A\n' + 'export const x = 1;\n'.repeat(16000);
+  const companionB = '// module B\n' + 'export const y = 2;\n'.repeat(16000);
+
+  const saveRes = await (
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          headers: { Cookie: c },
+          body: {
+            action: 'workspace',
+            id: created.id,
+            workspace: {
+              active: 'index.html',
+              files: {
+                'index.html': largeIndexHtml,
+                'src/a.js': companionA,
+                'src/b.js': companionB
+              }
+            }
+          }
+        }),
+        env
+      )
+    )
+  ).json();
+  assert.equal(saveRes.ok, true);
+
+  const loaded = await (
+    await oneConv.onRequestGet(
+      ctx(req(`/api/state/conversations/${created.id}`, { headers: { Cookie: c } }), env, { id: created.id })
+    )
+  ).json();
+  assert.equal(loaded.workspace.files['index.html'].length, largeIndexHtml.length, '500KB+ index.html preserved byte-for-byte');
+  assert.ok(loaded.workspace.files['index.html'].includes('<div id="tailMarker">OK</div>'), 'tail of 500KB+ index.html intact');
+  assert.equal(loaded.workspace.files['src/a.js'].length, companionA.length);
+  assert.equal(loaded.workspace.files['src/b.js'].length, companionB.length);
+});
+
+

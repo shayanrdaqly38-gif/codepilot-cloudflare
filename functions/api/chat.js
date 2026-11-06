@@ -75,7 +75,7 @@ const MAX_CONTENT = 100_000;
 const MAX_LOOP_STEPS = 16;
 const MAX_THINKING_LOOP_STEPS = 24;
 const MAX_TURN_INPUT_CHARS = 260_000;
-const MAX_FILE_CHARS = 400_000;
+const MAX_FILE_CHARS = 900_000;
 const MAX_TOOL_LOOPS_PER_FILE = 12;
 
 export const TOOLS = [
@@ -516,7 +516,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
     case 'write_file': {
       const path = assertSafePath(args.path);
       const content = String(args.content ?? '');
-      if (content.length > MAX_FILE_CHARS) return { ok: false, text: 'Error: file too large (max 400k chars).' };
+      if (content.length > MAX_FILE_CHARS) return { ok: false, text: 'Error: file too large (max 900k chars).' };
       const existed = workspace.files[path] !== undefined;
       const before = existed ? String(workspace.files[path]) : '';
       if (existed && before === content) return { ok: false, text: 'No change: content is identical.' };

@@ -260,7 +260,7 @@ export async function onRequestPost({ request, env }) {
           fail('دستور ناشناخته است.', 400, 'unknown_action');
       }
     },
-    { write: true, body: 6_500_000 }
+    { write: true, body: 9_000_000 }
   );
 }
 

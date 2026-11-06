@@ -1482,4 +1482,65 @@ test('OpenRouter (openrouter.ai/api/v1): saves key atomically without 503 CPU sp
   }
 });
 
+test('agent tools read, search, patch, and undo_edit a 480KB+ index.html without truncation', async () => {
+  const { env, cookie } = await setUp();
+  const largeBefore =
+    '<!doctype html>\n<html lang="fa" dir="rtl">\n<body>\n' +
+    '<!-- filler-section-line -->\n'.repeat(17000) +
+    '<nav id="targetNav">OLD_MOBILE_NAV</nav>\n</body>\n</html>\n';
+  assert.ok(largeBefore.length > 475_000, 'fixture index.html > 475KB');
+
+  const created = await (
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            action: 'create',
+            title: 'large-index-agent-edit',
+            workspace: { active: 'index.html', files: { 'index.html': largeBefore } }
+          }
+        }),
+        env
+      )
+    )
+  ).json();
+  assert.equal(created.ok, true);
+
+  const model = scriptedModel([
+    toolCall('c1', 'search_code', { query: 'OLD_MOBILE_NAV' }),
+    toolCall('c2', 'apply_patch', {
+      path: 'index.html',
+      edits: [{ search: '<nav id="targetNav">OLD_MOBILE_NAV</nav>', replace: '<nav id="targetNav">NEW_MOBILE_NAV</nav>' }]
+    }),
+    toolCall('c3', 'undo_edit', { path: 'index.html' }),
+    toolCall('c4', 'apply_patch', {
+      path: 'index.html',
+      edits: [{ search: '<nav id="targetNav">OLD_MOBILE_NAV</nav>', replace: '<nav id="targetNav">FINAL_MOBILE_NAV</nav>' }]
+    }),
+    { role: 'assistant', content: 'فایل بزرگ index.html با موفقیت ویرایش شد.' }
+  ]);
+
+  let events;
+  try {
+    events = await send(env, cookie, created.id, 'نوار موبایل در انتهای index.html را ارتقا بده');
+  } finally {
+    model.restore();
+  }
+
+  const toolResults = events.filter((e) => e.name === 'tool_result');
+  assert.equal(toolResults.length, 4);
+  assert.match(toolResults[0].data.result, /OLD_MOBILE_NAV/, 'search_code finds match past 475KB offset');
+  assert.equal(toolResults[1].data.ok, true, 'apply_patch succeeds on 480KB index.html');
+  assert.equal(toolResults[2].data.ok, true, 'undo_edit restores full 480KB snapshot without truncation');
+  assert.equal(toolResults[3].data.ok, true, 're-patch after undo_edit succeeds because tail was preserved');
+
+  const done = events.at(-1);
+  const finalHtml = done.data.workspace.files['index.html'];
+  assert.ok(finalHtml.length > 475_000, 'final index.html kept full length');
+  assert.ok(finalHtml.includes('<nav id="targetNav">FINAL_MOBILE_NAV</nav>'));
+});
+
+
 
