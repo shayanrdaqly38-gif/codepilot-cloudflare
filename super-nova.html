@@ -199,6 +199,15 @@ const SAVE = store.get('save', { unlocked: 1, best: {}, sound: true, music: true
 function saveNow() { SAVE.time = Date.now(); store.set('save', SAVE); }
 function toggleSound() { SAVE.sound = !SAVE.sound; saveNow(); syncSoundBtns(); }
 function toggleMusic() { SAVE.music = !SAVE.music; saveNow(); syncSoundBtns(); music.refresh(); }
+function syncSoundBtns() {
+  const sL = SAVE.sound ? '🔊 صدا' : '🔇 صدا';
+  const mL = SAVE.music ? '🎵 موسیقی' : '🚫 موسیقی';
+  const ss = $('mSound'); if (ss) ss.textContent = sL;
+  const ps = $('pSound'); if (ps) ps.textContent = sL;
+  const bs = $('btnSound'); if (bs) bs.textContent = SAVE.sound ? '🔊' : '🔇';
+  const ms = $('mMusic'); if (ms) ms.textContent = mL;
+  const pm = $('pMusic'); if (pm) pm.textContent = mL;
+}
 
 /* ----------------------------- عناصر DOM ----------------------------- */
 const $ = id => document.getElementById(id);
@@ -1864,12 +1873,12 @@ function levelClear() {
   if (s.score > best.score || (s.score === best.score && (best.time === 0 || totalMs < best.time))) SAVE.best[G.levelIdx] = { score: s.score, time: totalMs };
   saveNow();
   state = 'clear'; music.setSong('menu');
-  const ov = $('ovlClear');
-  ov.querySelector('.cName').textContent = lv.name;
-  ov.querySelector('.cScore').textContent = fmt(s.score);
-  ov.querySelector('.cCoins').textContent = s.coins;
-  ov.querySelector('.cTime').textContent = `${Math.max(0, Math.floor(s.timeLeft))}s`;
-  ov.querySelector('.cBonus').textContent = '+' + bonus;
+  $('clearStats').innerHTML =
+    `<b style="color:#67e8f9">${lv.name}</b><br>` +
+    `امتیاز: <b>${fmt(s.score)}</b><br>` +
+    `سکه‌ها: ${s.coins}<br>` +
+    `زمان باقی‌مانده: ${Math.max(0, Math.floor(s.timeLeft))}s<br>` +
+    `<b style="color:#ffd23f">پاداش زمان: +${bonus}</b>`;
   const nxt = $('cNext');
   const nextIdx = G.levelIdx + 1;
   nxt.style.display = nextIdx < LEVELS.length ? '' : 'none';
@@ -1878,8 +1887,7 @@ function levelClear() {
 }
 function gameOver() {
   state = 'over';
-  $('ovlOver').querySelector('.oName').textContent = LEVELS[G.levelIdx].name;
-  $('ovlOver').querySelector('.oScore').textContent = fmt(G.run.score);
+  $('overStats').innerHTML = `<b style="color:#ff6b9d">${LEVELS[G.levelIdx].name}</b><br>امتیاز نهایی: <b>${fmt(G.run.score)}</b>`;
   showOv('ovlOver'); music.setSong('menu');
 }
 function victory() {
@@ -1968,18 +1976,19 @@ function wire() {
   });
   on('mSelect', () => { buildSelect(); showOv('ovlSelect'); });
   on('mHelp', () => showOv('ovlHelp'));
+  on('mSound', toggleSound);
+  on('mMusic', toggleMusic);
   on('hBack', () => showOv('ovlMenu'));
-  on('selBack', () => showOv('ovlMenu'));
+  on('sBack', () => showOv('ovlMenu'));
   on('pResume', togglePause);
   on('pRestart', () => { paused = false; startLevel(G.levelIdx); });
   on('pExit', () => { paused = false; exitToMenu(); });
   on('pSound', toggleSound);
   on('pMusic', toggleMusic);
-  on('cAgain', () => startLevel(G.levelIdx));
+  on('cMenu', exitToMenu);
   on('cNext', () => startLevel(Math.min(G.levelIdx + 1, LEVELS.length - 1)));
-  on('oAgain', () => startLevel(G.levelIdx));
+  on('oRetry', () => startLevel(G.levelIdx));
   on('oMenu', exitToMenu);
-  on('wAgain', () => startLevel(0));
   on('wMenu', exitToMenu);
   on('btnSound', toggleSound);
   on('btnPause', togglePause);
