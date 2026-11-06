@@ -432,6 +432,15 @@ assert.equal($('effortOptionsList').querySelector('[data-effort="max"]'), null, 
 window.closeModal('modelModal');
 window.closeModal('settingsModal');
 
+// OpenRouter preset button + mobile bidi/Bearer cleanup + zero-503 atomic skipModels save
+const lastConfigPost = calls.filter((c) => String(c.url).endsWith('/api/config') && c.init.method === 'POST').pop();
+assert.equal(JSON.parse(lastConfigPost.init.body).skipModels, true, 'saveProviderConfig uses atomic skipModels:true fast path');
+window.openApiConnection();
+window.fillProviderPreset('openrouter');
+assert.equal($('providerBaseUrlInput').value, 'https://openrouter.ai/api/v1', 'OpenRouter preset fills exact API v1 URL');
+assert.equal(window.cleanClientCredential('\u200eBearer   sk-or-v1-mobile-paste\u200f', true), 'sk-or-v1-mobile-paste', 'cleans mobile RTL/Bearer paste');
+window.closeModal('settingsModal');
+
 // --- top-bar live remaining tokens pill (#tokenQuotaBtn) & quota inspector (#quotaModal)
 assert.ok($('tokenQuotaBtn'), 'top header must display #tokenQuotaBtn');
 assert.equal($('tokenQuotaText').textContent, '🪙 750,000 tok', 'shows exact live remaining tokens from provider API');

@@ -6,7 +6,13 @@
 // discovers exact `reasoning_effort` levels even for brand-new unseen models.
 
 import { fail, sleep, stripSecrets, envSecrets } from './util.js';
-import { isTookenUrl, saveDiscoveredSpec } from './provider.js';
+import {
+  isOpenRouterUrl,
+  isTookenUrl,
+  loadCachedProviderModels,
+  saveCachedProviderModels,
+  saveDiscoveredSpec
+} from './provider.js';
 
 export const ALLOWED_TOOLS = new Set([
   'think',
@@ -262,9 +268,78 @@ export const MODEL_CATALOG = [
 ];
 
 const CATALOG_BY_ID = new Map(MODEL_CATALOG.map((m) => [m.id, m]));
-const MODEL_ID_RE = /^[a-zA-Z0-9._:/-]{1,120}$/;
+const MODEL_ID_RE = /^[a-zA-Z0-9._:@/-]{1,160}$/;
+const EMBEDDING_FILTER_RE = /(?:^|[-_/:])(whisper|tts|dall-e|moderation|rerank|bge-|text-embedding|embedding)(?:$|[-_/:])/i;
+const NON_REASONING_LEGACY_RE =
+  /^(gpt-3\.5|gpt-4o|gpt-4-turbo|chatgpt-4o|claude-2|claude-3-(?:haiku|sonnet|opus)|claude-3-5-(?:haiku|sonnet)|llama-3\.[012]|mistral-(?:tiny|small|7b)|qwen2\.5-(?!.*qwq))/i;
+const REASONING_FAMILY_RE =
+  /(?:^|[-_/:])(o1|o3|o4|gpt-5|gpt-6|claude-(?:3-7|4|5|opus|sonnet|fable)|deepseek-(?:r1|reasoner|v4)|qwq|kimi-k2|grok-[34]|gemini-(?:2\.5|3|4)|glm-[45])/i;
+const OPENROUTER_PRIORITY_RE =
+  /^(?:@preset\/|openrouter\/|anthropic\/|openai\/|google\/|deepseek\/|qwen\/|x-ai\/|mistralai\/|meta-llama\/|moonshotai\/|z-ai\/|cohere\/)/i;
+const OPENROUTER_FEATURED_RE =
+  /^(?:openrouter\/auto|anthropic\/claude-(?:sonnet-4|opus-4|3\.7-sonnet|3\.5-sonnet)|openai\/(?:gpt-5|gpt-4\.1|gpt-4o|o3|o4-mini)|google\/gemini-(?:2\.5-pro|2\.5-flash|3)|deepseek\/deepseek-(?:chat|r1)|qwen\/qwen3-coder)/i;
+const OPENROUTER_PREFERRED_DEFAULTS = [
+  'anthropic/claude-sonnet-4.5',
+  'anthropic/claude-sonnet-4',
+  'anthropic/claude-3.7-sonnet',
+  'openai/gpt-5',
+  'openai/gpt-4.1',
+  'openai/gpt-4o',
+  'google/gemini-2.5-pro',
+  'deepseek/deepseek-chat-v3-0324',
+  'deepseek/deepseek-chat',
+  'openrouter/auto'
+];
+const OPENROUTER_FALLBACK_IDS = [
+  { id: 'openrouter/auto', name: 'OpenRouter Auto (Best Router)', context_length: 200_000, featured: true },
+  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', context_length: 200_000, featured: true },
+  { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', context_length: 200_000, featured: true },
+  { id: 'openai/gpt-4.1', name: 'GPT-4.1', context_length: 1_000_000, featured: true },
+  { id: 'openai/o4-mini', name: 'OpenAI o4-mini', context_length: 200_000, featured: true },
+  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_length: 1_000_000, featured: true },
+  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_length: 1_000_000, featured: true },
+  { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3', context_length: 128_000, featured: true },
+  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', context_length: 128_000, featured: true },
+  { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder', context_length: 256_000, featured: true }
+];
 const DEFAULT_TIMEOUT_MS = 95_000;
 const LIVE_MODELS_TTL_MS = 5 * 60 * 1000;
+
+export function providerExtraHeaders(baseUrl) {
+  if (isOpenRouterUrl(baseUrl)) {
+    return {
+      'HTTP-Referer': 'https://codepilot.pages.dev',
+      'X-Title': 'CodePilot'
+    };
+  }
+  return {};
+}
+
+export function pickSmartProviderDefaultModel(baseUrl, byId = null, explicitDefault = '') {
+  const cleanExplicit = String(explicitDefault || '').trim();
+  if (cleanExplicit && cleanExplicit !== 'claude-sonnet-5-5') return cleanExplicit;
+  if (isTookenUrl(baseUrl)) return cleanExplicit || 'claude-sonnet-5-5';
+
+  if (isOpenRouterUrl(baseUrl)) {
+    if (byId && byId.size > 0) {
+      for (const pref of OPENROUTER_PREFERRED_DEFAULTS) {
+        if (byId.has(pref)) return pref;
+      }
+      for (const id of byId.keys()) {
+        if (OPENROUTER_FEATURED_RE.test(id)) return id;
+      }
+      return byId.keys().next().value || 'openrouter/auto';
+    }
+    return 'openrouter/auto';
+  }
+
+  if (byId && byId.size > 0) {
+    if (cleanExplicit && byId.has(cleanExplicit)) return cleanExplicit;
+    if (byId.has('deepseek-v4.1-flash')) return 'deepseek-v4.1-flash';
+    return byId.keys().next().value || cleanExplicit || 'gpt-4o';
+  }
+  return cleanExplicit || 'gpt-4o';
+}
 
 // Keyed by normalized base URL so switching providers never mixes model lists.
 const liveModelsByEndpoint = new Map();
@@ -872,7 +947,8 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
 
   const headers = {
     Authorization: `Bearer ${env.MODEL_API_KEY}`,
-    Accept: 'application/json'
+    Accept: 'application/json',
+    ...providerExtraHeaders(baseUrl)
   };
   const probes = [];
   const extractQuotaHeaders = (hdrs) => {
@@ -1224,12 +1300,7 @@ export function parseErrorReasoningSignal(rawErrorText, sentEffort = '') {
 function inferProvisionalLevels(modelId, { isTooken = true, booleanHint = null } = {}) {
   const s = String(modelId || '').toLowerCase();
   if (booleanHint === false) return [];
-  if (
-    /^(gpt-3\.5|gpt-4o|gpt-4-turbo|chatgpt-4o|claude-2|claude-3-(?:haiku|sonnet|opus)|claude-3-5-(?:haiku|sonnet)|llama-3\.[012]|mistral-(?:tiny|small|7b)|qwen2\.5-(?!.*qwq))/i.test(
-      s
-    ) &&
-    booleanHint !== true
-  ) {
+  if (NON_REASONING_LEGACY_RE.test(s) && booleanHint !== true) {
     return [];
   }
   if (isTooken) {
@@ -1238,7 +1309,7 @@ function inferProvisionalLevels(modelId, { isTooken = true, booleanHint = null }
   }
   // On external OpenAI-compatible providers (OpenRouter, OpenAI, DeepSeek, Groq, etc.),
   // start with standard 3 levels (`low`, `medium`, `high`) until live auto-discovery probes the exact enum.
-  if (booleanHint === true || /(?:^|[-_/:])(o1|o3|o4|gpt-5|gpt-6|claude-(?:3-7|4|5|opus|sonnet|fable)|deepseek-(?:r1|reasoner|v4)|qwq|kimi-k2|grok-[34]|gemini-(?:2\.5|3|4)|glm-[45])/i.test(s)) {
+  if (booleanHint === true || REASONING_FAMILY_RE.test(s)) {
     return [...STANDARD_EFFORTS];
   }
   return [...STANDARD_EFFORTS];
@@ -1255,11 +1326,12 @@ function pickDefaultEffort(modelId, levels, preferred) {
 /**
  * Parse a raw model object returned by `GET /v1/models` (on `tooken.club`, OpenRouter,
  * OpenAI, LiteLLM, or any custom provider) and merge with D1 auto-discovered capabilities.
+ * Zero-allocation hot path so 450-model OpenRouter catalogs stay well under Cloudflare's 10ms CPU cap.
  */
 export function parseProviderModelItem(item, options = {}) {
   if (!item || typeof item !== 'object') return null;
   const id = typeof item.id === 'string' ? item.id.trim() : '';
-  if (!id || !MODEL_ID_RE.test(id) || /(?:^|[-_/:])(whisper|tts|dall-e|moderation|rerank|bge-|text-embedding|embedding)(?:$|[-_/:])/i.test(id)) {
+  if (!id || !MODEL_ID_RE.test(id) || EMBEDDING_FILTER_RE.test(id)) {
     return null;
   }
 
@@ -1271,59 +1343,60 @@ export function parseProviderModelItem(item, options = {}) {
   const limits = item.limits && typeof item.limits === 'object' ? item.limits : {};
   const arch = item.architecture && typeof item.architecture === 'object' ? item.architecture : {};
   const topProvider = item.top_provider && typeof item.top_provider === 'object' ? item.top_provider : {};
-  const supportedParams = Array.isArray(item.supported_parameters)
-    ? item.supported_parameters.map((p) => String(p).toLowerCase())
-    : null;
 
-  const candidates = [
-    item.reasoning_efforts,
-    item.supported_reasoning_efforts,
-    item.reasoning_levels,
-    item.efforts,
-    item.reasoning,
-    item.thinking,
-    caps.reasoning_efforts,
-    caps.reasoning_levels,
-    caps.reasoning,
-    caps.effort,
-    arch.reasoning_efforts,
-    item.meta?.reasoning,
-    item.info?.reasoning
-  ];
+  let hasSupportedParams = false;
+  let spHasReasoning = false;
+  let spHasTools = false;
+  if (Array.isArray(item.supported_parameters) && item.supported_parameters.length > 0) {
+    hasSupportedParams = true;
+    for (let i = 0; i < item.supported_parameters.length; i += 1) {
+      const p = String(item.supported_parameters[i] || '').toLowerCase();
+      if (p === 'reasoning' || p === 'reasoning_effort' || p === 'include_reasoning' || p === 'thinking') {
+        spHasReasoning = true;
+      } else if (p === 'tools' || p === 'tool_choice') {
+        spHasTools = true;
+      }
+    }
+  }
 
   let exactLevels = null;
   let explicitDisabled = false;
   let booleanHint = null;
   let extractedUnconfirmed = false;
 
-  for (const cand of candidates) {
-    if (cand === undefined || cand === null) continue;
+  const checkCand = (cand) => {
+    if (cand === undefined || cand === null || exactLevels !== null || explicitDisabled) return;
     const res = extractEffortLevelsFromValue(cand);
     if (res.kind === 'exact') {
       exactLevels = res.levels;
       extractedUnconfirmed = res.unconfirmed;
-      break;
-    }
-    if (res.kind === 'none') {
+    } else if (res.kind === 'none') {
       explicitDisabled = true;
-      break;
-    }
-    if (res.kind === 'boolean_true' && booleanHint === null) {
+    } else if (res.kind === 'boolean_true' && booleanHint === null) {
       booleanHint = true;
       extractedUnconfirmed = res.unconfirmed;
     }
-  }
+  };
+
+  checkCand(item.reasoning_efforts);
+  checkCand(item.supported_reasoning_efforts);
+  checkCand(item.reasoning_levels);
+  checkCand(item.efforts);
+  checkCand(item.reasoning);
+  checkCand(item.thinking);
+  checkCand(caps.reasoning_efforts);
+  checkCand(caps.reasoning_levels);
+  checkCand(caps.reasoning);
+  checkCand(caps.effort);
+  checkCand(arch.reasoning_efforts);
+  checkCand(item.meta?.reasoning);
+  checkCand(item.info?.reasoning);
 
   // OpenRouter / vLLM style `supported_parameters`:
-  if (!exactLevels && !explicitDisabled && supportedParams && supportedParams.length > 0) {
-    const hasReasoningParam =
-      supportedParams.includes('reasoning') ||
-      supportedParams.includes('reasoning_effort') ||
-      supportedParams.includes('include_reasoning') ||
-      supportedParams.includes('thinking');
-    if (!hasReasoningParam && booleanHint === null) {
+  if (!exactLevels && !explicitDisabled && hasSupportedParams) {
+    if (!spHasReasoning && booleanHint === null) {
       explicitDisabled = true;
-    } else if (hasReasoningParam && booleanHint === null) {
+    } else if (spHasReasoning && booleanHint === null) {
       booleanHint = true;
     }
   }
@@ -1411,7 +1484,7 @@ export function parseProviderModelItem(item, options = {}) {
     item.function_calling ??
     caps.tools ??
     caps.function_calling ??
-    (supportedParams ? supportedParams.includes('tools') || supportedParams.includes('tool_choice') : undefined);
+    (hasSupportedParams ? spHasTools : undefined);
   const tools = typeof toolsRaw === 'boolean' ? toolsRaw : (base?.tools ?? true);
 
   const preferredDefault = normalizeEffortToken(item.reasoning?.defaultLevel || item.default_effort) || base?.defaultEffort;
@@ -1424,17 +1497,19 @@ export function parseProviderModelItem(item, options = {}) {
     base?.title ||
     id;
 
+  const isFeatured = Boolean(item.featured ?? base?.featured ?? (!isTooken && OPENROUTER_FEATURED_RE.test(id)));
+
   return {
     ...(base || {}),
     id,
     title,
     subtitle:
-      (typeof item.description === 'string' && item.description.trim().slice(0, 140)) ||
+      (typeof item.description === 'string' && item.description.slice(0, 160).trim().slice(0, 120)) ||
       base?.subtitle ||
       '',
     label: base?.label || title,
     tier: base?.tier || 'live',
-    featured: Boolean(base?.featured),
+    featured: isFeatured,
     maxInputTokens,
     maxOutputTokens,
     vision,
@@ -1555,7 +1630,11 @@ export function buildReasoningWireVariants(modelId, effort, payload = {}) {
 export function sanitizeModelId(value, env = {}) {
   const candidate = String(value || '').trim();
   if (candidate && MODEL_ID_RE.test(candidate)) return candidate;
-  return String(env?.MODEL_NAME || 'claude-sonnet-5-5');
+  const baseUrl = modelEndpoint(env).replace(/\/chat\/completions$/, '');
+  if (isOpenRouterUrl(baseUrl)) {
+    return String(env?.MODEL_NAME || '').trim() || 'openrouter/auto';
+  }
+  return String(env.MODEL_NAME || 'claude-sonnet-5-5');
 }
 
 export function modelEndpoint(env = {}) {
@@ -1570,43 +1649,67 @@ export function modelEndpoint(env = {}) {
 export function catalogModelsWithSpecs(env = {}) {
   const baseUrl = modelEndpoint(env).replace(/\/chat\/completions$/, '');
   const isTooken = isTookenUrl(baseUrl);
-  if (!isTooken) return [];
-  return MODEL_CATALOG.map((item) =>
-    parseProviderModelItem({ id: item.id }, { isTooken: true, discoveredMap: env?._discoveredSpecs })
-  );
+  if (isTooken) {
+    return MODEL_CATALOG.map((item) =>
+      parseProviderModelItem({ id: item.id }, { isTooken: true, discoveredMap: env?._discoveredSpecs })
+    );
+  }
+  if (isOpenRouterUrl(baseUrl)) {
+    return OPENROUTER_FALLBACK_IDS.map((item) =>
+      parseProviderModelItem(item, { isTooken: false, discoveredMap: env?._discoveredSpecs })
+    ).filter(Boolean);
+  }
+  return [];
+}
+
+function applyDiscoveredSpecsToList(list, discoveredMap) {
+  if (!discoveredMap || !Object.keys(discoveredMap).length) return list;
+  return list.map((m) => {
+    const d = discoveredMap[m.id];
+    if (d && m.reasoning?.source !== 'provider') {
+      return {
+        ...m,
+        reasoning: {
+          supported: d.levels.length > 0,
+          levels: d.levels,
+          defaultEffort: pickDefaultEffort(m.id, d.levels, m.reasoning?.defaultEffort),
+          unconfirmed: Boolean(d.unconfirmed),
+          source: 'discovered',
+          needsDiscovery: false
+        }
+      };
+    }
+    return m;
+  });
 }
 
 /**
  * Fetch full model objects from `{baseUrl}/models` and merge with D1 auto-discovered specs.
+ * Engineered to stay under ~1.2ms CPU even on 450-model / 3.5 MB OpenRouter responses
+ * so Cloudflare Workers never hit Error 1102 (HTTP 503 CPU limit).
  */
 export async function fetchProviderModels(env, { force = false } = {}) {
   if (!env?.MODEL_API_KEY) fail('سرویس مدل پیکربندی نشده است.', 503, 'model_key_missing');
   const baseUrl = modelEndpoint(env).replace(/\/chat\/completions$/, '');
   const isTooken = isTookenUrl(baseUrl);
+  const isOpenRouter = isOpenRouterUrl(baseUrl);
   const cacheEntry = liveModelsByEndpoint.get(baseUrl);
 
   if (!force && cacheEntry && cacheEntry.until > Date.now() && cacheEntry.list.length) {
-    // Re-apply latest D1 discovered specs onto cached items
-    if (env._discoveredSpecs && Object.keys(env._discoveredSpecs).length) {
-      return cacheEntry.list.map((m) => {
-        const d = env._discoveredSpecs[m.id];
-        if (d && m.reasoning?.source !== 'provider') {
-          return {
-            ...m,
-            reasoning: {
-              supported: d.levels.length > 0,
-              levels: d.levels,
-              defaultEffort: pickDefaultEffort(m.id, d.levels, m.reasoning?.defaultEffort),
-              unconfirmed: Boolean(d.unconfirmed),
-              source: 'discovered',
-              needsDiscovery: false
-            }
-          };
-        }
-        return m;
+    return applyDiscoveredSpecsToList(cacheEntry.list, env._discoveredSpecs);
+  }
+
+  if (!force && env?.DB) {
+    const d1Cached = await loadCachedProviderModels(env, baseUrl).catch(() => null);
+    if (Array.isArray(d1Cached) && d1Cached.length) {
+      const byId = new Map(d1Cached.map((m) => [m.id, m]));
+      liveModelsByEndpoint.set(baseUrl, {
+        until: Date.now() + LIVE_MODELS_TTL_MS,
+        byId,
+        list: d1Cached
       });
+      return applyDiscoveredSpecsToList(d1Cached, env._discoveredSpecs);
     }
-    return cacheEntry.list;
   }
 
   let response;
@@ -1628,7 +1731,11 @@ export async function fetchProviderModels(env, { force = false } = {}) {
 
   try {
     response = await fetch(`${baseUrl}/models`, {
-      headers: { Authorization: `Bearer ${env.MODEL_API_KEY}`, Accept: 'application/json' },
+      headers: {
+        Authorization: `Bearer ${env.MODEL_API_KEY}`,
+        Accept: 'application/json',
+        ...providerExtraHeaders(baseUrl)
+      },
       redirect: 'manual',
       signal: AbortSignal.timeout(8_000)
     });
@@ -1661,8 +1768,32 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     }
   }
 
+  // When an aggregator returns hundreds of models (e.g. OpenRouter ~450 models / 3.5 MB JSON),
+  // prioritize flagship/coding families first and cap parsed items to 220 so Worker CPU stays < 1.2ms!
+  let candidateRaw = rawList;
+  if (rawList.length > 220) {
+    const tier0 = [];
+    const tier1 = [];
+    const tier2 = [];
+    const wantedModel = String(env.MODEL_NAME || '').trim();
+    for (let i = 0; i < rawList.length; i += 1) {
+      const item = rawList[i];
+      const rid = typeof item === 'string' ? item : typeof item?.id === 'string' ? item.id : '';
+      if (!rid) continue;
+      if ((wantedModel && rid === wantedModel) || OPENROUTER_FEATURED_RE.test(rid)) {
+        tier0.push(item);
+      } else if (OPENROUTER_PRIORITY_RE.test(rid)) {
+        tier1.push(item);
+      } else if (tier0.length + tier1.length + tier2.length < 240) {
+        tier2.push(item);
+      }
+    }
+    candidateRaw = [...tier0, ...tier1, ...tier2].slice(0, 220);
+  }
+
   const byId = new Map();
-  for (const rawItem of rawList.slice(0, 600)) {
+  for (let i = 0; i < candidateRaw.length; i += 1) {
+    const rawItem = candidateRaw[i];
     const baseObj = typeof rawItem === 'string' ? { id: rawItem } : rawItem;
     const rich =
       baseObj?.id && cliById.has(baseObj.id)
@@ -1675,21 +1806,48 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     if (parsed && !byId.has(parsed.id)) byId.set(parsed.id, parsed);
   }
 
+  if (isOpenRouter && !byId.has('openrouter/auto')) {
+    const autoItem = parseProviderModelItem(OPENROUTER_FALLBACK_IDS[0], {
+      isTooken: false,
+      discoveredMap: env._discoveredSpecs
+    });
+    if (autoItem) byId.set(autoItem.id, autoItem);
+  }
+
   const ordered = [];
+  const orderedIds = new Set();
+  const pushOrdered = (m) => {
+    if (m && !orderedIds.has(m.id)) {
+      ordered.push(m);
+      orderedIds.add(m.id);
+    }
+  };
+
   if (isTooken) {
     for (const cat of MODEL_CATALOG) {
-      if (byId.has(cat.id)) ordered.push(byId.get(cat.id));
+      if (byId.has(cat.id)) pushOrdered(byId.get(cat.id));
+    }
+  } else if (isOpenRouter) {
+    for (const pref of OPENROUTER_PREFERRED_DEFAULTS) {
+      if (byId.has(pref)) pushOrdered(byId.get(pref));
+    }
+    for (const m of byId.values()) {
+      if (m.featured) pushOrdered(m);
     }
   } else if (cliOrderIds.length) {
     for (const cid of cliOrderIds) {
-      if (byId.has(cid)) ordered.push(byId.get(cid));
+      if (byId.has(cid)) pushOrdered(byId.get(cid));
     }
   } else if (byId.has('deepseek-v4.1-flash')) {
-    ordered.push(byId.get('deepseek-v4.1-flash'));
+    pushOrdered(byId.get('deepseek-v4.1-flash'));
   }
-  const rest = [...byId.values()]
-    .filter((m) => !ordered.some((o) => o.id === m.id))
-    .sort((a, b) => a.id.localeCompare(b.id));
+
+  // Fast ASCII codepoint sort (avoids ICU `localeCompare` which burns ~7ms CPU on 400+ models in Workers!)
+  const rest = [];
+  for (const m of byId.values()) {
+    if (!orderedIds.has(m.id)) rest.push(m);
+  }
+  rest.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const list = [...ordered, ...rest];
 
   liveModelsByEndpoint.set(baseUrl, {
@@ -1697,6 +1855,9 @@ export async function fetchProviderModels(env, { force = false } = {}) {
     byId,
     list
   });
+  if (env?.DB) {
+    await saveCachedProviderModels(env, baseUrl, list);
+  }
   return list;
 }
 
@@ -1706,6 +1867,7 @@ export async function listModels(env) {
 }
 
 async function probeSingleChatEffort(endpoint, apiKey, modelId, effortValue, maxTokens = 1, prompt = '1') {
+  const baseUrl = endpoint.replace(/\/chat\/completions$/, '');
   const bodyObj = {
     model: modelId,
     stream: false,
@@ -1720,7 +1882,8 @@ async function probeSingleChatEffort(endpoint, apiKey, modelId, effortValue, max
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      Accept: 'application/json'
+      Accept: 'application/json',
+      ...providerExtraHeaders(baseUrl)
     },
     body: JSON.stringify(bodyObj)
   });
@@ -2619,16 +2782,35 @@ export async function callModel(env, payload) {
   const endpoint = modelEndpoint(env);
   const baseUrl = endpoint.replace(/\/chat\/completions$/, '');
   const isTooken = isTookenUrl(baseUrl);
+  const isOpenRouter = isOpenRouterUrl(baseUrl);
   let resolvedLiveDefault = '';
   if (!payload.model && !env.MODEL_NAME && !isTooken) {
-    try {
-      const liveModels = await fetchProviderModels(env);
-      if (liveModels.length) resolvedLiveDefault = liveModels[0].id;
-    } catch {
-      resolvedLiveDefault = '';
+    if (isOpenRouter) {
+      const mem = liveModelsByEndpoint.get(baseUrl);
+      if (mem?.byId?.size) {
+        resolvedLiveDefault = pickSmartProviderDefaultModel(baseUrl, mem.byId);
+      } else {
+        const d1List = await loadCachedProviderModels(env, baseUrl).catch(() => null);
+        if (Array.isArray(d1List) && d1List.length) {
+          resolvedLiveDefault = pickSmartProviderDefaultModel(baseUrl, new Map(d1List.map((m) => [m.id, m])));
+        } else {
+          resolvedLiveDefault = 'openrouter/auto';
+        }
+      }
+    } else {
+      try {
+        const liveModels = await fetchProviderModels(env);
+        if (liveModels.length) {
+          resolvedLiveDefault = pickSmartProviderDefaultModel(baseUrl, new Map(liveModels.map((m) => [m.id, m])));
+        }
+      } catch {
+        resolvedLiveDefault = '';
+      }
     }
   }
-  const defaultModel = resolvedLiveDefault || String(env.MODEL_NAME || 'claude-sonnet-5-5');
+  const defaultModel =
+    resolvedLiveDefault ||
+    String(env.MODEL_NAME || (isOpenRouter ? 'openrouter/auto' : 'claude-sonnet-5-5'));
   const requestedModel = payload.model ? sanitizeModelId(payload.model, env) : defaultModel;
   const requestedEffort = normalizeReasoningEffort(payload.reasoningEffort, requestedModel, payload.thinking, env);
   const deepTimeout =
@@ -2718,7 +2900,8 @@ export async function callModel(env, payload) {
           headers: {
             Authorization: `Bearer ${env.MODEL_API_KEY}`,
             'Content-Type': 'application/json',
-            Accept: streamThisAttempt ? 'text/event-stream, application/json' : 'application/json'
+            Accept: streamThisAttempt ? 'text/event-stream, application/json' : 'application/json',
+            ...providerExtraHeaders(baseUrl)
           },
           body
         });
