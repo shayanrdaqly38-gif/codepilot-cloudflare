@@ -297,19 +297,43 @@ export const TOOLS = [
 function sseStream() {
   const encoder = new TextEncoder();
   let controller;
+  let closed = false;
   const stream = new ReadableStream({
     start(c) {
       controller = c;
+    },
+    cancel() {
+      closed = true;
+      clearInterval(heartbeat);
     }
   });
+  // Keep Cloudflare Edge, VPN/proxy tunnels, and mobile NATs alive during deep reasoning & large tool writes:
+  const heartbeat = setInterval(() => {
+    if (closed || !controller) {
+      clearInterval(heartbeat);
+      return;
+    }
+    try {
+      controller.enqueue(encoder.encode(': keepalive\n\n'));
+    } catch {
+      closed = true;
+      clearInterval(heartbeat);
+    }
+  }, 5000);
+  if (typeof heartbeat?.unref === 'function') heartbeat.unref();
+
   const send = (event, data) => {
+    if (closed) return;
     try {
       controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     } catch {
-      // Client disconnected; persistence already happened.
+      closed = true;
+      clearInterval(heartbeat);
     }
   };
   const close = () => {
+    closed = true;
+    clearInterval(heartbeat);
     try {
       controller.close();
     } catch {
@@ -628,11 +652,13 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
 
 /* -------------------------------- handler -------------------------------- */
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost(context) {
+  const { request, env } = context;
+  const waitUntilFn = typeof context.waitUntil === 'function' ? context.waitUntil.bind(context) : null;
   return route(
     request,
     env,
-    async ({ identity, data, setCookie }) => {
+    async ({ identity, data, setCookie, waitUntil }) => {
       await enforceChatLimits(env, identity.owner);
 
       const conversationId = String(data?.conversationId || '');
@@ -717,10 +743,15 @@ export async function onRequestPost({ request, env }) {
           .run();
       }
 
-      // 1. Persist the user turn first (durability over speed).
-      await appendMessages(env, conversation, [
-        { role: 'user', content: redactSecrets(userText, envSecrets(effectiveEnv)), attachments, created_at: Date.now() }
-      ]);
+      const existingCheckpointPreload = await loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null);
+      const isSilentAutoResume = Boolean(data?.silentAutoResume === true && existingCheckpointPreload?.active);
+
+      // 1. Persist the user turn first (durability over speed), unless this is a silent background VPN-blip reconnect.
+      if (!isSilentAutoResume) {
+        await appendMessages(env, conversation, [
+          { role: 'user', content: redactSecrets(userText, envSecrets(effectiveEnv)), attachments, created_at: Date.now() }
+        ]);
+      }
 
       let workspace;
       try {
@@ -764,16 +795,18 @@ export async function onRequestPost({ request, env }) {
       let steps = 0;
       let stepStreamedContent = '';
       let stepStreamedReasoning = '';
+      let healedTextCarry = '';
+      let autoHealCount = 0;
+      const MAX_AUTO_HEALS = 3;
       let turnInterruptedReason = '';
       const completedToolsLog = [];
-      let existingCheckpoint = null;
+      let existingCheckpoint = existingCheckpointPreload;
       let resumingFromCheckpoint = false;
 
-      (async () => {
+      const turnRunner = (async () => {
         try {
-          existingCheckpoint = await loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null);
           resumingFromCheckpoint = Boolean(
-            existingCheckpoint && (data?.resumeCheckpoint === true || isResumePrompt(userText))
+            existingCheckpoint && (isSilentAutoResume || data?.resumeCheckpoint === true || isResumePrompt(userText))
           );
           if (existingCheckpoint && !resumingFromCheckpoint) {
             await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
@@ -845,21 +878,25 @@ export async function onRequestPost({ request, env }) {
           messages.push(...working.recent);
           await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
 
-          // Inject surgical checkpoint continuation briefing on the wire when resuming («ادامه»)
+          // Inject surgical checkpoint continuation briefing on the wire when resuming («ادامه» or silent VPN auto-recovery)
           if (resumingFromCheckpoint && existingCheckpoint) {
             const directive = buildCheckpointResumeDirective(existingCheckpoint, workspace);
             if (directive) {
-              for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
-                if (messages[mi]?.role === 'user') {
-                  if (typeof messages[mi].content === 'string') {
-                    messages[mi] = { ...messages[mi], content: `${messages[mi].content}\n\n${directive}` };
-                  } else if (Array.isArray(messages[mi].content)) {
-                    messages[mi] = {
-                      ...messages[mi],
-                      content: [...messages[mi].content, { type: 'text', text: `\n\n${directive}` }]
-                    };
+              if (messages.at(-1)?.role === 'assistant') {
+                messages.push({ role: 'user', content: directive });
+              } else {
+                for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
+                  if (messages[mi]?.role === 'user') {
+                    if (typeof messages[mi].content === 'string') {
+                      messages[mi] = { ...messages[mi], content: `${messages[mi].content}\n\n${directive}` };
+                    } else if (Array.isArray(messages[mi].content)) {
+                      messages[mi] = {
+                        ...messages[mi],
+                        content: [...messages[mi].content, { type: 'text', text: `\n\n${directive}` }]
+                      };
+                    }
+                    break;
                   }
-                  break;
                 }
               }
             }
@@ -880,28 +917,67 @@ export async function onRequestPost({ request, env }) {
             }
 
             let deltaChars = 0;
+            let lastToolDeltaPing = 0;
             send('status', { phase: steps > 1 ? 'working' : (resumingFromCheckpoint ? 'resuming' : 'thinking'), step: steps, maxSteps });
-            const result = await callModel(effectiveEnv, {
-              ...(selectedModel ? { model: selectedModel } : {}),
-              ...(reasoningEffort !== null ? { reasoningEffort } : {}),
-              temperature: agentConfig.temperature ?? 0.25,
-              timeoutMs: powerPlan.timeoutMs,
-              messages,
-              tools,
-              onDelta: (chunk) => {
-                if (!chunk?.text) return;
-                deltaChars += chunk.text.length;
-                if (chunk.type === 'content') {
-                  stepStreamedContent += chunk.text;
-                  send('delta', { text: chunk.text, step: steps });
-                } else if (chunk.type === 'reasoning') {
-                  stepStreamedReasoning += chunk.text;
-                  if (deltaChars <= powerPlan.thinkingDeltaLimit) {
-                    send('thinking_delta', { text: chunk.text, step: steps });
+            let result;
+            try {
+              result = await callModel(effectiveEnv, {
+                ...(selectedModel ? { model: selectedModel } : {}),
+                ...(reasoningEffort !== null ? { reasoningEffort } : {}),
+                temperature: agentConfig.temperature ?? 0.25,
+                timeoutMs: powerPlan.timeoutMs,
+                messages,
+                tools,
+                onDelta: (chunk) => {
+                  if (chunk?.type === 'tool_delta') {
+                    const nowMs = Date.now();
+                    if (nowMs - lastToolDeltaPing >= 1200) {
+                      lastToolDeltaPing = nowMs;
+                      send('status', {
+                        phase: 'tool_streaming',
+                        toolName: chunk.name || 'tool',
+                        chars: chunk.totalChars || 0,
+                        step: steps,
+                        maxSteps
+                      });
+                    }
+                    return;
+                  }
+                  if (!chunk?.text) return;
+                  deltaChars += chunk.text.length;
+                  if (chunk.type === 'content') {
+                    stepStreamedContent += chunk.text;
+                    send('delta', { text: chunk.text, step: steps });
+                  } else if (chunk.type === 'reasoning') {
+                    stepStreamedReasoning += chunk.text;
+                    if (deltaChars <= powerPlan.thinkingDeltaLimit) {
+                      send('thinking_delta', { text: chunk.text, step: steps });
+                    }
                   }
                 }
+              });
+            } catch (stepErr) {
+              // Seamless Server-Side Auto-Heal when an upstream SSE socket resets mid-stream!
+              if (stepErr?.code === 'stream_interrupted' && autoHealCount < MAX_AUTO_HEALS) {
+                autoHealCount += 1;
+                const partialPiece = String(stepErr.partialContent || stepStreamedContent || '');
+                send('status', { phase: 'auto-heal', attempt: autoHealCount, step: steps, maxSteps });
+                if (partialPiece) {
+                  healedTextCarry += partialPiece;
+                  messages.push({ role: 'assistant', content: partialPiece });
+                  messages.push({
+                    role: 'user',
+                    content:
+                      '[ادامه‌ی خودکار سیستم پس از نوسان استریم: متن بالا تا همین کاراکتر به کاربر نمایش داده شد. بدون تکرار هیچ کلمه‌ای از متن قبلی، دقیقاً از کاراکتر/جمله یا ابزار بعدی ادامه بده و کار را کامل کن.]'
+                  });
+                } else {
+                  steps = Math.max(0, steps - 1);
+                }
+                await new Promise((r) => setTimeout(r, 450 * autoHealCount));
+                continue;
               }
-            });
+              throw stepErr;
+            }
             usedModel = result.model;
             if (result.reasoningEffort !== undefined) appliedEffort = result.reasoningEffort;
             if (result.rateLimit) latestRateLimit = result.rateLimit;
@@ -926,9 +1002,11 @@ export async function onRequestPost({ request, env }) {
             const assistant = result.message;
 
             if (assistant.tool_calls?.length) {
+              const combinedToolProse = healedTextCarry + (assistant.content || '');
+              healedTextCarry = '';
               const stored = {
                 role: 'assistant',
-                content: assistant.content || '',
+                content: combinedToolProse,
                 ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
                 ...(appliedEffort && appliedEffort !== 'none' ? { reasoning_effort: appliedEffort } : {}),
                 ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
@@ -1015,12 +1093,30 @@ export async function onRequestPost({ request, env }) {
               continue;
             }
 
+            // Seamless Server-Side Auto-Heal when stream cuts off cleanly or hits max_tokens (`length`):
+            if ((result.interrupted || result.finishReason === 'length') && autoHealCount < MAX_AUTO_HEALS && steps < maxSteps) {
+              autoHealCount += 1;
+              const piece = String(assistant.content || '');
+              if (piece) {
+                healedTextCarry += piece;
+                messages.push({ role: 'assistant', content: piece });
+                messages.push({
+                  role: 'user',
+                  content:
+                    '[ادامه‌ی خودکار بدون وقفه: متن بالا تا نقطه برش نمایش داده شد. بدون تکرار هیچ بخشی از متن قبلی، دقیقاً از کلمه/خط بعدی ادامه بده تا پاسخ یا کد کامل شود.]'
+                });
+                send('status', { phase: 'auto-heal', attempt: autoHealCount, step: steps, maxSteps });
+                continue;
+              }
+            }
+
             if (result.interrupted) {
               turnInterruptedReason = 'stream_cutoff';
             } else if (result.finishReason === 'length') {
               turnInterruptedReason = 'length_cutoff';
             }
 
+            const stitchedProse = healedTextCarry + String(assistant.content || '');
             // Autonomous Self-Repair Gate when boosted Power Engine is active (skip if stream itself cut off):
             if (!turnInterruptedReason && powerPlan.autoRepairValidation && autoRepairAttempts < 2 && steps < maxSteps) {
               const brokenFiles = [];
@@ -1033,7 +1129,8 @@ export async function onRequestPost({ request, env }) {
               }
               if (brokenFiles.length > 0) {
                 autoRepairAttempts += 1;
-                const interim = String(assistant.content || '').trim();
+                healedTextCarry = '';
+                const interim = stitchedProse.trim();
                 if (interim) messages.push({ role: 'assistant', content: interim });
                 messages.push({
                   role: 'user',
@@ -1044,7 +1141,8 @@ export async function onRequestPost({ request, env }) {
               }
             }
 
-            finalText = String(assistant.content || '').trim() || 'انجام شد.';
+            healedTextCarry = '';
+            finalText = stitchedProse.trim() || 'انجام شد.';
             stepStreamedContent = '';
             newMessages.push({
               role: 'assistant',
@@ -1168,7 +1266,7 @@ export async function onRequestPost({ request, env }) {
           });
         } catch (error) {
           const partialContent = stripSecrets(
-            String(error?.partialContent || stepStreamedContent || '').trim(),
+            String((healedTextCarry || '') + (error?.partialContent || stepStreamedContent || '')).trim(),
             envSecrets(effectiveEnv)
           );
           const partialReasoning = stripSecrets(
@@ -1249,11 +1347,14 @@ export async function onRequestPost({ request, env }) {
           close();
         }
       })();
+      if (typeof waitUntil === 'function') {
+        try { waitUntil(turnRunner); } catch { /* ignore */ }
+      }
 
       return new Response(stream, { status: 200, headers });
     },
     // 20 MB of files expands to ~26.7 MB in Base64; leave room for message metadata.
-    { write: true, body: 28_000_000 }
+    { write: true, body: 28_000_000, waitUntil: waitUntilFn }
   );
 }
 

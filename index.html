@@ -4764,16 +4764,23 @@ async function sendMessage(overrideText, opts = {}) {
   }
   setSync('busy', 'درخواست به مدل…');
 
-  const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
-  state.messages.push(userMessage);
-  appendMessageElement(userMessage);
+  const isSilentAutoResume = Boolean(opts.silentAutoResume);
+  const autoRetryCount = Number(opts._autoRetryCount || 0);
+  const msgCountBeforeTurn = state.messages.length;
+  let scheduleAutoResumeNext = 0;
+
+  if (!isSilentAutoResume) {
+    const userMessage = { role: 'user', content: text, attachments, created_at: Date.now() };
+    state.messages.push(userMessage);
+    appendMessageElement(userMessage);
+  }
 
   const bubble = document.createElement('div');
   bubble.className = 'msg assistant';
   bubble.innerHTML =
     `<div class="claude-spinner-bar">` +
     `<span class="claude-star">✳</span>` +
-    `<span class="claude-verb">${esc(CLAUDE_SPINNER_VERBS[0])}</span>` +
+    `<span class="claude-verb">${esc(isSilentAutoResume ? '🔄 ادامه خودکار از نقطه ذخیره…' : CLAUDE_SPINNER_VERBS[0])}</span>` +
     `<span class="claude-elapsed">0.0s</span>` +
     `</div>` +
     `<div class="think-stream"></div><div class="msg-text"><span class="typing"><i></i><i></i><i></i></span></div>`;
@@ -4817,6 +4824,7 @@ async function sendMessage(overrideText, opts = {}) {
       ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
       ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
+      ...(isSilentAutoResume ? { silentAutoResume: true } : {}),
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
     let response;
@@ -4865,8 +4873,63 @@ async function sendMessage(overrideText, opts = {}) {
         const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
         commitChangesAtomically(result.touchedFiles, result.deletedFiles, '', badge).catch(() => {});
       }
+    } else if (result.clientNetworkDropped) {
+      // Browser <-> Cloudflare SSE connection blipped (e.g. VPN/mobile switch).
+      // First check if the server already finished in D1 via waitUntil; otherwise auto-resume silently!
+      const vEl = bubble.querySelector('.claude-verb');
+      if (vEl) vEl.textContent = '🔄 نوسان اینترنت تشخیص داده شد — بررسی وضعیت ذخیره در سرور…';
+      let recoveredFromD1 = false;
+      for (let poll = 0; poll < 3; poll += 1) {
+        await new Promise((r) => setTimeout(r, 1300));
+        try {
+          const snap = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}`);
+          const snapMsgs = snap.messages || [];
+          const hasAssistantReply = snapMsgs.length > msgCountBeforeTurn && snapMsgs.at(-1)?.role === 'assistant';
+          if (hasAssistantReply && !snap.checkpoint?.active) {
+            state.messages = snapMsgs;
+            state.activeCheckpoint = null;
+            if (snap.workspace) {
+              state.workspace = normalizeWorkspace(snap.workspace);
+              renderTree();
+              renderEditor();
+            }
+            renderChat();
+            recoveredFromD1 = true;
+            break;
+          }
+          if (snap.checkpoint?.active) {
+            state.activeCheckpoint = snap.checkpoint;
+            break;
+          }
+        } catch { /* retry next poll */ }
+      }
+      if (!recoveredFromD1) {
+        await reloadCurrentConversation({ syncWorkspace: true });
+        const ckReason = state.activeCheckpoint?.reason || 'stream_cutoff';
+        const isHardStop = ckReason === 'quota_exhausted' || ckReason === 'auth_failed' || ckReason === 'rate_limited';
+        if (!isHardStop && autoRetryCount < 2) {
+          scheduleAutoResumeNext = autoRetryCount + 1;
+        } else {
+          if (!state.activeCheckpoint?.active) {
+            state.activeCheckpoint = {
+              active: true,
+              reason: 'stream_cutoff',
+              errorMessage: 'ارتباط اینترنت در میانه دریافت پاسخ قطع شد. روی ادامه بزنید تا از همین نقطه ادامه یابد.',
+              touchedFiles: result.touchedFiles || []
+            };
+          }
+          renderActiveCheckpointBanner();
+        }
+      }
     } else if (result.resumable) {
       await reloadCurrentConversation({ syncWorkspace: true });
+      const ckReason = state.activeCheckpoint?.reason || '';
+      const canAutoContinue =
+        (ckReason === 'stream_cutoff' || ckReason === 'timeout' || ckReason === 'length_cutoff') &&
+        autoRetryCount < 1;
+      if (canAutoContinue) {
+        scheduleAutoResumeNext = autoRetryCount + 1;
+      }
     }
   } catch (error) {
     const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
@@ -4890,12 +4953,25 @@ async function sendMessage(overrideText, opts = {}) {
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
     syncAgentUi();
     loadConversations();
+    if (scheduleAutoResumeNext > 0) {
+      setTimeout(() => {
+        if (!state.busy) {
+          sendMessage('ادامه', {
+            resumeCheckpoint: true,
+            silentAutoResume: true,
+            _autoRetryCount: scheduleAutoResumeNext
+          });
+        }
+      }, 900);
+    }
   }
 }
 
 async function consumeStream(response, bubble) {
   let persisted = false;
   let resumableStop = false;
+  let serverErrorReceived = false;
+  let clientNetworkDropped = false;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -4920,6 +4996,12 @@ async function consumeStream(response, bubble) {
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
+      } else if (data.phase === 'auto-heal') {
+        setSync('busy', 'بازاتصال خودکار بدون توقف…');
+        if (vEl) vEl.textContent = `${stepPrefix()}🔄 بازاتصال خودکار به سرویس مدل بدون قطع کار (${faNum(data.attempt || 1)}/۳)…`;
+      } else if (data.phase === 'tool_streaming') {
+        setSync('busy', `زنده · نوشتن ${data.toolName || 'کد'}…`);
+        if (vEl) vEl.textContent = `${stepPrefix()}✏️ در حال تولید زنده ${data.toolName || 'کد'} (${faNum(data.chars || 0)} کاراکتر)…`;
       } else if (data.phase === 'resuming') {
         setSync('busy', 'ادامه دقیق از نقطه قطع‌شدن…');
         if (vEl) vEl.textContent = '⚡ ادامه دقیق از نقطه قطع‌شدن قبلی…';
@@ -5079,6 +5161,7 @@ async function consumeStream(response, bubble) {
       state.activeCheckpoint = data.resumable && data.checkpoint ? data.checkpoint : null;
       setSync('on', data.resumable ? 'نقطه ادامه در D1 ذخیره شد' : 'ذخیره شد در D1');
     } else if (event === 'error') {
+      serverErrorReceived = true;
       bubble.querySelector('.claude-spinner-bar')?.remove();
       textArea.classList.remove('stream-cursor');
       if (data.workspace) {
@@ -5106,6 +5189,20 @@ async function consumeStream(response, bubble) {
     }
   };
 
+  const flushSseChunk = (chunk) => {
+    let eventName = 'message';
+    let dataRaw = '';
+    for (const line of chunk.split('\n')) {
+      if (line.startsWith(':')) continue; // SSE keepalive comment frame
+      if (line.startsWith('event:')) eventName = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataRaw += line.slice(5).trim();
+    }
+    if (!dataRaw) return;
+    let data;
+    try { data = JSON.parse(dataRaw); } catch { return; }
+    handle(eventName, data);
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -5115,44 +5212,38 @@ async function consumeStream(response, bubble) {
       while ((index = buffer.indexOf('\n\n')) >= 0) {
         const chunk = buffer.slice(0, index);
         buffer = buffer.slice(index + 2);
-        let eventName = 'message';
-        let dataRaw = '';
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('event:')) eventName = line.slice(6).trim();
-          else if (line.startsWith('data:')) dataRaw += line.slice(5).trim();
-        }
-        if (!dataRaw) continue;
-        let data;
-        try { data = JSON.parse(dataRaw); } catch { continue; }
-        handle(eventName, data);
+        flushSseChunk(chunk);
       }
     }
+    buffer += decoder.decode();
+    if (buffer.trim()) flushSseChunk(buffer);
+    if (!persisted && !serverErrorReceived) {
+      clientNetworkDropped = true;
+    }
   } catch (error) {
+    if (serverErrorReceived) {
+      throw error;
+    }
+    clientNetworkDropped = true;
     const kept = String(streamedDraft || assistantText || '').trim();
     if (kept) {
       assistantText = kept;
       textArea.classList.remove('stream-cursor');
       textArea.innerHTML = renderMarkdownish(kept);
-      state.activeCheckpoint = state.activeCheckpoint || {
-        active: true,
-        reason: 'stream_cutoff',
-        errorMessage: error.message || 'ارتباط استریم قطع شد. بنویسید «ادامه» تا از همین نقطه ادامه یابد.',
-        partialTextChars: kept.length,
-        touchedFiles
-      };
-      resumableStop = true;
-      renderActiveCheckpointBanner();
-    } else {
-      bubble.className = 'msg assistant error';
-      bubble.textContent = 'خطا: ' + error.message;
-      state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
     }
   } finally {
-    if (!assistantText && !bubble.textContent.trim()) {
+    if (!assistantText && !clientNetworkDropped && !bubble.textContent.trim()) {
       bubble.innerHTML = '<span class="tiny">بدون پاسخ</span>';
     }
   }
-  return { ok: persisted, resumable: resumableStop, text: assistantText, touchedFiles, deletedFiles };
+  return {
+    ok: persisted,
+    resumable: resumableStop,
+    clientNetworkDropped,
+    text: assistantText,
+    touchedFiles,
+    deletedFiles
+  };
 }
 
 function cssEscape(value) {
