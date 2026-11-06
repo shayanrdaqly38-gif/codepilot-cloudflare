@@ -7,7 +7,7 @@
 // Results are advisory text (never throw), so a warning can never block a save
 // that the user explicitly asked for.
 
-const MAX_CHARS = 400_000;
+const MAX_CHARS = 900_000;
 
 /* --------------------------------- bracket -------------------------------- */
 

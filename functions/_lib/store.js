@@ -8,8 +8,10 @@ import { clamp, fail, redactCode, redactSecrets, safeInt } from './util.js';
 
 const MAX_CONVERSATIONS_PER_USER = 300;
 const MAX_MESSAGES_PER_CONVERSATION = 4000;
-const MAX_WORKSPACE_CHARS = 6_000_000;
+const MAX_WORKSPACE_CHARS = 8_000_000;
+const MAX_WORKSPACE_FILE_CHARS = 900_000;
 const INLINE_WORKSPACE_MAX_BYTES = 900_000;
+const MAX_INSERT_STMT_BYTES = 750_000;
 const MAX_TITLE = 120;
 const utf8Encoder = new TextEncoder();
 
@@ -363,12 +365,36 @@ function insertRows(database, table, columns, rows) {
   const statements = [];
   const width = columns.length;
   const perChunk = Math.max(1, Math.floor(90 / width));
-  for (let i = 0; i < rows.length; i += perChunk) {
-    const chunk = rows.slice(i, i + perChunk);
-    const tuple = `(${columns.map(() => '?').join(',')})`;
+  const tuple = `(${columns.map(() => '?').join(',')})`;
+  let chunk = [];
+  let chunkBytes = 0;
+
+  const flushChunk = () => {
+    if (!chunk.length) return;
     const sql = `INSERT INTO ${table}(${columns.join(',')}) VALUES ${chunk.map(() => tuple).join(',')}`;
     statements.push(database.prepare(sql).bind(...chunk.flat()));
+    chunk = [];
+    chunkBytes = 0;
+  };
+
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    let rowBytes = 64;
+    for (let j = 0; j < row.length; j += 1) {
+      const cell = row[j];
+      if (typeof cell === 'string') {
+        rowBytes += cell.length > 8_000 ? utf8Encoder.encode(cell).byteLength : cell.length * 3;
+      } else {
+        rowBytes += 16;
+      }
+    }
+    if (chunk.length > 0 && (chunk.length >= perChunk || chunkBytes + rowBytes > MAX_INSERT_STMT_BYTES)) {
+      flushChunk();
+    }
+    chunk.push(row);
+    chunkBytes += rowBytes;
   }
+  flushChunk();
   return statements;
 }
 
@@ -420,7 +446,8 @@ export function safeWorkspace(input) {
   let approxChars = 64;
   const rawFiles = source.files && typeof source.files === 'object' && !Array.isArray(source.files) ? source.files : {};
   for (const [path, content] of Object.entries(rawFiles).slice(0, 200)) {
-    if (!isSafePath(path) || typeof content !== 'string' || content.length > 400_000) continue;
+    if (!isSafePath(path) || typeof content !== 'string' || content.length > MAX_WORKSPACE_FILE_CHARS) continue;
+    if (content.length > 300_000 && utf8Encoder.encode(content).byteLength > 920_000) continue;
     approxChars += path.length + content.length + 8;
     if (approxChars > MAX_WORKSPACE_CHARS) {
       fail('حجم فایل‌های کاری بیش از حد مجاز است.', 413, 'too_large');
