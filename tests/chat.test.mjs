@@ -1019,5 +1019,148 @@ test('elastic zero-413 context engine: slims giant historical tool payloads, aut
   }
 });
 
+test('multi-wave Cloudflare subrequest chaining + smart 429 auto-backoff: hands off waves cleanly before 50-subrequest limit, converts Too many subrequests to wave_continue, and waits out 429 automatically', async () => {
+  const original = globalThis.fetch;
+  try {
+    const waveEnv = { ...env, WAVE_STEP_BUDGET: '2', _rateLimitWaitMs: '15' };
+    const waveConv = await (
+      await stateApi.onRequestPost(
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), waveEnv)
+      )
+    ).json();
+
+    const makeWriteToolRes = (id, path, content) =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'tool_calls',
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ id, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path, content }) } }]
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+
+    let callNo = 0;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+      const parsedBody = JSON.parse(init?.body || '{}');
+      if (parsedBody.max_tokens === 1600) {
+        return new Response(
+          JSON.stringify({ choices: [{ message: { role: 'assistant', content: '{"summary":"پروژه در حال ساخت در چند موج"}' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      callNo += 1;
+      // Wave 1: 2 tool steps -> hits WAVE_STEP_BUDGET=2 cleanly!
+      if (callNo === 1) return makeWriteToolRes('w1_1', 'w1a.js', 'export const a = 1;\n');
+      if (callNo === 2) return makeWriteToolRes('w1_2', 'w1b.js', 'export const b = 2;\n');
+
+      // Wave 2: step 1 writes w2a.js, step 2 throws Cloudflare `Too many subrequests` -> converts to clean waveContinue!
+      if (callNo === 3) return makeWriteToolRes('w2_1', 'w2a.js', 'export const c = 3;\n');
+      if (callNo === 4) throw new Error('Too many subrequests.');
+
+      // Wave 3: encounters two 429 Rate Limit responses, auto-waits, writes w3.js, and finishes!
+      if (callNo === 5 || callNo === 6) {
+        return new Response('{"error":"rate limit"}', { status: 429, headers: { 'Retry-After': '1' } });
+      }
+      if (callNo === 7) return makeWriteToolRes('w3_1', 'w3.js', 'export const d = 4;\n');
+      return new Response(
+        'data: {"model":"claude-sonnet-5-5","choices":[{"delta":{"content":"پروژه در ۳ موج بدون هیچ توقفی کامل شد!"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+      );
+    };
+
+    // Wave 1
+    const w1Events = await parseSse(
+      await chat.onRequestPost(
+        ctx(
+          req('/api/chat', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: { conversationId: waveConv.id, message: 'پروژه چندموجی بساز', workStamina: 'ultra-code' }
+          }),
+          waveEnv
+        )
+      )
+    );
+    const w1Done = w1Events.find((e) => e.name === 'done');
+    assert.ok(w1Done, 'wave 1 finished cleanly');
+    assert.equal(w1Done.data.waveContinue, true, 'wave 1 signals automatic waveContinue');
+    assert.equal(w1Done.data.waveNumber, 1);
+    assert.equal(w1Done.data.interrupted, false, 'planned wave handoff is not an error interruption');
+
+    // Wave 2 (auto-chained silently; hits `Too many subrequests` after w2a.js and STILL hands off cleanly!)
+    const w2Events = await parseSse(
+      await chat.onRequestPost(
+        ctx(
+          req('/api/chat', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: {
+              conversationId: waveConv.id,
+              message: 'ادامه',
+              resumeCheckpoint: true,
+              silentAutoResume: true,
+              workStamina: 'ultra-code'
+            }
+          }),
+          waveEnv
+        )
+      )
+    );
+    assert.equal(w2Events.find((e) => e.name === 'error'), undefined, 'Too many subrequests converted to wave handoff without error');
+    const w2Done = w2Events.find((e) => e.name === 'done');
+    assert.equal(w2Done.data.waveContinue, true);
+    assert.equal(w2Done.data.waveNumber, 2);
+
+    // Wave 3 (auto-chained silently; waits out two 429s and completes the whole project!)
+    const w3Events = await parseSse(
+      await chat.onRequestPost(
+        ctx(
+          req('/api/chat', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: {
+              conversationId: waveConv.id,
+              message: 'ادامه',
+              resumeCheckpoint: true,
+              silentAutoResume: true,
+              workStamina: 'ultra-code'
+            }
+          }),
+          waveEnv
+        )
+      )
+    );
+    assert.ok(
+      w3Events.some((e) => e.name === 'status' && e.data?.phase === 'rate_limit_wait'),
+      'emitted live rate_limit_wait status while waiting out 429'
+    );
+    const w3Done = w3Events.find((e) => e.name === 'done');
+    assert.equal(w3Done.data.waveContinue, false, 'final wave completed all work');
+    assert.equal(w3Done.data.content, 'پروژه در ۳ موج بدون هیچ توقفی کامل شد!');
+    assert.deepEqual(Object.keys(w3Done.data.workspace.files).sort(), ['w1a.js', 'w1b.js', 'w2a.js', 'w3.js']);
+
+    // Verify D1 history has only 1 user message (silentAutoResume did not spam fake "ادامه" user messages!) and checkpoint is cleared
+    const finalSnap = await (
+      await oneConv.onRequestGet({
+        ...ctx(req(`/api/state/conversations/${waveConv.id}`, { headers: { Cookie: cookie } }), waveEnv),
+        params: { id: waveConv.id }
+      })
+    ).json();
+    assert.equal(finalSnap.checkpoint, null, 'checkpoint cleared after final wave');
+    const userMsgs = finalSnap.messages.filter((m) => m.role === 'user');
+    assert.equal(userMsgs.length, 1, 'silent wave chaining kept user message history completely clean');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 
 
