@@ -1852,6 +1852,27 @@ function formatShortTokens(n) {
   return Math.round(v).toLocaleString('en-US');
 }
 
+function formatExactTokens(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  return Math.round(v).toLocaleString('en-US');
+}
+
+function formatProviderMoney(amount, currency = 'USD', decimals = 2) {
+  const v = Number(amount);
+  if (!Number.isFinite(v)) return '—';
+  const cur = String(currency || 'USD').toUpperCase();
+  const formatted = v.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: Math.max(decimals, v !== 0 && Math.abs(v) < 1 ? 4 : decimals)
+  });
+  if (cur === 'RUB') return `${formatted} ₽`;
+  if (cur === 'USD') return `$${formatted}`;
+  if (cur === 'EUR') return `€${formatted}`;
+  if (cur === 'CNY') return `¥${formatted}`;
+  return `${formatted} ${cur}`;
+}
+
 function getActiveModelContextMax() {
   const meta = getModelMeta(activeModelId());
   if (meta && Number.isFinite(meta.maxInputTokens) && meta.maxInputTokens > 0) {
@@ -1869,46 +1890,73 @@ function computeRemainingSummary() {
   const q = state.providerQuota;
   const rl = state.rateLimit;
   const cap = Number.isFinite(state.tokenCap) && state.tokenCap > 0 ? state.tokenCap : null;
-  const totalUsed = Number(state.usageTotals?.totalTokens || 0);
+  const totalUsed = Number(q?.providerUsage?.totalTokens ?? state.usageTotals?.totalTokens ?? 0);
 
-  // Priority 1: Live account remaining tokens from provider API (e.g. Tooken / OneAPI / LiteLLM)
-  if (q && q.supported && !q.unlimited && Number.isFinite(q.remainingTokens)) {
-    const ratio = Number.isFinite(q.limitTokens) && q.limitTokens > 0 ? q.remainingTokens / q.limitTokens : 1;
+  // Unlimited API key
+  if (q && q.supported && q.unlimited) {
+    return {
+      mode: 'unlimited',
+      badge: '🪙 ♾',
+      ratio: 1,
+      tooltip: `کلید نامحدود در سرویس (${q.source || 'API'})`,
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
+
+  const hasRemTokens = q && q.supported && Number.isFinite(q.remainingTokens);
+  const hasRemMoney = q && q.supported && Number.isFinite(q.remainingBalance ?? q.remainingUsd);
+  const moneyVal = hasRemMoney ? Number(q.remainingBalance ?? q.remainingUsd) : null;
+
+  // Priority 1: Live remaining tokens from provider API (e.g. tooken.club /v1/balance, OneAPI)
+  // Note: if remainingTokens === 0 BUT the user has positive monetary balance (e.g. RUB balance after bonus tokens), show money!
+  if (hasRemTokens && (q.remainingTokens > 0 || !hasRemMoney || moneyVal <= 0)) {
+    const ratio =
+      Number.isFinite(q.limitTokens) && q.limitTokens > 0
+        ? q.remainingTokens / q.limitTokens
+        : q.remainingTokens > 0
+          ? 1
+          : 0;
+    const bothLabel =
+      hasRemMoney && moneyVal > 0 && q.currency !== 'USD'
+        ? ` · ${formatProviderMoney(moneyVal, q.currency, 2)}`
+        : '';
     return {
       mode: 'provider_tokens',
-      badge: `🪙 ${formatShortTokens(q.remainingTokens)}`,
+      badge: `🪙 ${formatExactTokens(q.remainingTokens)} tok${bothLabel}`,
       ratio,
-      tooltip: `باقی‌مانده حساب سرویس (${q.source || 'API'}): ${Math.round(q.remainingTokens).toLocaleString('en-US')} توکن · توکن آزاد گفتگو: ${formatShortTokens(ctxRemaining)}`,
+      tooltip: `موجودی واقعی حساب در سرویس (${q.source || 'API'}): ${formatExactTokens(q.remainingTokens)} توکن${bothLabel}`,
       ctxRemaining,
       maxCtx,
       ctxRatio
     };
   }
 
-  // Priority 2: Live account remaining USD / credit balance from provider API (OpenRouter, DeepSeek, Billing)
-  if (q && q.supported && !q.unlimited && Number.isFinite(q.remainingUsd)) {
-    const cur = q.currency === 'CNY' ? '¥' : '$';
-    const ratio = Number.isFinite(q.limitUsd) && q.limitUsd > 0 ? q.remainingUsd / q.limitUsd : (q.remainingUsd > 1 ? 1 : 0.2);
+  // Priority 2: Live remaining monetary balance from provider API (tooken.club RUB, OpenRouter USD, DeepSeek, LiteLLM)
+  if (hasRemMoney) {
+    const lim = Number(q.limitBalance ?? q.limitUsd);
+    const ratio = Number.isFinite(lim) && lim > 0 ? moneyVal / lim : moneyVal > 0 ? 1 : 0;
     return {
-      mode: 'provider_usd',
-      badge: `🪙 ${cur}${q.remainingUsd.toFixed(2)} · ${formatShortTokens(ctxRemaining)}`,
-      ratio: Math.min(ratio, ctxRatio),
-      tooltip: `اعتبار باقی‌مانده API (${q.source || 'API'}): ${cur}${q.remainingUsd.toFixed(4)} · توکن آزاد گفتگو: ${Math.round(ctxRemaining).toLocaleString('en-US')} از ${Math.round(maxCtx).toLocaleString('en-US')}`,
+      mode: 'provider_money',
+      badge: `🪙 ${formatProviderMoney(moneyVal, q.currency, 2)}`,
+      ratio,
+      tooltip: `موجودی واقعی حساب در سرویس (${q.source || 'API'}): ${formatProviderMoney(moneyVal, q.currency, 4)}`,
       ctxRemaining,
       maxCtx,
       ctxRatio
     };
   }
 
-  // Priority 3: User-configured manual token package cap minus tracked D1 usage
+  // Priority 3: User-configured manual token package cap minus tracked usage
   if (cap) {
-    const remCap = Math.max(0, cap - totalUsed);
+    const remCap = Math.max(0, cap - Number(state.usageTotals?.totalTokens || 0));
     const ratio = remCap / cap;
     return {
       mode: 'manual_cap',
-      badge: `🪙 ${formatShortTokens(remCap)}`,
+      badge: `🪙 ${formatExactTokens(remCap)} tok`,
       ratio,
-      tooltip: `باقی‌مانده از سقف بسته توکن: ${remCap.toLocaleString('en-US')} از ${cap.toLocaleString('en-US')} توکن · توکن آزاد گفتگو: ${formatShortTokens(ctxRemaining)}`,
+      tooltip: `باقی‌مانده از سقف بسته دستی: ${formatExactTokens(remCap)} از ${formatExactTokens(cap)} توکن`,
       ctxRemaining,
       maxCtx,
       ctxRatio
@@ -1917,24 +1965,38 @@ function computeRemainingSummary() {
 
   // Priority 4: Live response header x-ratelimit-remaining-tokens (TPM / quota window)
   if (rl && Number.isFinite(rl.remainingTokens)) {
-    const ratio = Number.isFinite(rl.limitTokens) && rl.limitTokens > 0 ? rl.remainingTokens / rl.limitTokens : ctxRatio;
+    const ratio = Number.isFinite(rl.limitTokens) && rl.limitTokens > 0 ? rl.remainingTokens / rl.limitTokens : 1;
     return {
       mode: 'ratelimit_tokens',
-      badge: `🪙 ${formatShortTokens(rl.remainingTokens)}`,
+      badge: `🪙 ${formatExactTokens(rl.remainingTokens)} TPM`,
       ratio,
-      tooltip: `سهمیه لحظه‌ای هدر API: ${Math.round(rl.remainingTokens).toLocaleString('en-US')} توکن · توکن آزاد گفتگو: ${formatShortTokens(ctxRemaining)}`,
+      tooltip: `سهمیه لحظه‌ای هدر API: ${formatExactTokens(rl.remainingTokens)} توکن`,
       ctxRemaining,
       maxCtx,
       ctxRatio
     };
   }
 
-  // Priority 5: Active model's live remaining context window tokens (always exact & real for every model)
+  // Initial fetch still in flight
+  if (!q) {
+    return {
+      mode: 'loading',
+      badge: '🪙 …',
+      ratio: 1,
+      tooltip: 'در حال دریافت موجودی واقعی از سرویس API…',
+      ctxRemaining,
+      maxCtx,
+      ctxRatio
+    };
+  }
+
+  // Priority 5 (Honest Fallback — NEVER pretend context window size is remaining account tokens!):
+  // Explicitly show actual consumed tokens when a provider has no balance endpoint.
   return {
-    mode: 'context_window',
-    badge: `🪙 ${formatShortTokens(ctxRemaining)}`,
-    ratio: ctxRatio,
-    tooltip: `توکن باقی‌مانده پنجره مدل (${activeModelId()}): ${Math.round(ctxRemaining).toLocaleString('en-US')} از ${Math.round(maxCtx).toLocaleString('en-US')} توکن (کلیک برای جزئیات و استعلام API)`,
+    mode: 'used_honest',
+    badge: `🪙 مصرف: ${formatExactTokens(totalUsed)}`,
+    ratio: 1,
+    tooltip: `کل مصرف ثبت‌شده: ${formatExactTokens(totalUsed)} توکن (این درگاه اندپوینت مانده‌حساب ندارد — کلیک برای جزئیات یا تعیین سقف بسته)`,
     ctxRemaining,
     maxCtx,
     ctxRatio
@@ -1976,38 +2038,50 @@ function renderQuotaModalBody() {
 
   // Section 1: Provider Account Balance / Quota
   let providerHtml = '';
+  const moneyAmt = Number(q?.remainingBalance ?? q?.remainingUsd);
+  const hasMoney = q && q.supported && Number.isFinite(moneyAmt);
+  const hasTok = q && q.supported && Number.isFinite(q.remainingTokens);
   if (!q) {
     providerHtml = `<div style="font-size:12px;color:#9aa1ae">در حال بررسی اندپوینت سهمیه <code style="direction:ltr">${esc(activeHost)}</code>…</div>`;
   } else if (q.supported && q.unlimited) {
     providerHtml = `<div style="font-size:13px;color:#7ee2a8;font-weight:700">♾ نامحدود (Unlimited Key)</div>
-      <div style="font-size:11px;color:#8e95a2;margin-top:4px">منبع: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · مصرف ثبت‌شده در کلید: ${Math.round(q.usedTokens).toLocaleString('en-US')} توکن` : ''}</div>`;
-  } else if (q.supported && Number.isFinite(q.remainingTokens)) {
-    const pct = Number.isFinite(q.limitTokens) && q.limitTokens > 0
-      ? Math.max(0, Math.min(100, Math.round((q.remainingTokens / q.limitTokens) * 100)))
-      : 100;
-    const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
+      <div style="font-size:11px;color:#8e95a2;margin-top:4px">منبع: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · مصرف کلید: ${formatExactTokens(q.usedTokens)} توکن` : ''}</div>`;
+  } else if (hasTok || hasMoney) {
+    let rows = '';
+    if (hasTok) {
+      const pct = Number.isFinite(q.limitTokens) && q.limitTokens > 0
+        ? Math.max(0, Math.min(100, Math.round((q.remainingTokens / q.limitTokens) * 100)))
+        : (q.remainingTokens > 0 ? 100 : 0);
+      const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
+      rows += `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${formatExactTokens(q.remainingTokens)} tok</span>
+          <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(q.limitTokens) ? `از ${formatExactTokens(q.limitTokens)}` : 'توکن باقی‌مانده در سایت'}</span>
+        </div>
+        <div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>`;
+    }
+    if (hasMoney) {
+      const limMoney = Number(q.limitBalance ?? q.limitUsd);
+      const usedMoney = Number(q.usedBalance ?? q.usedUsd);
+      const pct = Number.isFinite(limMoney) && limMoney > 0
+        ? Math.max(0, Math.min(100, Math.round((moneyAmt / limMoney) * 100)))
+        : (moneyAmt > 0 ? 100 : 0);
+      const barCls = pct <= 10 ? 'low' : pct <= 28 ? 'warn' : '';
+      rows += `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:${hasTok ? '10px' : '0'}">
+          <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${formatProviderMoney(moneyAmt, q.currency, 4)}</span>
+          <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(limMoney) && limMoney > 0 ? `از ${formatProviderMoney(limMoney, q.currency, 2)}` : 'تراز مالی فعال'}</span>
+        </div>
+        ${!hasTok ? `<div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>` : ''}
+        ${Number.isFinite(q.reservedBalance) && q.reservedBalance > 0 ? `<div style="font-size:11px;color:#f5b14c;margin-top:4px;direction:ltr;text-align:left">Reserved hold: ${formatProviderMoney(q.reservedBalance, q.currency, 4)}</div>` : ''}
+        ${Number.isFinite(usedMoney) && usedMoney > 0 ? `<div style="font-size:11px;color:#8e95a2;margin-top:4px">هزینه مصرف‌شده در سرویس: <b style="direction:ltr">${formatProviderMoney(usedMoney, q.currency, 4)}</b></div>` : ''}`;
+    }
     providerHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-        <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${Math.round(q.remainingTokens).toLocaleString('en-US')} tok</span>
-        <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(q.limitTokens) ? `از ${Math.round(q.limitTokens).toLocaleString('en-US')}` : 'موجودی کلید'}</span>
-      </div>
-      <div class="quota-meter"><i class="${barCls}" style="width:${pct}%"></i></div>
-      <div style="font-size:11px;color:#8e95a2;margin-top:6px">منبع زنده: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · مصرف‌شده: ${Math.round(q.usedTokens).toLocaleString('en-US')} توکن` : ''}</div>`;
-  } else if (q.supported && Number.isFinite(q.remainingUsd)) {
-    const cur = q.currency === 'CNY' ? '¥' : '$';
-    const pct = Number.isFinite(q.limitUsd) && q.limitUsd > 0
-      ? Math.max(0, Math.min(100, Math.round((q.remainingUsd / q.limitUsd) * 100)))
-      : 100;
-    providerHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-        <span style="font-size:18px;font-weight:700;color:#eef2ff;direction:ltr">${cur}${q.remainingUsd.toFixed(4)}</span>
-        <span style="font-size:11.5px;color:#9aa1ae;direction:ltr">${Number.isFinite(q.limitUsd) ? `از ${cur}${q.limitUsd.toFixed(2)}` : 'اعتبار فعال'}</span>
-      </div>
-      <div class="quota-meter"><i style="width:${pct}%"></i></div>
-      <div style="font-size:11px;color:#8e95a2;margin-top:6px">منبع زنده: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedUsd) ? ` · مصرف‌شده: ${cur}${q.usedUsd.toFixed(4)}` : ''}</div>`;
+      ${rows}
+      <div style="font-size:11px;color:#8e95a2;margin-top:6px">منبع مستقیم: <code style="direction:ltr">${esc(q.source || activeHost)}</code>${Number.isFinite(q.usedTokens) ? ` · کل مصرف در سرویس: <b style="direction:ltr">${formatExactTokens(q.usedTokens)}</b> توکن` : ''}</div>`;
   } else {
     providerHtml = `<div style="font-size:12px;color:#b8c0cf;line-height:1.7">
-      درگاه <code style="direction:ltr">${esc(activeHost)}</code> اندپوینت عمومی مانده‌حساب کلید را بازنگرداند؛ بنابراین توکن آزاد پنجره مدل و شمارنده دقیق مصرف توکن در D1 فعال است. (در صورت داشتن سقف بسته، در پایین وارد کنید تا خودکار کسر شود.)
+      درگاه <code style="direction:ltr">${esc(activeHost)}</code> اندپوینت عمومی مانده‌حساب کلید را بازنگرداند؛ بنابراین در نوار بالا به جای عدد فرضی، <b>مصرف واقعی ثبت‌شده</b> نمایش داده می‌شود. (در صورت داشتن سقف بسته، در پایین وارد کنید تا خودکار کسر شود.)
     </div>`;
   }
 
