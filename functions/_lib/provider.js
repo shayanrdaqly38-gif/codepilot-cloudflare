@@ -228,9 +228,13 @@ export const DEFAULT_AGENT_CONFIG = Object.freeze({
   goal: '',
   marathon: {
     active: false,
+    paused: false,
     goal: '',
     durationH: 0,
-    startedAt: null
+    startedAt: null,
+    maxCycles: 30,
+    cycle: 0,
+    conversationId: ''
   }
 });
 
@@ -282,14 +286,29 @@ function normalizeMarathon(m, baseM = {}) {
   const src = m && typeof m === 'object' ? m : {};
   const b = baseM && typeof baseM === 'object' ? baseM : {};
   const durNum = Number(src.durationH);
+  const maxCycNum = Math.floor(Number(src.maxCycles));
+  const cycNum = Math.floor(Number(src.cycle));
   return {
     active: typeof src.active === 'boolean' ? src.active : !!b.active,
+    paused: typeof src.paused === 'boolean' ? src.paused : !!b.paused,
     goal: typeof src.goal === 'string' ? src.goal.slice(0, 600).trim() : (b.goal || ''),
-    durationH: Number.isFinite(durNum) ? Math.min(24, Math.max(0, durNum)) : (Number(b.durationH) || 0),
+    durationH: Number.isFinite(durNum) ? Math.min(24, Math.max(0, Math.round(durNum * 100) / 100)) : (Number(b.durationH) || 0),
     startedAt:
       Number.isFinite(Number(src.startedAt)) && Number(src.startedAt) > 0
         ? Number(src.startedAt)
-        : (b.startedAt || null)
+        : (b.startedAt || null),
+    maxCycles:
+      Number.isFinite(maxCycNum) && maxCycNum >= 1
+        ? Math.min(120, maxCycNum)
+        : (Number.isFinite(Number(b.maxCycles)) && Number(b.maxCycles) >= 1 ? Math.min(120, Math.floor(Number(b.maxCycles))) : 30),
+    cycle:
+      Number.isFinite(cycNum) && cycNum >= 0
+        ? Math.min(999, cycNum)
+        : (Number.isFinite(Number(b.cycle)) && Number(b.cycle) >= 0 ? Math.floor(Number(b.cycle)) : 0),
+    conversationId:
+      typeof src.conversationId === 'string'
+        ? src.conversationId.slice(0, 64).trim()
+        : (typeof b.conversationId === 'string' ? b.conversationId.slice(0, 64).trim() : '')
   };
 }
 
@@ -333,25 +352,31 @@ export function resolvePowerExecutionPlan(agentConfig = {}, reasoningEffort = nu
     maxSteps = Math.min(Math.max(baseMaxSteps, spec.stepFloor), spec.stepCap);
   }
 
+  const marathonActive = Boolean(cfg.marathon?.active && !cfg.marathon?.paused);
+  if (marathonActive) {
+    maxSteps = Math.max(maxSteps, 36);
+  }
+
   const detailRank = POWER_LEVEL_RANK[detail] ?? 1;
   const ambitionRank = POWER_LEVEL_RANK[ambition] ?? 1;
   const sensitivityRank = POWER_LEVEL_RANK[sensitivity] ?? 1;
   const staminaRank = POWER_LEVEL_RANK[stamina] ?? 1;
-  const peakRank = Math.max(staminaRank, detailRank, ambitionRank, sensitivityRank);
+  const peakRank = Math.max(staminaRank, detailRank, ambitionRank, sensitivityRank, marathonActive ? 2 : 0);
 
   const thinkingDeltaLimit = detailRank >= 4 ? 40_000 : detailRank >= 2 ? 26_000 : 16_000;
   const thinkToolLimit = detailRank >= 4 ? 12_000 : detailRank >= 2 ? 8_000 : 6_000;
   const autoRepairValidation =
     (cfg.mode === 'auto-edit' || cfg.mode === 'full-auto') &&
-    (staminaRank >= 2 || sensitivityRank >= 2 || ambitionRank >= 3);
+    (marathonActive || staminaRank >= 2 || sensitivityRank >= 2 || ambitionRank >= 3);
   const timeoutMs = Math.max(
     spec.timeoutMs,
+    marathonActive ? 150_000 : 0,
     detailRank >= 4 || ambitionRank >= 4 ? 175_000 : detailRank >= 2 ? 145_000 : 120_000
   );
 
   return {
     maxSteps: Math.max(4, maxSteps),
-    maxFileEdits: spec.maxFileEdits,
+    maxFileEdits: marathonActive ? Math.max(spec.maxFileEdits, 140) : spec.maxFileEdits,
     contextBudget: Math.max(cfg.contextBudget || 24_000, spec.contextFloor),
     maxTurnInputChars: spec.maxTurnInputChars,
     timeoutMs: Math.min(timeoutMs, 180_000),

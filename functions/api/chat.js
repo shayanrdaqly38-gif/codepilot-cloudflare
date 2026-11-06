@@ -688,10 +688,19 @@ export async function onRequestPost(context) {
       effectiveEnv._subreq = subreqTracker;
       const incomingPower =
         data?.powerProfile && typeof data.powerProfile === 'object' ? data.powerProfile : {};
+      const incomingMarathon = data?.marathon && typeof data.marathon === 'object' ? data.marathon : null;
+      const marathonIsLive = Boolean(incomingMarathon?.active && !incomingMarathon?.paused);
+      const requestedAgentMode = data?.agentMode;
+      // Prevent mode contradiction: an active Marathon run requires write/patch/shell capability unless user explicitly ran `/plan` or `/suggest` without marathon
+      const effectiveRequestedMode =
+        marathonIsLive && (requestedAgentMode === 'plan' || requestedAgentMode === 'suggest')
+          ? 'full-auto'
+          : requestedAgentMode;
+
       const agentConfig = normalizeAgentConfig(
         {
           ...(effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG),
-          ...(data?.agentMode ? { mode: data.agentMode } : {}),
+          ...(effectiveRequestedMode ? { mode: effectiveRequestedMode } : {}),
           ...(typeof data?.networkAccess === 'boolean' ? { networkAccess: data.networkAccess } : {}),
           ...(typeof data?.shellAccess === 'boolean' ? { shellAccess: data.shellAccess } : {}),
           ...(data?.temperature !== undefined ? { temperature: data.temperature } : {}),
@@ -703,7 +712,7 @@ export async function onRequestPost(context) {
           ...(data?.detailThinking ? { detailThinking: data.detailThinking } : {}),
           ...(data?.ambitionLevel ? { ambitionLevel: data.ambitionLevel } : {}),
           ...(data?.humanSensitivity ? { humanSensitivity: data.humanSensitivity } : {}),
-          ...(data?.marathon && typeof data.marathon === 'object' ? { marathon: data.marathon } : {})
+          ...(incomingMarathon ? { marathon: incomingMarathon } : {})
         },
         effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG
       );
@@ -1295,11 +1304,19 @@ export async function onRequestPost(context) {
             .bind(usedModel, stats.count, Date.now(), Date.now(), conversation.id, identity.owner)
             .run();
 
+          const marathonGoalDone = Boolean(
+            agentConfig.marathon?.active && /\[MARATHON_COMPLETE\]/i.test(String(finalText || ''))
+          );
+          const displayFinalText = marathonGoalDone
+            ? String(finalText || '').replace(/\s*\[MARATHON_COMPLETE\]\s*/gi, '\n\n🏁 **ماراتن به هدف نهایی رسید.**').trim()
+            : finalText;
+
           const latest = await getConversation(env, identity.owner, conversation.id);
           const validation = turn.validation.filter((entry) => !entry.ok || entry.warnings.length);
           const effectiveContextTokens = lastPromptTokens > 0 ? lastPromptTokens : Math.ceil(totalInputChars / 2);
           send('done', {
-            content: finalText,
+            content: displayFinalText,
+            marathonCompleted: marathonGoalDone,
             model: usedModel,
             reasoningEffort: appliedEffort,
             reasoningTokens: totalReasoningTokens,
