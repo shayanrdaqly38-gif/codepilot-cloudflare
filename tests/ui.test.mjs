@@ -497,6 +497,24 @@ assert.ok($('slashMenu').classList.contains('open'), 'typing /re opens slash com
 assert.ok($('slashMenu').textContent.includes('/review'), 'slash palette filters /review');
 window.closeFloatingPalettes();
 
+// --- 4-Axis AI Power & Overdrive Booster (#powerBoostBtn + #powerModal + untouched #thinkBtn)
+assert.ok($('powerBoostBtn') && $('powerModal'), 'power booster pill and modal exist');
+const effortLabelBefore = $('thinkBtn').textContent;
+window.openPowerModal();
+assert.ok($('powerModal').classList.contains('open'), 'power modal opens');
+assert.equal(window.document.querySelectorAll('#powerAxesContainer .power-axis-card').length, 4, 'renders all 4 independent power axes');
+assert.equal(window.document.querySelectorAll('#powerAxesContainer .power-seg-btn').length, 24, 'renders 6 levels for each of the 4 axes');
+window.setPowerAxisDraft('workStamina', 'very-hard');
+window.setPowerAxisDraft('ambitionLevel', 'ultra-code');
+window.setPowerAxisDraft('detailThinking', 'max');
+window.setPowerAxisDraft('humanSensitivity', 'hard');
+await window.savePowerConfigFromModal();
+assert.equal($('powerBoostBtn').dataset.tier, 'ultra-code', 'power pill reflects highest active tier');
+assert.ok($('powerBoostBtn').textContent.includes('اولترا'), 'power pill shows Ultra Code badge');
+assert.equal($('thinkBtn').textContent, effortLabelBefore, 'main Effort button (#thinkBtn) stays 100% untouched');
+await window.executeSlashCommand('/power medium');
+assert.equal($('powerBoostBtn').dataset.tier, 'medium', '/power medium resets power engine cleanly');
+
 // --- atomic multi-file GitHub commit (single Git Data API commit, zero concurrent PUT /contents races)
 window.localStorage.setItem('cp-gh', JSON.stringify({ owner: 'u', repo: 'r', branch: 'main', token: 'ghp_test_local_only' }));
 window.restoreGitHub();
