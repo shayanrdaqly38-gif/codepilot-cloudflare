@@ -1780,7 +1780,7 @@ function refreshDevPanel() {
   const p = G && G.player;
   const boss = G && G.boss;
   const lines = [
-    `FPS: ${devFps.toFixed(1)} | STATE: ${state}`,
+    `FPS: ${devFps.toFixed(1)} | STATE: ${state} | LV: ${level ? level.idx : '-'} (${level && THEMES[level.theme] ? THEMES[level.theme].name : ''})`,
     `pos: ${p ? Math.round(p.x) : '-'},${p ? Math.round(p.y) : '-'} v: ${p ? Math.round(p.vx) : '-'},${p ? Math.round(p.vy) : '-'}`,
     `ground: ${p ? p.grounded : '-'} inv: ${p ? p.invT.toFixed(2) : '-'} star: ${p ? p.starT.toFixed(1) : '-'}`,
     `hearts: ${G ? G.run.hearts : '-'} lives: ${G ? G.run.lives : '-'} coins: ${G ? G.run.coins : '-'}`,
