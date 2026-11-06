@@ -15,7 +15,13 @@
 //   5. Persist the whole assistant/tool group before streaming `done`.
 
 import { route } from '../_lib/api.js';
-import { DEFAULT_AGENT_CONFIG, isTookenUrl, normalizeAgentConfig, resolveEffectiveEnv } from '../_lib/provider.js';
+import {
+  DEFAULT_AGENT_CONFIG,
+  isTookenUrl,
+  normalizeAgentConfig,
+  resolveEffectiveEnv,
+  resolvePowerExecutionPlan
+} from '../_lib/provider.js';
 import { resolveUploadRefs, hydrateUploadParts } from '../_lib/uploads.js';
 import {
   callModel,
@@ -362,15 +368,16 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
     case 'think': {
       const thought = String(args.thought || '').trim();
       const plan = String(args.plan || '').trim();
+      const maxThoughtChars = turn?.thinkToolLimit || 6000;
       if (thought && send) {
         send('thinking', {
-          thought: redactSecrets(thought, envSecrets(env)).slice(0, 6000),
-          plan: plan ? redactSecrets(plan, envSecrets(env)).slice(0, 3000) : ''
+          thought: redactSecrets(thought, envSecrets(env)).slice(0, maxThoughtChars),
+          plan: plan ? redactSecrets(plan, envSecrets(env)).slice(0, Math.round(maxThoughtChars / 2)) : ''
         });
       }
       return {
         ok: true,
-        text: plan ? `Thought recorded. Plan:\n${plan.slice(0, 1500)}` : 'Thought recorded. Proceed with execution.'
+        text: plan ? `Thought recorded. Plan:\n${plan.slice(0, 2500)}` : 'Thought recorded. Proceed with execution.'
       };
     }
 
@@ -451,7 +458,7 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       turn.validation.push({ path, ...validation });
       turn.touched.add(path);
       turn.editCount += 1;
-      if (turn.editCount > MAX_TOOL_LOOPS_PER_FILE * 6) {
+      if (turn.editCount > (turn.maxFileEdits || MAX_TOOL_LOOPS_PER_FILE * 6)) {
         return { ok: false, text: 'Too many edits in one turn. Stop and summarize what you changed.' };
       }
 
@@ -627,13 +634,23 @@ export async function onRequestPost({ request, env }) {
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
+      const incomingPower =
+        data?.powerProfile && typeof data.powerProfile === 'object' ? data.powerProfile : {};
       const agentConfig = normalizeAgentConfig(
         {
           ...(effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG),
           ...(data?.agentMode ? { mode: data.agentMode } : {}),
           ...(typeof data?.networkAccess === 'boolean' ? { networkAccess: data.networkAccess } : {}),
           ...(typeof data?.shellAccess === 'boolean' ? { shellAccess: data.shellAccess } : {}),
-          ...(data?.temperature !== undefined ? { temperature: data.temperature } : {})
+          ...(data?.temperature !== undefined ? { temperature: data.temperature } : {}),
+          ...(incomingPower.workStamina ? { workStamina: incomingPower.workStamina } : {}),
+          ...(incomingPower.detailThinking ? { detailThinking: incomingPower.detailThinking } : {}),
+          ...(incomingPower.ambitionLevel ? { ambitionLevel: incomingPower.ambitionLevel } : {}),
+          ...(incomingPower.humanSensitivity ? { humanSensitivity: incomingPower.humanSensitivity } : {}),
+          ...(data?.workStamina ? { workStamina: data.workStamina } : {}),
+          ...(data?.detailThinking ? { detailThinking: data.detailThinking } : {}),
+          ...(data?.ambitionLevel ? { ambitionLevel: data.ambitionLevel } : {}),
+          ...(data?.humanSensitivity ? { humanSensitivity: data.humanSensitivity } : {})
         },
         effectiveEnv._agentConfig || DEFAULT_AGENT_CONFIG
       );
@@ -656,17 +673,16 @@ export async function onRequestPost({ request, env }) {
         effectiveEnv
       );
       const thinking = Boolean(reasoningEffort && reasoningEffort !== 'none');
-      const baseMaxSteps =
-        agentConfig.mode === 'full-auto'
-          ? Math.max(agentConfig.maxSteps || 24, 28)
-          : reasoningEffort === 'max' || reasoningEffort === 'xhigh'
-            ? 28
-            : reasoningEffort === 'high'
-              ? MAX_THINKING_LOOP_STEPS
-              : reasoningEffort === 'medium'
-                ? Math.max(agentConfig.maxSteps || 20, 20)
-                : agentConfig.maxSteps || MAX_LOOP_STEPS;
-      const maxSteps = Math.min(Math.max(baseMaxSteps, 4), 36);
+      const powerPlan = resolvePowerExecutionPlan(agentConfig, reasoningEffort);
+      const maxSteps = powerPlan.maxSteps;
+      if (
+        agentConfig.workStamina &&
+        agentConfig.workStamina !== 'medium' &&
+        agentConfig.workStamina !== 'low' &&
+        powerPlan.contextBudget > (Number(effectiveEnv.CONTEXT_BUDGET_TOKENS) || 0)
+      ) {
+        effectiveEnv.CONTEXT_BUDGET_TOKENS = String(powerPlan.contextBudget);
+      }
 
       const MUTATING_TOOL_NAMES = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
       const NET_TOOL_NAMES = new Set(['web_search', 'fetch_url']);
@@ -711,7 +727,9 @@ export async function onRequestPost({ request, env }) {
         touched: new Set(),
         deleted: new Set(),
         workspaceChanged: false,
-        editCount: 0
+        editCount: 0,
+        maxFileEdits: powerPlan.maxFileEdits,
+        thinkToolLimit: powerPlan.thinkToolLimit
       };
 
       const linux = linuxRunnerEnabled(env);
@@ -744,7 +762,9 @@ export async function onRequestPost({ request, env }) {
             sandbox: sb,
             linuxRunner: linux,
             reasoningEffort,
-            reasoningSupported: reasoningSpec.supported
+            reasoningSupported: reasoningSpec.supported,
+            maxSteps,
+            powerProfile: powerPlan.axes
           });
 
           const history = await listMessages(env, conversation.id);
@@ -794,10 +814,12 @@ export async function onRequestPost({ request, env }) {
           messages.push(...working.recent);
           await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
 
+          let autoRepairAttempts = 0;
+
           while (steps < maxSteps) {
             steps += 1;
             const inputChars = estimateMessagesTextChars(messages);
-            if (inputChars > MAX_TURN_INPUT_CHARS) {
+            if (inputChars > powerPlan.maxTurnInputChars) {
               finalText = 'حجم زمینه برای این درخواست زیاد شد. لطفاً از دستور `/compact` استفاده کنید یا گفتگوی تازه‌ای بسازید.';
               break;
             }
@@ -807,6 +829,7 @@ export async function onRequestPost({ request, env }) {
               ...(selectedModel ? { model: selectedModel } : {}),
               ...(reasoningEffort !== null ? { reasoningEffort } : {}),
               temperature: agentConfig.temperature ?? 0.25,
+              timeoutMs: powerPlan.timeoutMs,
               messages,
               tools,
               onDelta: (chunk) => {
@@ -814,7 +837,7 @@ export async function onRequestPost({ request, env }) {
                 deltaChars += chunk.text.length;
                 if (chunk.type === 'content') {
                   send('delta', { text: chunk.text, step: steps });
-                } else if (chunk.type === 'reasoning' && deltaChars <= 16_000) {
+                } else if (chunk.type === 'reasoning' && deltaChars <= powerPlan.thinkingDeltaLimit) {
                   send('thinking_delta', { text: chunk.text, step: steps });
                 }
               }
@@ -900,6 +923,31 @@ export async function onRequestPost({ request, env }) {
                 });
               }
               continue;
+            }
+
+            // Autonomous Self-Repair Gate when boosted Power Engine is active:
+            // If any modified file currently has a syntax/validation error, do not let the turn
+            // stop prematurely — feed the exact validation errors back into the loop to fix them!
+            if (powerPlan.autoRepairValidation && autoRepairAttempts < 2 && steps < maxSteps) {
+              const brokenFiles = [];
+              for (const p of turn.touched) {
+                if (p.startsWith('(') || workspace.files[p] === undefined) continue;
+                const check = validateFile(p, String(workspace.files[p]));
+                if (!check.ok && check.errors?.length) {
+                  brokenFiles.push(`${p}: ${check.errors.join(' | ')}`);
+                }
+              }
+              if (brokenFiles.length > 0) {
+                autoRepairAttempts += 1;
+                const interim = String(assistant.content || '').trim();
+                if (interim) messages.push({ role: 'assistant', content: interim });
+                messages.push({
+                  role: 'user',
+                  content: `[کنترل کیفیت خودکار موتور قدرت]: پیش از پایان کار، فایل‌های زیر هنوز خطای اعتبارسنجی دارند. لطفاً همین الان با apply_patch یا write_file آن‌ها را اصلاح و بررسی کن:\n${brokenFiles.join('\n')}`
+                });
+                send('status', { phase: 'auto-repair', step: steps, brokenFiles: brokenFiles.length });
+                continue;
+              }
             }
 
             finalText = String(assistant.content || '').trim() || 'انجام شد.';
@@ -989,6 +1037,8 @@ export async function onRequestPost({ request, env }) {
             validation,
             commands: turn.commands,
             steps,
+            maxSteps,
+            powerProfile: powerPlan.axes,
             sandbox: sb,
             linuxRunner: linux,
             context: {
