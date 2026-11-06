@@ -12,6 +12,7 @@ import { ensureSchema } from '../_lib/schema.js';
 import { sandboxEnabled, linuxRunnerEnabled, realExecutionMode } from '../_lib/sandbox.js';
 import { authenticate } from '../_lib/auth.js';
 import { callModel, modelEndpoint } from '../_lib/model.js';
+import { resolveEffectiveEnv } from '../_lib/provider.js';
 
 const TEAM_DOMAIN = /^[a-z0-9-]+\.cloudflareaccess\.com$/;
 
@@ -89,31 +90,36 @@ export async function onRequestGet({ request, env }) {
       }
       if (!identity) {
         probe = { ok: false, error: 'برای تست مدل باید وارد شده باشید.' };
-      } else if (!env.MODEL_API_KEY) {
-        probe = { ok: false, error: 'MODEL_API_KEY تنظیم نشده است.' };
       } else {
-        const started = Date.now();
-        try {
-          const reply = await callModel(env, {
-            messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
-            max_tokens: 8,
-            temperature: 0
-          });
-          probe = {
-            ok: true,
-            endpoint: modelEndpoint(env),
-            model: reply.model,
-            latencyMs: Date.now() - started,
-            sample: String(reply.message?.content || '').slice(0, 40)
-          };
-        } catch (error) {
-          probe = {
-            ok: false,
-            endpoint: modelEndpoint(env),
-            code: error?.code || 'probe_failed',
-            error: error?.message || 'تست مدل شکست خورد.',
-            latencyMs: Date.now() - started
-          };
+        const probeEnv = await resolveEffectiveEnv(env, identity.owner);
+        if (!probeEnv.MODEL_API_KEY) {
+          probe = { ok: false, error: 'MODEL_API_KEY تنظیم نشده است.' };
+        } else {
+          const started = Date.now();
+          try {
+            const requestedProbeModel = url.searchParams.get('model') || undefined;
+            const reply = await callModel(probeEnv, {
+              ...(requestedProbeModel ? { model: requestedProbeModel } : {}),
+              messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+              max_tokens: 8,
+              temperature: 0
+            });
+            probe = {
+              ok: true,
+              endpoint: modelEndpoint(probeEnv),
+              model: reply.model,
+              latencyMs: Date.now() - started,
+              sample: String(reply.message?.content || '').slice(0, 40)
+            };
+          } catch (error) {
+            probe = {
+              ok: false,
+              endpoint: modelEndpoint(probeEnv),
+              code: error?.code || 'probe_failed',
+              error: error?.message || 'تست مدل شکست خورد.',
+              latencyMs: Date.now() - started
+            };
+          }
         }
       }
     }

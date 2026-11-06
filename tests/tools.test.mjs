@@ -913,3 +913,167 @@ test('tooken.club native Effort capabilities, live /v1/models parsing, and pure 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('universal auto-discovery finds exact Effort levels for brand-new models and supports custom encrypted API providers', async () => {
+  const modelLib = await import(`${root}/_lib/model.js`);
+  const configApi = await import(`${root}/api/config.js`);
+  const modelsApi = await import(`${root}/api/models.js`);
+  const env = makeEnv(keys);
+  const authRes = await auth.onRequestGet(ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys) } }), env));
+  const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
+
+  // 1. Regression fix: boolean `reasoning: true` from `/v1/models` must NEVER shrink Claude's 7 levels to 3!
+  const sonnetBool = modelLib.parseProviderModelItem(
+    { id: 'claude-sonnet-5-5', reasoning: true },
+    { isTooken: true }
+  );
+  assert.deepEqual(
+    sonnetBool.reasoning.levels,
+    ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    'boolean reasoning: true must preserve full 7 tooken.club levels instead of 3'
+  );
+
+  const originalFetch = globalThis.fetch;
+  try {
+    // 2. Saving an SSRF Base URL (`http://127.0.0.1:8000/v1`) is blocked
+    const ssrfRes = await configApi.onRequestPost(
+      ctx(
+        req('/api/config', {
+          method: 'POST',
+          body: { baseUrl: 'http://127.0.0.1:8000/v1', apiKey: 'sk-test-1234567890123456' },
+          headers: { Cookie: cookie }
+        }),
+        env
+      )
+    );
+    assert.equal(ssrfRes.status, 400);
+
+    // 3. Switching to a custom external API (e.g. OpenRouter/custom gateway) encrypts key at rest
+    //    and loads ONLY that provider's live models (no hardcoded tooken.club models mixed in)
+    globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      if (u === 'https://api.custom-llm.example/v1/models') {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: 'brand-new-omega-7', name: 'Omega 7', context_length: 256000 },
+              { id: 'brand-new-grid-r2', name: 'Grid R2' },
+              { id: 'fast-non-thinker', name: 'Fast Non-Thinker', supported_parameters: ['tools', 'temperature'] }
+            ]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (u.startsWith('https://api.custom-llm.example/v1/models/')) {
+        return new Response('not found', { status: 404 });
+      }
+      if (u === 'https://api.custom-llm.example/v1/chat/completions') {
+        const body = JSON.parse(init.body);
+        // Model A (`brand-new-omega-7`): returns enum validation error listing its 5 exact levels!
+        if (body.model === 'brand-new-omega-7' && body.reasoning_effort === '__probe_levels__') {
+          return new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  "Invalid value '__probe_levels__' for 'reasoning_effort'. Supported values are: 'minimal', 'low', 'medium', 'high', 'xhigh'."
+              }
+            }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        // Model B (`brand-new-grid-r2`): returns generic 400 without listing values, accepts only `low`, `medium`, `high`!
+        if (body.model === 'brand-new-grid-r2') {
+          if (['low', 'medium', 'high'].includes(body.reasoning_effort)) {
+            return new Response(
+              JSON.stringify({ choices: [{ message: { role: 'assistant', content: '1' } }] }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          return new Response(JSON.stringify({ error: 'bad request' }), { status: 400 });
+        }
+        // Model C (`brand-new-chat-plain`): rejects `reasoning_effort` as unsupported parameter
+        if (body.model === 'brand-new-chat-plain') {
+          return new Response(
+            JSON.stringify({ error: { message: 'Unknown parameter: reasoning_effort is not supported for this model' } }),
+            { status: 400 }
+          );
+        }
+      }
+      return new Response('unexpected: ' + u, { status: 500 });
+    };
+
+    const saveRes = await (
+      await configApi.onRequestPost(
+        ctx(
+          req('/api/config', {
+            method: 'POST',
+            body: { baseUrl: 'https://api.custom-llm.example/v1/', apiKey: 'sk-custom-secret-key-9876' },
+            headers: { Cookie: cookie }
+          }),
+          env
+        )
+      )
+    ).json();
+
+    assert.equal(saveRes.ok, true);
+    assert.equal(saveRes.provider.customActive, true);
+    assert.equal(saveRes.provider.effectiveBaseUrl, 'https://api.custom-llm.example/v1');
+    assert.equal(saveRes.provider.hasCustomKey, true);
+    assert.equal(saveRes.provider.keyHint, 'sk-c••••9876');
+    assert.equal(JSON.stringify(saveRes).includes('sk-custom-secret-key-9876'), false, 'plaintext API key must never be returned');
+    assert.deepEqual(
+      saveRes.models.map((m) => m.id),
+      ['brand-new-grid-r2', 'brand-new-omega-7', 'fast-non-thinker'],
+      'custom provider must show its own real models, not hardcoded catalog models'
+    );
+    const nonThinker = saveRes.models.find((m) => m.id === 'fast-non-thinker');
+    assert.equal(nonThinker.reasoning.supported, false, 'supported_parameters without reasoning disables effort automatically');
+
+    // 4. Auto-discover brand-new Model A (`brand-new-omega-7`) via single 0-token schema probe -> exact 5 levels!
+    const discA = await (
+      await modelsApi.onRequestPost(
+        ctx(
+          req('/api/models', { method: 'POST', body: { model: 'brand-new-omega-7' }, headers: { Cookie: cookie } }),
+          env
+        )
+      )
+    ).json();
+    assert.equal(discA.ok, true);
+    assert.deepEqual(discA.reasoning.levels, ['minimal', 'low', 'medium', 'high', 'xhigh']);
+    assert.equal(discA.reasoning.via, 'schema-enum');
+
+    // 5. Auto-discover brand-new Model B (`brand-new-grid-r2`) via parallel live probe -> exact 3 levels!
+    const discB = await (
+      await modelsApi.onRequestPost(
+        ctx(
+          req('/api/models', { method: 'POST', body: { model: 'brand-new-grid-r2' }, headers: { Cookie: cookie } }),
+          env
+        )
+      )
+    ).json();
+    assert.deepEqual(discB.reasoning.levels, ['low', 'medium', 'high']);
+    assert.equal(discB.reasoning.via, 'parallel-probe');
+
+    // 6. Auto-discover brand-new Model C (`brand-new-chat-plain`) -> unsupported (`levels: []`)!
+    const discC = await (
+      await modelsApi.onRequestPost(
+        ctx(
+          req('/api/models', { method: 'POST', body: { model: 'brand-new-chat-plain' }, headers: { Cookie: cookie } }),
+          env
+        )
+      )
+    ).json();
+    assert.equal(discC.reasoning.supported, false);
+    assert.deepEqual(discC.reasoning.levels, []);
+
+    // 7. Subsequent GET /api/models returns the D1-persisted discovered levels automatically!
+    const listAfter = await (
+      await modelsApi.onRequestGet(ctx(req('/api/models', { headers: { Cookie: cookie } }), env))
+    ).json();
+    const omegaAfter = listAfter.models.find((m) => m.id === 'brand-new-omega-7');
+    assert.deepEqual(omegaAfter.reasoning.levels, ['minimal', 'low', 'medium', 'high', 'xhigh']);
+    assert.equal(omegaAfter.reasoning.source, 'discovered');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
