@@ -242,6 +242,9 @@ export async function fetchExternalUrl(
   env,
   { url, method = 'GET', headers = null, body = null, maxChars = 16_000, externalSignal = null } = {}
 ) {
+  if (isCancelled(externalSignal)) {
+    return { ok: false, text: 'Cancelled by user.' };
+  }
   const secrets = envSecrets(env || {});
   const upperMethod = String(method || 'GET').trim().toUpperCase();
   if (!ALLOWED_METHODS.has(upperMethod)) {
@@ -495,6 +498,9 @@ async function searchHackerNews(query, externalSignal = null) {
  * DuckDuckGo Instant Answers, and Hacker News Algolia.
  */
 export async function searchWeb(env, { query, limit = 8, externalSignal = null } = {}) {
+  if (isCancelled(externalSignal)) {
+    return { ok: false, results: [], text: 'Cancelled by user.' };
+  }
   const q = String(query || '').trim();
   if (!q) return { ok: false, results: [], text: 'Error: search query is empty.' };
   if (q.length > 400) return { ok: false, results: [], text: 'Error: search query is too long.' };
