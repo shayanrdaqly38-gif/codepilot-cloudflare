@@ -2572,6 +2572,18 @@ export function compactMessagesForRetry(messages, level = 1) {
   return sysMsg ? [sysMsg, ...flat] : flat;
 }
 
+function computeRateLimitWaitMs(headers, attemptIdx, env) {
+  const testOverride = Number(env?._rateLimitWaitMs);
+  if (Number.isFinite(testOverride) && testOverride > 0) return testOverride;
+  const retryAfterRaw = headers?.get?.('retry-after') || headers?.get?.('x-ratelimit-reset-requests') || '';
+  const parsedSec = Number.parseFloat(String(retryAfterRaw).replace(/s$/i, ''));
+  if (Number.isFinite(parsedSec) && parsedSec > 0) {
+    return Math.min(Math.max(Math.ceil(parsedSec * 1000), 1200), 10_000);
+  }
+  const schedule = [2000, 4200, 7500];
+  return schedule[Math.min(attemptIdx, schedule.length - 1)];
+}
+
 /**
  * POST a Chat Completions request using the model's genuine `reasoning_effort`,
  * with automatic runtime self-learning if a new/external model reports different
@@ -2645,6 +2657,7 @@ export async function callModel(env, payload) {
     let variantIdx = 0;
     let netRetries = 0;
     let statusRetries = 0;
+    let rateLimitRetries = 0;
     let forceNonStreamFallback = false;
     let omitStreamOptions = false;
 
@@ -2664,6 +2677,9 @@ export async function callModel(env, payload) {
 
       let response;
       try {
+        if (env?._subreq && typeof env._subreq.count === 'number') {
+          env._subreq.count += 1;
+        }
         response = await fetch(endpoint, {
           method: 'POST',
           redirect: 'manual',
@@ -2677,6 +2693,13 @@ export async function callModel(env, payload) {
         });
       } catch (error) {
         lastStatus = 0;
+        if (/too many subrequests|subrequest limit/i.test(String(error?.message || ''))) {
+          fail(
+            'سقف درخواست‌های یک موج کلودفلر پر شد؛ موج بعدی در حال ادامه است.',
+            503,
+            'subrequest_limit'
+          );
+        }
         if (netRetries === 0 && cIndex === 0) {
           netRetries += 1;
           await sleep(400);
@@ -2906,9 +2929,21 @@ export async function callModel(env, payload) {
         }
       }
 
+      // Smart multi-step 429 Rate-Limit backoff during live `/api/chat` streaming (`onDelta` active):
+      if (status === 429 && typeof payload.onDelta === 'function' && rateLimitRetries < 3 && cIndex === 0) {
+        const waitMs = computeRateLimitWaitMs(response.headers, rateLimitRetries, env);
+        rateLimitRetries += 1;
+        try {
+          payload.onDelta({ type: 'rate_limit_wait', waitMs, attempt: rateLimitRetries });
+        } catch { /* ignore */ }
+        await sleep(waitMs);
+        continue;
+      }
+
       if (
         (status === 408 || status === 429 || status === 499 || status === 500 || status === 502 || status === 503 || status === 504) &&
         statusRetries === 0 &&
+        rateLimitRetries === 0 &&
         cIndex === 0
       ) {
         statusRetries += 1;
