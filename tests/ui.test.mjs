@@ -465,7 +465,16 @@ assert.ok($('quotaModalBody').textContent.includes('40% Remaining'));
 assert.ok($('quotaModalBody').textContent.includes('Cache Read'));
 window.closeModal('quotaModal');
 
-// --- Claude Code Warm Terracotta theme, GPT Codex modal, mode cycling & / slash command palette
+// --- Claude Code Warm Terracotta theme, GPT Codex modal, mode cycling, top drawer & / slash command palette
+assert.ok($('topDrawerBtn') && $('topDrawer'), 'top pull-down drawer toggle and drawer exist');
+assert.equal($('topDrawer').classList.contains('open'), false, 'top drawer is collapsed by default for unobstructed view');
+window.toggleTopDrawer();
+assert.equal($('topDrawer').classList.contains('open'), true, 'clicking #topDrawerBtn slides open top drawer');
+assert.equal($('topDrawerBtn').getAttribute('aria-expanded'), 'true');
+window.setWorkspaceView('editor');
+assert.equal($('topDrawer').classList.contains('open'), false, 'switching workspace view auto-closes top drawer');
+window.setWorkspaceView('chat');
+
 assert.equal(window.document.body.dataset.theme, 'claude-warm', 'default theme is Claude Code warm terracotta');
 window.cycleTheme();
 assert.equal(window.document.body.dataset.theme, 'claude-day', 'cycles to Claude daylight cream-orange');

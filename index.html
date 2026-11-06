@@ -654,28 +654,128 @@ body[data-theme="claude-day"] .turn-diff-head{color:var(--claude-deep)}
 .diff-add-pill{color:#6ee7a0;font-weight:700}.diff-del-pill{color:#ff8f85;font-weight:700}
 body[data-theme="claude-day"] .diff-add-pill{color:#1b7f46}body[data-theme="claude-day"] .diff-del-pill{color:#c93b2b}
 
-/* Composer Box + Perched Claude Buddy + Mode/Slash/@ Toolbar + Popover Menus */
+/* Composer Box + Perched Claude Buddy + Single-Row Controls + Top Pull-Down Drawer */
+.top{
+  height:46px!important;min-height:46px!important;padding:0 10px!important;
+  display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:nowrap!important;
+}
+.top-start,.top-end{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap}
+.top-end{margin-inline-start:auto}
+.logo{width:28px!important;height:28px!important;border-radius:8px!important;font-size:16px!important;flex:none}
+.brand{gap:7px;font-size:14px;min-width:0}
+.brand .sync{width:7px;height:7px;border-radius:50%;background:#6b625c;flex:none}
+.brand .sync.on{background:var(--green);box-shadow:0 0 0 3px rgba(130,217,160,.2)}
+.brand .sync.busy{background:var(--claude-bright);box-shadow:0 0 0 3px var(--claude-glow);animation:pulse 1s infinite}
+.icon-pill{
+  width:34px;height:34px;min-width:34px;min-height:34px!important;padding:0!important;
+  display:inline-flex;align-items:center;justify-content:center;border-radius:10px!important;font-size:15px;flex:none;
+}
+.mobile-files.icon-pill{display:none}
+.model-badge{
+  max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11px;padding:4px 9px;min-height:32px;display:inline-flex;align-items:center;
+}
+.token-pill{
+  padding:4px 8px!important;min-height:32px!important;font-size:11px!important;
+  max-width:130px;overflow:hidden;
+}
+#tokenQuotaText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-toggle-btn{
+  display:inline-flex;align-items:center;gap:4px;padding:4px 10px!important;
+  min-height:32px!important;min-width:34px;border-radius:999px!important;font-size:11.5px;font-weight:700;
+  background:var(--claude-tint);border:1px solid rgba(232,123,82,.52);color:var(--claude-bright);white-space:nowrap;flex:none;
+}
+body[data-theme="claude-day"] .drawer-toggle-btn{color:var(--claude-deep)}
+.drawer-toggle-btn .chev{display:inline-block;transition:transform .22s cubic-bezier(.2,.8,.2,1);font-size:11px}
+.drawer-toggle-btn[aria-expanded="true"]{background:var(--claude);color:var(--on-primary);border-color:var(--claude)}
+.drawer-toggle-btn[aria-expanded="true"] .chev{transform:rotate(180deg)}
+
+/* Smooth Collapsible Top Drawer */
+.top-drawer{
+  display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;pointer-events:none;
+  background:var(--bg-elev);border-bottom:0 solid var(--line);
+  transition:grid-template-rows .24s cubic-bezier(.2,.85,.3,1),opacity .18s ease,visibility .24s,border-bottom-width .18s ease;
+  flex:none;position:relative;z-index:14;
+}
+.top-drawer.open{
+  grid-template-rows:1fr;opacity:1;visibility:visible;pointer-events:auto;
+  border-bottom:1px solid var(--line);box-shadow:0 14px 34px rgba(0,0,0,.28);
+}
+.top-drawer-inner{overflow:hidden;padding:0 12px}
+.top-drawer.open .top-drawer-inner{padding:9px 12px 10px}
+.top-drawer .workspace-nav{
+  display:none;gap:5px;padding:3px;margin-bottom:8px;border:1px solid var(--line);
+  background:var(--panel);border-radius:12px;
+}
+.top-drawer .workspace-nav button{
+  flex:1;min-height:34px!important;padding:4px 8px;font-size:12px;font-weight:600;
+  border:0;border-radius:9px!important;background:transparent;color:var(--muted);
+}
+.top-drawer .workspace-nav button[aria-pressed="true"]{
+  background:var(--claude-tint);color:var(--claude-bright);box-shadow:inset 0 0 0 1px rgba(232,123,82,.45);
+}
+body[data-theme="claude-day"] .top-drawer .workspace-nav button[aria-pressed="true"]{color:var(--claude-deep)}
+.drawer-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.drawer-tools button{
+  min-height:32px!important;padding:4px 10px;font-size:11.5px;border-radius:999px!important;white-space:nowrap;
+}
+.drawer-meta{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+  margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:10.5px;color:var(--muted);
+}
+
+/* Compact Chat Area, Tool Folds & Single-Row Composer */
+.chat{padding:12px clamp(10px,2.4vw,26px)!important;gap:10px!important}
+.msg{padding:9px 12px!important;line-height:1.78!important;font-size:13px}
+.msg.assistant{padding-inline:2px!important}
+.tool-fold{margin:3px 0}
+.tool-fold > summary{list-style:none;cursor:pointer;user-select:none}
+.tool-fold > summary::-webkit-details-marker{display:none}
+.tool-fold > pre{margin:4px 0 6px;max-height:170px;font-size:11.5px;padding:8px 10px}
+.think-box{margin:0 0 5px;padding:5px 10px;border-radius:9px;font-size:11px}
+.think-box pre{max-height:160px;font-size:11px}
+.welcome{padding:15px 16px!important;border-radius:15px}
+.welcome-hero{gap:10px;margin-bottom:8px}
+.claude-mascot-wrap{width:42px;height:42px;border-radius:11px}
+.claude-mascot-wrap .claude-pixel-svg{width:30px;height:30px}
+.welcome h2{font-size:15px!important;line-height:1.5!important}
+.suggestions{grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:6px;margin-top:10px}
+.suggestions button{min-height:36px!important;padding:8px 10px;font-size:11.5px;border-radius:10px}
+
 .chatbox{
-  position:relative;margin:0 16px 10px;padding:11px 12px 12px;
+  position:relative;margin:0 12px 10px!important;padding:8px 10px!important;
   background:var(--composer-bg);border:1.5px solid var(--composer-border);
-  border-radius:18px;box-shadow:0 10px 30px rgba(0,0,0,.18);
+  border-radius:16px!important;box-shadow:0 8px 24px rgba(0,0,0,.16);
   transition:border-color .2s ease,box-shadow .2s ease;
 }
 .chatbox:focus-within{
   border-color:var(--claude);
-  box-shadow:0 10px 32px rgba(0,0,0,.22),0 0 0 3px var(--claude-glow);
+  box-shadow:0 8px 26px rgba(0,0,0,.2),0 0 0 3px var(--claude-glow);
 }
 .composer-buddy{
-  position:absolute;top:-21px;left:18px;width:28px;height:22px;pointer-events:none;z-index:2;
-  filter:drop-shadow(0 3px 6px rgba(0,0,0,.28));
+  position:absolute;top:-18px;left:14px;width:24px;height:19px;pointer-events:none;z-index:2;
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.25));
 }
-.composer-toolbar{
-  display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;
-  border-bottom:1px dashed var(--line);
+.chat-input{
+  height:38px!important;min-height:38px!important;max-height:132px!important;
+  padding:6px 4px!important;resize:none!important;font-size:13.5px!important;line-height:1.55!important;
+  color:var(--text);overflow-y:auto;
 }
+.chat-input::placeholder{color:var(--muted);opacity:.82}
+.sendrow{
+  display:flex;align-items:center;justify-content:flex-start;gap:5px;
+  border-top:1px solid var(--line);margin-top:4px!important;padding-top:6px!important;
+}
+.comp-icon-btn{
+  width:32px;height:32px;min-width:32px;min-height:32px!important;padding:0!important;
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:9px!important;font:700 13px ui-monospace,monospace;
+  background:var(--panel2);border:1px solid var(--line);color:var(--text-soft);flex:none;
+}
+.comp-icon-btn:hover{border-color:var(--claude-bright);color:var(--text)}
 .mode-pill{
-  display:inline-flex;align-items:center;gap:5px;padding:4px 10px;min-height:32px;min-width:34px;
-  border-radius:999px!important;font-size:11.5px;font-weight:700;
+  display:inline-flex;align-items:center;gap:4px;padding:3px 9px!important;min-height:32px!important;min-width:34px;
+  border-radius:999px!important;font-size:11px;font-weight:700;white-space:nowrap;
   background:var(--claude-tint);border:1px solid rgba(232,123,82,.5);color:var(--claude-bright);
 }
 body[data-theme="claude-day"] .mode-pill{color:var(--claude-deep)}
@@ -683,45 +783,42 @@ body[data-theme="claude-day"] .mode-pill{color:var(--claude-deep)}
 body[data-theme="claude-day"] .mode-pill[data-mode="plan"]{color:#2459a8}
 .mode-pill[data-mode="suggest"]{background:rgba(244,178,102,.16);border-color:rgba(244,178,102,.52);color:var(--claude-amber)}
 .mode-pill[data-mode="full-auto"]{background:rgba(130,217,160,.16);border-color:rgba(130,217,160,.52);color:var(--green)}
-.comp-chip-btn{
-  padding:4px 9px;min-height:32px;min-width:34px;border-radius:999px!important;
-  font-size:11.5px;background:var(--panel2);border:1px solid var(--line);color:var(--text-soft);
-}
 .comp-chip-btn.active{border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)}
 body[data-theme="claude-day"] .comp-chip-btn.active{color:var(--claude-deep)}
-.chat-input{color:var(--text)}
-.chat-input::placeholder{color:var(--muted)}
-.sendrow{border-top:1px solid var(--line)}
-.hint{color:var(--muted)}
+.sendrow .hint{margin-inline-start:auto;font-size:10.5px;color:var(--muted);white-space:nowrap}
+.send-pill{min-height:32px!important;padding:4px 13px!important;border-radius:999px!important;font-size:12px;white-space:nowrap;flex:none}
 
 /* Slash Command & @File Mention Floating Palette */
 .floating-palette{
-  display:none;position:absolute;bottom:calc(100% + 8px);right:0;left:0;max-height:260px;overflow-y:auto;
+  display:none;position:absolute;bottom:calc(100% + 8px);right:0;left:0;max-height:240px;overflow-y:auto;
   background:var(--panel);border:1.5px solid var(--claude);border-radius:14px;padding:6px;
   box-shadow:0 18px 46px rgba(0,0,0,.38);z-index:18;animation:msgEnter .16s ease;
 }
 .floating-palette.open{display:block}
 .palette-item{
   display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
-  padding:8px 11px;min-height:36px;border:0;border-radius:9px!important;background:transparent;
+  padding:7px 10px;min-height:34px;border:0;border-radius:9px!important;background:transparent;
   color:var(--text);text-align:right;cursor:pointer;
 }
 .palette-item:hover,.palette-item.active{background:var(--claude-tint);color:var(--text)}
-.palette-cmd{font:700 12.5px ui-monospace,monospace;color:var(--claude-bright);direction:ltr;flex:none}
+.palette-cmd{font:700 12px ui-monospace,monospace;color:var(--claude-bright);direction:ltr;flex:none}
 body[data-theme="claude-day"] .palette-cmd{color:var(--claude-deep)}
-.palette-desc{font-size:11.5px;color:var(--muted);flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.palette-desc{font-size:11px;color:var(--muted);flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sl-goal{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--claude-amber);font-weight:600}
 
-/* Claude Code Statusline at bottom of Chat Pane */
-.claude-statusline{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
-  padding:5px 16px 8px;font-size:11px;color:var(--muted);border-top:1px solid var(--line);
-  background:var(--bg-elev);flex:none;
+@media(max-width:1200px){
+  .top-drawer .workspace-nav{display:flex}
 }
-.statusline-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
-.sl-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
-.sl-goal{
-  max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--claude-amber);font-weight:600;
+@media(max-width:760px){
+  .mobile-files.icon-pill{display:inline-flex}
+  .brand-name{display:none}
+  .model-badge{max-width:108px;font-size:10.5px;padding:3px 7px}
+  .token-pill{max-width:96px;padding:3px 7px!important;font-size:10.5px!important}
+  .drawer-toggle-btn{padding:3px 8px!important;font-size:11px}
+  .chatbox{margin:0 8px max(6px,env(safe-area-inset-bottom))!important;padding:7px 8px!important}
+  .chat-input{font-size:15px!important}
+  .composer-buddy{display:none}
+  .suggestions{grid-template-columns:1fr}
 }
 
 /* Modals & Codex Settings Controls */
@@ -756,24 +853,58 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
 </head>
 <body data-view="chat" data-theme="claude-warm">
 <header class="top">
-  <div class="brand"><div class="logo">✳</div><span>CodePilot</span><span class="pill" id="storagePill">اتصال…</span></div>
-  <div class="status"><span class="sync" id="syncDot"></span><span class="txt" id="statusText">در حال بررسی نشست…</span></div>
-  <div class="top-actions">
-    <button id="fullscreenButton" onclick="toggleFullscreen()" title="تمام‌صفحه" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
-    <button class="utility" id="themeToggleBtn" onclick="cycleTheme()" title="تغییر تم ظاهری (کلود کد گرم نارنجی / روشن کرم / تاریک)" aria-label="تغییر تم ظاهری">🎨</button>
+  <div class="top-start">
+    <button class="mobile-files icon-pill" id="sidebarToggle" aria-controls="workspaceSidebar" aria-expanded="false" onclick="toggleSidebar()" title="تاریخچه و فایل‌ها" aria-label="تاریخچه و فایل‌ها">☰</button>
+    <div class="brand">
+      <div class="logo">✳</div>
+      <span class="brand-name">CodePilot</span>
+      <span class="sync" id="syncDot" title="وضعیت همگام‌سازی"></span>
+      <span class="pill sr" id="storagePill">اتصال…</span>
+    </div>
+  </div>
+  <div class="top-end">
+    <span class="model-badge" id="modelBadge" role="button" tabindex="0" title="انتخاب مدل هوش مصنوعی" onclick="openModelModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openModelModal()}">—</span>
     <button class="token-pill" id="tokenQuotaBtn" onclick="openQuotaModal()" title="توکن‌های باقی‌مانده و سهمیه زنده API">
       <span class="tok-dot" id="tokenQuotaDot"></span>
       <span id="tokenQuotaText">🪙 —</span>
     </button>
-    <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
-    <button onclick="openModelModal()" title="انتخاب مدل هوش مصنوعی">✦ مدل</button>
-    <button class="utility" id="codexSettingsBtn" onclick="openCodexModal()" title="تنظیمات پیشرفته عامل و مجوزها (GPT Codex &amp; Claude Code)">🎛 عامل</button>
-    <button class="utility" onclick="openSettings()" title="تنظیمات و حافظه" aria-label="تنظیمات و حافظه">⚙</button>
-    <button class="utility" onclick="toggleMemoryPanel()" title="حافظه‌ی بلندمدت" aria-label="حافظه‌ی بلندمدت">🧠</button>
-    <button class="gh-top" onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
-    <button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button>
+    <button type="button" class="drawer-toggle-btn" id="topDrawerBtn" aria-expanded="false" aria-controls="topDrawer" onclick="toggleTopDrawer()" title="کشوی ابزارها و نماها">
+      <span id="topDrawerLabel">ابزارها</span><span class="chev">▾</span>
+    </button>
   </div>
 </header>
+
+<section class="top-drawer" id="topDrawer" aria-label="کشوی ابزارها و تنظیمات">
+  <div class="top-drawer-inner">
+    <nav class="workspace-nav" aria-label="بخش‌های محیط کار">
+      <button data-workspace-view="chat" aria-pressed="true" onclick="setWorkspaceView('chat')">💬 گفتگو</button>
+      <button data-workspace-view="editor" aria-pressed="false" onclick="setWorkspaceView('editor')">📝 ویرایشگر</button>
+      <button data-workspace-view="terminal" aria-pressed="false" onclick="setWorkspaceView('terminal')">⌨ ترمینال</button>
+    </nav>
+    <div class="drawer-tools">
+      <button class="think-toggle on" id="thinkBtn" onclick="toggleTopDrawer(false);openModelModal('effort')" title="تنظیم سطح Effort واقعی مدل">🧠 تفکر</button>
+      <button id="codexSettingsBtn" onclick="toggleTopDrawer(false);openCodexModal()" title="تنظیمات پیشرفته عامل (Codex &amp; Claude Code)">🎛 عامل</button>
+      <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
+      <button onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
+      <button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button>
+      <button id="themeToggleBtn" onclick="cycleTheme()" title="تغییر تم ظاهری" aria-label="تغییر تم ظاهری">🔥</button>
+      <button type="button" class="comp-chip-btn" id="quickNetBtn" onclick="toggleQuickPermission('networkAccess')" title="دسترسی زنده عامل به وب">🌐 وب</button>
+      <button type="button" class="comp-chip-btn" id="quickShellBtn" onclick="toggleQuickPermission('shellAccess')" title="دسترسی اجرای شل">🐧 شل</button>
+      <button onclick="toggleTopDrawer(false);openSettings()" title="تنظیمات و حافظه" aria-label="تنظیمات و حافظه">⚙ حافظه</button>
+      <button id="fullscreenButton" onclick="toggleFullscreen()" title="تمام‌صفحه" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
+    </div>
+    <div class="drawer-meta">
+      <span class="txt" id="statusText">در حال بررسی نشست…</span>
+      <span class="sl-goal" id="slGoalText"></span>
+      <span style="direction:ltr;display:inline-flex;gap:8px;align-items:center">
+        <span id="slBranchText">⑂ workspace</span>
+        <span id="slCtxText">Ctx 0%</span>
+      </span>
+      <span class="sr" id="slModeText"></span>
+      <span class="sr" id="slStyleText"></span>
+    </div>
+  </div>
+</section>
 
 <div class="warnbar" id="warnBar">
   <strong>حالت تک‌کاربره بدون ورود واقعی</strong>
@@ -781,12 +912,6 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
   <button onclick="document.getElementById('warnBar').style.display='none'">فهمیدم</button>
 </div>
 
-<nav class="workspace-nav" aria-label="بخش‌های محیط کار">
-  <button class="mobile-files" id="sidebarToggle" aria-controls="workspaceSidebar" aria-expanded="false" onclick="toggleSidebar()">☰ تاریخچه و فایل‌ها</button>
-  <button data-workspace-view="chat" aria-pressed="true" onclick="setWorkspaceView('chat')">گفتگو</button>
-  <button data-workspace-view="editor" aria-pressed="false" onclick="setWorkspaceView('editor')">ویرایشگر</button>
-  <button data-workspace-view="terminal" aria-pressed="false" onclick="setWorkspaceView('terminal')">ترمینال</button>
-</nav>
 <button class="drawer-backdrop" id="drawerBackdrop" aria-label="بستن نوار کناری" onclick="toggleSidebar(false)"></button>
 <main class="layout">
   <aside class="sidebar" id="workspaceSidebar" aria-label="تاریخچه گفتگوها و فایل‌های پروژه">
@@ -850,15 +975,6 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
   </section>
 
   <aside class="right">
-    <div class="right-head">
-      <strong style="display:inline-flex;align-items:center;gap:6px"><span style="color:var(--claude-bright)">✳</span> همراه کدنویسی</strong>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <span class="model-badge" id="modelBadge" role="button" tabindex="0" title="انتخاب مدل هوش مصنوعی (کلیک کنید)" onclick="openModelModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openModelModal()}">—</span>
-        <button class="think-toggle on" id="thinkBtn" onclick="openModelModal('effort')" title="تنظیم سطح Effort واقعی مدل">🧠 تفکر</button>
-        <button class="tiny ghost" onclick="openCodexModal()" title="تنظیمات عامل Codex و Claude Code">🎛 عامل</button>
-        <button class="tiny ghost" onclick="openSettings()">حافظه</button>
-      </div>
-    </div>
     <div class="chat" id="chat"></div>
     <div class="chatbox">
       <svg class="composer-buddy claude-pixel-svg" viewBox="0 0 16 12" aria-hidden="true">
@@ -875,31 +991,16 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
       </svg>
       <div class="floating-palette" id="slashMenu" role="listbox" aria-label="دستورات اسلش"></div>
       <div class="floating-palette" id="mentionMenu" role="listbox" aria-label="ارجاع به فایل پروژه"></div>
-      <div class="composer-toolbar">
-        <button type="button" class="mode-pill" id="modeCycleBtn" data-mode="auto-edit" onclick="cycleAgentMode()" title="تغییر حالت خودمختاری عامل (میانبر Shift+Tab)">⚡ Auto-Edit</button>
-        <button type="button" class="comp-chip-btn" onclick="toggleSlashPalette()" title="دستورات سریع کلود کد و کدکس (/)">/ دستورات</button>
-        <button type="button" class="comp-chip-btn" onclick="toggleMentionPalette()" title="ارجاع مستقیم به فایل پروژه (@)">@ فایل</button>
-        <button type="button" class="comp-chip-btn" id="quickNetBtn" onclick="toggleQuickPermission('networkAccess')" title="دسترسی زنده عامل به وب و جست‌وجو">🌐 وب</button>
-        <button type="button" class="comp-chip-btn" id="quickShellBtn" onclick="toggleQuickPermission('shellAccess')" title="دسترسی اجرای دستورات شل/لینوکس">🐧 شل</button>
-      </div>
       <input id="attachmentInput" type="file" multiple hidden onchange="queueAttachments(this.files);this.value=''">
       <div id="attachmentList" style="display:flex;gap:6px;flex-wrap:wrap" aria-live="polite"></div>
-      <textarea class="chat-input" id="prompt" aria-label="پیام به دستیار" placeholder="به هوش مصنوعی بگو چه بسازد یا اصلاح کند… (برای دستورات / و برای فایل‌ها @ بزنید)" oninput="onPromptInput(event)" onkeydown="onPromptKeydown(event)"></textarea>
+      <textarea class="chat-input" id="prompt" rows="1" aria-label="پیام به دستیار" placeholder="پیام یا دستور (/ و @)…" oninput="onPromptInput(event)" onkeydown="onPromptKeydown(event)"></textarea>
       <div class="sendrow">
-        <button type="button" onclick="document.getElementById('attachmentInput').click()" title="تا ۵ فایل، مجموعاً ۲۰ مگابایت؛ خواندن فایل باینری به مدل بستگی دارد" aria-label="افزودن عکس یا فایل">📎 پیوست</button>
-        <span class="hint" id="composerHint">Enter ارسال · Shift+Tab تغییر حالت · / دستورات</span>
-        <button class="primary" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
-      </div>
-    </div>
-    <div class="claude-statusline" id="claudeStatusLine" aria-label="نوار وضعیت عامل">
-      <div class="statusline-group">
-        <span class="sl-item" id="slModeText">✳ حالت: Auto-Edit</span>
-        <span class="sl-item" id="slStyleText">· متعادل</span>
-        <span class="sl-goal" id="slGoalText"></span>
-      </div>
-      <div class="statusline-group" style="direction:ltr">
-        <span class="sl-item" id="slBranchText">⑂ local</span>
-        <span class="sl-item" id="slCtxText">Ctx 0%</span>
+        <button type="button" class="comp-icon-btn" onclick="document.getElementById('attachmentInput').click()" title="افزودن عکس یا فایل" aria-label="افزودن عکس یا فایل">📎</button>
+        <button type="button" class="comp-icon-btn" onclick="toggleSlashPalette()" title="دستورات اسلش (/)" aria-label="دستورات اسلش">/</button>
+        <button type="button" class="comp-icon-btn" onclick="toggleMentionPalette()" title="انتخاب فایل پروژه (@)" aria-label="ارجاع به فایل">@</button>
+        <button type="button" class="mode-pill" id="modeCycleBtn" data-mode="auto-edit" onclick="cycleAgentMode()" title="تغییر حالت عامل (Shift+Tab)">⚡ Auto</button>
+        <span class="hint" id="composerHint"></span>
+        <button class="primary send-pill" id="sendBtn" onclick="sendMessage()">ارسال ↑</button>
       </div>
     </div>
   </aside>
@@ -1246,17 +1347,32 @@ const API = {
   health: '/api/health'
 };
 
+function toggleTopDrawer(open) {
+  const drawer = $('topDrawer');
+  const btn = $('topDrawerBtn');
+  if (!drawer || !btn) return;
+  const next = typeof open === 'boolean' ? open : !drawer.classList.contains('open');
+  drawer.classList.toggle('open', next);
+  btn.setAttribute('aria-expanded', String(next));
+}
+
 function setWorkspaceView(view) {
   if (!['chat', 'editor', 'terminal'].includes(view)) return;
   document.body.dataset.view = view;
   document.querySelectorAll('[data-workspace-view]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.workspaceView === view));
   });
+  const lbl = $('topDrawerLabel');
+  if (lbl) {
+    lbl.textContent = view === 'editor' ? '📝 ویرایشگر' : view === 'terminal' ? '⌨ ترمینال' : 'ابزارها';
+  }
+  toggleTopDrawer(false);
 }
 
 function toggleSidebar(open) {
   const sidebar = document.querySelector('.sidebar');
   const visible = typeof open === 'boolean' ? open : !sidebar.classList.contains('show');
+  if (visible) toggleTopDrawer(false);
   sidebar.classList.toggle('show', visible);
   $('drawerBackdrop').classList.toggle('open', visible);
   $('sidebarToggle').setAttribute('aria-expanded', String(visible));
@@ -1265,10 +1381,14 @@ function toggleSidebar(open) {
 }
 
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && document.querySelector('.sidebar.show')) toggleSidebar(false);
+  if (event.key === 'Escape') {
+    if (document.querySelector('.sidebar.show')) toggleSidebar(false);
+    if ($('topDrawer')?.classList.contains('open')) toggleTopDrawer(false);
+  }
 });
 
 function openApiConnection() {
+  toggleTopDrawer(false);
   openSettings();
   runDiagnostics('settingsDiagBox');
 }
@@ -1299,8 +1419,8 @@ const DEFAULT_CLIENT_AGENT_CONFIG = {
 const AGENT_MODE_META = {
   plan: { label: '🧭 Plan', short: 'Plan', fa: 'برنامه‌ریزی (بدون ویرایش)' },
   suggest: { label: '💬 Suggest', short: 'Suggest', fa: 'پیشنهادی (نمایش کد)' },
-  'auto-edit': { label: '⚡ Auto-Edit', short: 'Auto-Edit', fa: 'ویرایش هوشمند' },
-  'full-auto': { label: '🚀 Full-Auto', short: 'Full-Auto', fa: 'مستقل کامل (۳۲ گام)' }
+  'auto-edit': { label: '⚡ Auto', short: 'Auto', fa: 'ویرایش هوشمند' },
+  'full-auto': { label: '🚀 Full', short: 'Full', fa: 'مستقل کامل (۳۲ گام)' }
 };
 
 const AGENT_STYLE_META = {
@@ -3396,6 +3516,7 @@ async function runLocalCommand() {
 /* -------------------------------- preview -------------------------------- */
 
 function runPreview() {
+  toggleTopDrawer(false);
   const name = state.workspace.active;
   if (name && $('editor').value !== undefined) state.workspace.files[name] = $('editor').value;
   const html = state.workspace.files['index.html'];
@@ -3459,55 +3580,45 @@ function claudeMascotSvg() {
 
 function welcomeHtml() {
   const modeMeta = AGENT_MODE_META[state.agentConfig?.mode || 'auto-edit'] || AGENT_MODE_META['auto-edit'];
-  const host = state.provider?.activeHost || 'tooken.club';
-  const modelTxt = state.modelLabel && state.modelLabel !== '—' ? state.modelLabel : 'انتخاب خودکار';
+  const modelTxt = state.modelLabel && state.modelLabel !== '—' ? state.modelLabel : 'خودکار';
   return `<div class="welcome">
     <div class="welcome-hero">
       <div class="claude-mascot-wrap">${claudeMascotSvg()}</div>
       <div style="min-width:0;flex:1">
-        <div style="font-size:11px;color:var(--claude-bright);font-weight:700;letter-spacing:.03em">✳ CLAUDE CODE &amp; GPT CODEX WORKSPACE</div>
-        <h2 style="margin:3px 0 0">سلام! دستیار هوشمند کدنویسی آماده کار است.</h2>
+        <h2>سلام! چه بسازیم یا اصلاح کنیم؟</h2>
+        <div class="welcome-meta-pills" style="margin:4px 0 0">
+          <span class="w-chip"><b style="direction:ltr">${esc(modelTxt)}</b></span>
+          <span class="w-chip"><b>${esc(modeMeta.label)}</b></span>
+        </div>
       </div>
     </div>
-    <p>مجهز به جریان زنده پاسخ، ۴ حالت خودمختاری عامل (<b>Plan · Suggest · Auto-Edit · Full-Auto</b>)، دستورات سریع اسلش (<code>/</code>)، ارجاع مستقیم به فایل‌ها (<code>@</code>)، خواندن خودکار <code>AGENTS.md</code> و اتصال زنده به مخزن GitHub.</p>
-    <div class="welcome-meta-pills">
-      <span class="w-chip">مدل: <b style="direction:ltr">${esc(modelTxt)}</b></span>
-      <span class="w-chip">حالت: <b>${esc(modeMeta.label)}</b></span>
-      <span class="w-chip">درگاه: <b style="direction:ltr">${esc(host)}</b></span>
-      <span class="w-chip">فایل‌ها: <b>${faNum(Object.keys(state.workspace?.files || {}).length)}</b></span>
-    </div>
     <div class="suggestions">
-      <button type="button" onclick="quickPrompt('/plan معماری فعلی پروژه را تحلیل کن و نقشه ارتقا و بهبود آن را گام‌به‌گام پیشنهاد بده.')">🧭 تحلیل معماری در حالت Plan</button>
-      <button type="button" onclick="executeSlashCommand('/review')">🔍 بازبینی تخصصی کدها (/review)</button>
-      <button type="button" onclick="scaffoldAgentsMdFile()">📄 ساخت فایل استاندارد AGENTS.md</button>
-      <button type="button" onclick="quickPrompt('در لینوکس نسخه‌ی کرنل، Node و Python را با اجرای واقعی دستور بررسی کن.')">🐧 تست اجرای واقعی لینوکس</button>
-    </div>
-    <div class="welcome-tip">
-      <span><kbd>Shift+Tab</kbd> تغییر حالت عامل</span>
-      <span><kbd>/</kbd> پالت دستورات کلود کد</span>
-      <span><kbd>@</kbd> انتخاب فایل پروژه</span>
-      <span><kbd>Ctrl+K</kbd> جست‌وجو در کد</span>
+      <button type="button" onclick="quickPrompt('/plan معماری پروژه را تحلیل کن و نقشه ارتقا بده.')">🧭 تحلیل معماری</button>
+      <button type="button" onclick="executeSlashCommand('/review')">🔍 بازبینی کد (/review)</button>
+      <button type="button" onclick="scaffoldAgentsMdFile()">📄 ساخت AGENTS.md</button>
     </div>
   </div>`;
 }
 
 function quickPrompt(text) {
-  $('prompt').value = text;
-  $('prompt').focus();
+  const el = $('prompt');
+  el.value = text;
+  autoGrowPrompt(el);
+  el.focus();
 }
 
 function renderThinkHtml(thought, plan, open = false, meta = {}) {
   const effortLabel = meta.effort ? (EFFORT_META[meta.effort]?.label || meta.effort) : '';
-  const tokLabel = meta.reasoningTokens ? ` · ${faNum(meta.reasoningTokens)} توکن استدلال` : '';
+  const tokLabel = meta.reasoningTokens ? ` · ${faNum(meta.reasoningTokens)} tok` : '';
   const badge = effortLabel ? ` · ${effortLabel}` : '';
   if (meta.encrypted && !String(thought || '').trim()) {
-    return `<div class="think-box"><span>⚡ استدلال درونی واقعی مدل اجرا شد${esc(badge)}${esc(tokLabel)}</span></div>`;
+    return `<div class="think-box"><span>⚡ تفکر مدل${esc(badge)}${esc(tokLabel)}</span></div>`;
   }
-  const body = [String(thought || '').trim(), plan ? `\n── برنامه‌ی اجرا ──\n${String(plan).trim()}` : '']
+  const body = [String(thought || '').trim(), plan ? `\n── برنامه ──\n${String(plan).trim()}` : '']
     .filter(Boolean)
     .join('\n');
   if (!body) return '';
-  const title = meta.native ? `🧠 استدلال بومی مدل${badge}${tokLabel}` : '🧠 فرآیند تفکر و برنامه‌ریزی دستیار';
+  const title = meta.native ? `🧠 تفکر مدل${badge}${tokLabel}` : '🧠 برنامه‌ریزی';
   return `<details class="think-box"${open ? ' open' : ''}><summary>${esc(title)}</summary><pre>${esc(body)}</pre></details>`;
 }
 
@@ -3522,9 +3633,12 @@ function appendMessageElement(message) {
     const raw = String(message.content || '');
     if (raw.startsWith('Thought recorded.')) return null;
     div.className = 'msg assistant';
+    const firstLine = raw.trim().split('\n')[0]?.slice(0, 72) || 'خروجی';
     div.innerHTML =
-      `<div class="tool-line done">✔ نتیجه‌ی ابزار · <span style="direction:ltr;display:inline-block">${esc(message.tool_call_id || '')}</span></div>` +
-      `<pre style="max-height:240px">${esc(raw.slice(0, 4000))}</pre>`;
+      `<details class="tool-fold">` +
+      `<summary class="tool-line done">✔ خروجی ابزار <span style="color:var(--muted)">·</span> <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(firstLine)}</span></summary>` +
+      `<pre>${esc(raw.slice(0, 4000))}</pre>` +
+      `</details>`;
     chat.appendChild(div);
     return div;
   }
@@ -3891,9 +4005,17 @@ function toggleMentionPalette() {
   );
 }
 
+function autoGrowPrompt(el) {
+  if (!el) return;
+  el.style.height = '38px';
+  const next = Math.min(Math.max(el.scrollHeight || 38, 38), 132);
+  el.style.height = next + 'px';
+}
+
 function onPromptInput() {
   const input = $('prompt');
   if (!input) return;
+  autoGrowPrompt(input);
   const val = input.value;
   if (val.startsWith('/') && !val.includes('\n')) {
     const firstToken = val.split(/\s+/)[0].toLowerCase();
@@ -4131,11 +4253,15 @@ async function sendMessage(overrideText, opts = {}) {
   }
 
   state.busy = true;
+  toggleTopDrawer(false);
   document.body.classList.add('is-working');
   $('sendBtn').disabled = true;
-  $('sendBtn').textContent = '✳ در حال کار…';
-  $('composerHint').textContent = 'در حال استدلال و اجرا…';
-  if (!overrideText) input.value = '';
+  $('sendBtn').textContent = '✳…';
+  $('composerHint').textContent = 'در حال اجرا…';
+  if (!overrideText) {
+    input.value = '';
+    autoGrowPrompt(input);
+  }
 
   if (state.repoSyncPromise) {
     setSync('busy', 'همگام‌سازی فایل‌های مخزن GitHub…');
@@ -4252,7 +4378,7 @@ async function sendMessage(overrideText, opts = {}) {
     document.body.classList.remove('is-working');
     renderAttachments();
     $('sendBtn').textContent = 'ارسال ↑';
-    $('composerHint').textContent = 'Enter ارسال · Shift+Tab تغییر حالت · / دستورات';
+    $('composerHint').textContent = '';
     setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
     syncAgentUi();
     loadConversations();
@@ -4859,6 +4985,9 @@ function toggleMemoryPanel() {
 function closeModal(id) { $(id).classList.remove('open'); }
 document.addEventListener('click', (event) => {
   if (!event.target.closest('.chatbox')) closeFloatingPalettes();
+  if ($('topDrawer')?.classList.contains('open') && !event.target.closest('#topDrawer') && !event.target.closest('#topDrawerBtn')) {
+    toggleTopDrawer(false);
+  }
 });
 document.addEventListener('keydown', (event) => {
   const meta = event.ctrlKey || event.metaKey;
@@ -4923,6 +5052,7 @@ async function resyncRepoNow() {
 }
 
 function openGitHub() {
+  toggleTopDrawer(false);
   $('repoUrl').value = state.repo ? `https://github.com/${state.repo.owner}/${state.repo.repo}` : '';
   $('repoBranch').value = state.repo?.branch || 'main';
   const saved = localStorage.getItem(GH_STORE) ? JSON.parse(localStorage.getItem(GH_STORE)) : null;
