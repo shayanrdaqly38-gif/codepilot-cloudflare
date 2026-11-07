@@ -1234,6 +1234,28 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
   .send-pill{min-height:30px!important;padding:3px 10px!important;font-size:11px}
 }
 .fs-top-btn[aria-pressed="true"]{border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)}
+#shellMode{cursor:pointer;padding:2px 7px;border-radius:999px;border:1px solid var(--line);transition:border-color .15s,color .15s}
+#shellMode:hover{border-color:var(--claude);color:var(--claude-bright)}
+.sb-mode-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0 12px}
+@media(max-width:560px){.sb-mode-grid{grid-template-columns:1fr}}
+.sb-mode-card{
+  display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:right;
+  padding:10px 11px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);
+  cursor:pointer;transition:border-color .15s,background .15s;width:100%;box-sizing:border-box;
+}
+.sb-mode-card strong{font-size:12.5px;color:var(--text)}
+.sb-mode-card span{font-size:11px;color:var(--muted);line-height:1.55;white-space:normal}
+.sb-mode-card.active{border-color:var(--claude);background:var(--claude-tint)}
+.sb-mode-card.active strong{color:var(--claude-bright)}
+body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-deep)}
+.sb-panel{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel2);margin-top:8px}
+.sb-panel[hidden]{display:none!important}
+.sb-cmd-box{
+  direction:ltr;text-align:left;font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;
+  background:var(--code-bg,#120e0b);color:#e9dfd5;border:1px solid var(--line);border-radius:10px;
+  padding:9px 11px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0;
+}
+.sb-probe-out{margin-top:8px;font-size:11.5px;line-height:1.65}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
@@ -1280,6 +1302,7 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
       <button class="think-toggle on" id="thinkBtn" onclick="toggleTopDrawer(false);openModelModal('effort')" title="تنظیم سطح Effort واقعی مدل">🧠 تفکر</button>
       <button id="drawerPowerBtn" onclick="toggleTopDrawer(false);openPowerModal()" title="موتور تقویت و پیشران ۴محوره هوش مصنوعی">🔥 قدرت موتور</button>
       <button id="codexSettingsBtn" onclick="toggleTopDrawer(false);openCodexModal()" title="تنظیمات پیشرفته عامل (Codex &amp; Claude Code)">🎛 عامل</button>
+      <button id="sandboxSettingsBtn" onclick="toggleTopDrawer(false);openSandboxModal()" title="اتصال مستقیم Termux گوشی یا سرور لینوکس ابری ۲۴ ساعته">📱 Termux / سندباکس</button>
       <button onclick="openApiConnection()" title="وضعیت اتصال API و تست مدل">⌁ API</button>
       <button onclick="openGitHub()" title="اتصال GitHub">↗ GitHub</button>
       <button class="primary" onclick="runPreview()">▶ پیش‌نمایش</button>
@@ -1419,7 +1442,7 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
     </div>
     <div class="bottom">
       <div class="bottom-head">
-        <span class="selected">ترمینال</span><span>خروجی</span><span class="tiny" id="shellMode">شل مجازی و امن</span>
+        <span class="selected">ترمینال</span><span>خروجی</span><span class="tiny" id="shellMode" onclick="openSandboxModal()" role="button" tabindex="0">شل مجازی و امن</span>
         <button class="icon-btn" style="margin-right:auto" onclick="clearTerminal()">پاک‌کردن</button>
       </div>
       <div class="terminal" id="terminal"></div>
@@ -1883,6 +1906,119 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
   </div>
 </div>
 
+<!-- Personal Sandbox, 24/7 Cloud Runner & Direct Local Termux Bridge Modal -->
+<div class="modal" id="sandboxModal" onclick="if(event.target===this)closeModal('sandboxModal')">
+  <div class="modal-card" style="width:min(650px,100%);max-height:90dvh;overflow-y:auto;direction:rtl;text-align:right">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <h3 style="margin:0;font-size:16px">📱 سندباکس لینوکس، سرور ۲۴ ساعته و پل Termux</h3>
+      <span class="pill" id="sbModalStatusBadge">کانتینر ابری خودکار</span>
+    </div>
+    <p class="tiny" style="margin:6px 0 10px;line-height:1.75;color:var(--muted)">
+      محیط اجرای دستورات ترمینال و ابزار <code>run_command</code> هوش مصنوعی را انتخاب کنید — بدون نیاز به داشبورد کلودفلر یا <code>cloudflared</code>:
+    </p>
+
+    <div class="sb-mode-grid" role="radiogroup" aria-label="حالت سندباکس">
+      <button type="button" class="sb-mode-card" id="sbModalModeLocal" onclick="selectSandboxMode('local-termux')">
+        <strong>📱 ۱. پل مستقیم Termux گوشی</strong>
+        <span>اتصال مستقیم مرورگر به <code>127.0.0.1:8787</code> روی همین گوشی (۱۰۰٪ رایگان و با سخت‌افزار خودتان)</span>
+      </button>
+      <button type="button" class="sb-mode-card" id="sbModalModeCloud" onclick="selectSandboxMode('cloud-url')">
+        <strong>☁️ ۲. سرور ابری ۲۴ ساعته</strong>
+        <span>اتصال به Docker رایگان Hugging Face Space یا سرور شخصی لینوکس (همیشه بیدار، حتی وقتی Termux بسته است)</span>
+      </button>
+      <button type="button" class="sb-mode-card active" id="sbModalModeAuto" onclick="selectSandboxMode('auto')">
+        <strong>⚡ ۳. کانتینر خودکار CodePilot</strong>
+        <span>اجرای فوری Bash / Node / Python در کانتینر لینوکس ابری بدون هیچ نصب یا تنظیماتی</span>
+      </button>
+    </div>
+
+    <!-- Panel 1: Direct Local Termux Bridge (Method 3) -->
+    <div class="sb-panel" id="sbModalPanelLocal" hidden>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <strong style="font-size:13px;color:var(--claude-bright)">📱 پل مستقیم مرورگر ↔ Termux روی همین گوشی</strong>
+        <button type="button" class="icon-btn" onclick="generateLocalTermuxToken()" style="font-size:11px">🎲 ساخت توکن امن جدید</button>
+      </div>
+      <p class="tiny" style="margin:0 0 10px;line-height:1.75;color:var(--muted)">
+        هم دستورهای ترمینال پایین صفحه و هم ابزار <code>run_command</code> هوش مصنوعی مستقیماً روی Termux گوشی شما اجرا می‌شوند و فایل‌های ساخته‌شده (مثل خروجی اسکریپت‌ها) دوطرفه به محیط کار برمی‌گردند. توکن محلی فقط روی مرورگر خودتان ذخیره می‌شود.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px">
+        <label class="field" style="margin:0">
+          <span>آدرس محلی Termux (Loopback)</span>
+          <input id="sbModalLocalUrl" dir="ltr" placeholder="http://127.0.0.1:8787" value="http://127.0.0.1:8787" oninput="refreshTermuxInstallSnippet()">
+        </label>
+        <label class="field" style="margin:0">
+          <span>توکن امنیتی محلی (CP_TOKEN)</span>
+          <input id="sbModalLocalToken" dir="ltr" placeholder="cp_..." oninput="refreshTermuxInstallSnippet()">
+        </label>
+      </div>
+
+      <div style="margin-top:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span class="tiny" style="font-weight:700">دستور نصب و اجرای ۱-کلیکی در Termux:</span>
+          <button type="button" id="sbModalCopyCmdBtn" onclick="copyTermuxSetupCommand()" style="font-size:11.5px;padding:4px 10px">📋 کپی دستور Termux</button>
+        </div>
+        <div class="sb-cmd-box" id="sbModalTermuxCmdPreview"></div>
+        <div class="tiny" style="color:var(--muted);line-height:1.7">
+          💡 کافی است این دستور را یک‌بار در <b>Termux</b> پیست کنید؛ دفعات بعد فقط <code>~/.codepilot-runner/start.sh</code> را بزنید. اگر Chrome اجازه‌ی «Local network / دستگاه‌های محلی» پرسید، <b>Allow</b> را بزنید.
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button type="button" id="sbModalProbeLocalBtn" onclick="probeLocalTermux()">⚡ تست زنده اتصال Termux (127.0.0.1)</button>
+      </div>
+      <div class="sb-probe-out" id="sbModalLocalProbeOut"></div>
+    </div>
+
+    <!-- Panel 2: 24/7 Cloud Docker Runner (Method 2) -->
+    <div class="sb-panel" id="sbModalPanelCloud" hidden>
+      <strong style="font-size:13px;color:var(--claude-bright);display:block;margin-bottom:6px">☁️ سرور لینوکس ابری ۲۴ ساعته (Hugging Face Docker / VPS / Tunnel)</strong>
+      <p class="tiny" style="margin:0 0 10px;line-height:1.75;color:var(--muted)">
+        آدرس HTTPS سرور رانر خود را وارد کنید؛ توکن با رمزنگاری <b>AES-GCM</b> در پایگاه‌داده‌ی D1 حساب شما ذخیره می‌شود و سرور کلودفلر مستقیماً به آن متصل می‌گردد (۲ گیگابایت واقعی RAM با ۱۶ گیگابایت در پلن رایگان Hugging Face Spaces!).
+      </p>
+      <label class="field">
+        <span>آدرس HTTPS رانر ابری</span>
+        <input id="sbModalCloudUrl" dir="ltr" placeholder="https://username-codepilot-runner.hf.space">
+      </label>
+      <label class="field">
+        <span>توکن امنیتی رانر (Secret <code>CP_TOKEN</code>)</span>
+        <input id="sbModalCloudToken" type="password" dir="ltr" placeholder="cp_...">
+      </label>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button type="button" id="sbModalProbeCloudBtn" onclick="probeCloudSandbox()">🔍 تست اتصال سرور ابری</button>
+        <button type="button" onclick="generateCloudSandboxToken()" style="font-size:11.5px">🎲 ساخت توکن تصادفی برای HF</button>
+      </div>
+      <div class="sb-probe-out" id="sbModalCloudProbeOut"></div>
+
+      <details style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-soft)">📘 راهنمای ۲ دقیقه‌ای ساخت سرور رایگان ۲۴ ساعته در Hugging Face Spaces</summary>
+        <div class="tiny" style="margin-top:8px;line-height:1.85;color:var(--muted)">
+          ۱. وارد <code>huggingface.co/new-space</code> شوید، یک Space با SDK از نوع <b>Docker (Blank)</b> و حالت <b>Public</b> بسازید (رایگان: 2 vCPU و 16GB RAM!).<br>
+          ۲. دو فایل آماده <code>runner-kit/Dockerfile</code> و <code>runner-kit/server.mjs</code> موجود در مخزن گیت‌هاب این پروژه را در Space آپلود کنید.<br>
+          ۳. در بخش <b>Settings → Variables and secrets → New secret</b> متغیر <code>CP_TOKEN</code> را با توکن دلخواه بسازید.<br>
+          ۴. لینک مستقیم Space (مثلاً <code>https://yourname-space.hf.space</code>) و همان <code>CP_TOKEN</code> را در کادر بالا وارد و ذخیره کنید!
+        </div>
+      </details>
+    </div>
+
+    <!-- Panel 3: Built-in Auto Cloud Container -->
+    <div class="sb-panel" id="sbModalPanelAuto">
+      <strong style="font-size:13px;color:var(--green);display:block;margin-bottom:4px">⚡ کانتینر لینوکس ابری خودکار (بدون نیاز به راه‌اندازی)</strong>
+      <p class="tiny" style="margin:0;line-height:1.8;color:var(--muted)">
+        در این حالت CodePilot به‌صورت خودکار تمام فرمان‌های مجاز Bash، Node.js و Python3 را همراه با فایل‌های پروژه شما در یک کانتینر ایزوله‌ی لینوکس اجرا می‌کند — بدون نیاز به روشن‌بودن Termux یا ساخت سرور جداگانه.
+      </p>
+    </div>
+
+    <div class="modal-actions" style="justify-content:space-between;flex-wrap:wrap;margin-top:14px;gap:8px">
+      <button type="button" onclick="resetSandboxSettings()" style="font-size:11.5px">بازنشانی به پیش‌فرض</button>
+      <div style="display:flex;gap:8px">
+        <button type="button" onclick="closeModal('sandboxModal')">انصراف</button>
+        <button type="button" class="primary" id="sbModalSaveBtn" onclick="saveSandboxSettings()">✔ ذخیره و فعال‌سازی سندباکس</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -2156,6 +2292,13 @@ const state = {
   sandbox: false,
   linuxRunner: false,
   executionMode: 'virtual',
+  sandboxConfig: {
+    mode: 'auto',
+    cloudUrl: '',
+    hasCloudToken: false,
+    tokenHint: '',
+    localUrl: 'http://127.0.0.1:8787'
+  },
   authMode: 'cloudflare-access',
   diffs: [],
   validation: [],
@@ -2923,15 +3066,22 @@ function cycleReasoningEffort() {
 function syncShellBadge() {
   const el = $('shellMode');
   if (!el) return;
-  if (state.sandbox) {
+  const sbMode = state.sandboxConfig?.mode || 'auto';
+  if (sbMode === 'local-termux') {
+    el.textContent = '📱 پل مستقیم Termux (127.0.0.1)';
+    el.title = 'دستورات ترمینال و run_command مستقیماً روی Termux همین گوشی اجرا می‌شوند (برای تنظیمات کلیک کنید).';
+  } else if (sbMode === 'cloud-url' && state.sandboxConfig?.cloudUrl) {
+    el.textContent = '☁️ سرور لینوکس ۲۴ ساعته متصل';
+    el.title = `متصل به سرور ابری اختصاصی: ${state.sandboxConfig.cloudUrl} (برای تنظیمات کلیک کنید).`;
+  } else if (state.sandbox) {
     el.textContent = 'Sandbox واقعی متصل';
     el.title = 'run_command و ترمینال در محفظه‌ی پایدار Linux اجرا می‌شوند.';
   } else if (state.linuxRunner) {
     el.textContent = 'کانتینر لینوکس واقعی (Bash/Node/Python)';
-    el.title = 'فرمان‌های ترمینال و run_command در کانتینر واقعی سیستم‌عامل لینوکس با فایل‌های پروژه اجرا می‌شوند.';
+    el.title = 'فرمان‌های ترمینال و run_command در کانتینر واقعی لینوکس اجرا می‌شوند (برای اتصال Termux یا سرور ۲۴ ساعته کلیک کنید).';
   } else {
     el.textContent = 'شل مجازی و امن';
-    el.title = 'بدون Sandbox: فقط help/ls/cat/touch/echo/rm مجاز است و هیچ فرمان واقعی اجرا نمی‌شود.';
+    el.title = 'بدون Sandbox: برای اتصال Termux یا سرور ۲۴ ساعته کلیک کنید.';
   }
 }
 
@@ -3532,6 +3682,9 @@ async function boot() {
       state.sandbox = Boolean(config.sandbox);
       state.linuxRunner = Boolean(config.linuxRunner);
       state.workersAi = Boolean(config.workersAi);
+      if (config.sandboxConfig && typeof config.sandboxConfig === 'object') {
+        state.sandboxConfig = { ...state.sandboxConfig, ...config.sandboxConfig };
+      }
       state.executionMode = config.executionMode || (state.sandbox ? 'sandbox' : state.linuxRunner ? 'linux-container' : 'virtual');
       const fullCatalogLoaded = config.modelsSource === 'remote' || config.modelsSource === 'cache';
       if (
@@ -4761,6 +4914,34 @@ async function runLocalCommand() {
   if (op === 'preview') return runPreview();
   if (op === 'help') return showTerminalHelp();
 
+  if (isLocalTermuxActive()) {
+    el.disabled = true;
+    try {
+      const data = await callLocalTermuxRunner(command, state.workspace?.files || {});
+      applyClientRunnerWorkspaceSync(data, true);
+      const out = String(data.stdout || '').trimEnd();
+      const err = String(data.stderr || '').trimEnd();
+      if (out) out.split('\n').forEach((l) => addTerminal(l));
+      if (err) err.split('\n').forEach((l) => addTerminal(l, data.ok ? 'dim' : 'err'));
+      if (!out && !err) {
+        addTerminal(`(Termux exit ${data.exitCode ?? 0})`, data.ok ? 'ok' : 'err');
+      } else if (!data.ok) {
+        addTerminal(`exit ${data.exitCode ?? 1} (local-termux)`, 'err');
+      }
+    } catch (error) {
+      addTerminal(
+        '⚠ اتصال به Termux محلی (127.0.0.1) برقرار نشد: ' +
+          error.message +
+          ' — مطمئن شوید در Termux دستور ~/.codepilot-runner/start.sh روشن است (یا از منوی 📱 Termux / سندباکس حالت را تغییر دهید).',
+        'err'
+      );
+    } finally {
+      el.disabled = false;
+      el.focus();
+    }
+    return;
+  }
+
   if (state.sandbox || state.linuxRunner) {
     el.disabled = true;
     try {
@@ -4772,6 +4953,7 @@ async function runLocalCommand() {
           workspace: snapshotWorkspace()
         })
       });
+      applyClientRunnerWorkspaceSync(data, false);
       const out = String(data.stdout || '').trimEnd();
       const err = String(data.stderr || '').trimEnd();
       if (out) out.split('\n').forEach((l) => addTerminal(l));
@@ -6020,6 +6202,7 @@ async function sendMessage(overrideText, opts = {}) {
   const isSilentAutoResume = Boolean(opts.silentAutoResume);
   const autoRetryCount = Number(opts._autoRetryCount || 0);
   const waveCount = Number(opts._waveCount || 0);
+  const localExecCount = Number(opts._localExecCount || 0);
   const priorWaveTouched = Array.isArray(opts._waveTouched) ? opts._waveTouched : [];
   const priorWaveDeleted = Array.isArray(opts._waveDeleted) ? opts._waveDeleted : [];
   const msgCountBeforeTurn = state.messages.length;
@@ -6088,6 +6271,8 @@ async function sendMessage(overrideText, opts = {}) {
       detailThinking: state.agentConfig?.detailThinking || 'medium',
       ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
+      localRunner: isLocalTermuxActive() && opts._forceCloudRunner !== true,
+      ...(Array.isArray(opts.localExecResults) ? { localExecResults: opts.localExecResults } : {}),
       ...(effectiveTurnMarathon ? { marathon: effectiveTurnMarathon } : {}),
       ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
       ...(isSilentAutoResume ? { silentAutoResume: true } : {}),
@@ -6139,10 +6324,46 @@ async function sendMessage(overrideText, opts = {}) {
       if (isMarathonForCurrentConversation()) {
         recordMarathonTurnMetrics(result.steps || 1, mergedTouched);
       }
-      if (result.waveContinue && waveCount < 8) {
+      if (result.localExecContinue && Array.isArray(result.pendingLocalCommands) && result.pendingLocalCommands.length && localExecCount < 24) {
+        const localExecResults = [];
+        let forceCloudNext = false;
+        const textAreaEl = bubble.querySelector('.msg-text');
+        for (const cmdItem of result.pendingLocalCommands) {
+          if (!isTurnCurrent() || chatAbort.signal.aborted) break;
+          setSync('busy', `📱 اجرای دستور در Termux: ${String(cmdItem.command || '').slice(0, 36)}…`);
+          if (textAreaEl) {
+            textAreaEl.innerHTML = `<span class="tiny" style="color:var(--claude-bright)">📱 اجرای زنده روی Termux (127.0.0.1): <code style="direction:ltr;display:inline-block">${esc(String(cmdItem.command || '').slice(0, 80))}</code>…</span>`;
+          }
+          const execOut = await executeAgentCommandOnLocalTermux(cmdItem, chatAbort.signal);
+          localExecResults.push(execOut);
+          if (execOut.runner === 'fallback-cloud') forceCloudNext = true;
+          const line = bubble.querySelector(`[data-tool-id="${cssEscape(cmdItem.callId)}"]`);
+          if (line) {
+            line.classList.add(execOut.ok === false ? 'fail' : 'done');
+            const preview = String(execOut.stdout || execOut.stderr || `exit ${execOut.exitCode ?? 0}`).slice(0, 120).replace(/\s+/g, ' ');
+            line.insertAdjacentHTML(
+              'beforeend',
+              `<span style="color:var(--muted)">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:160px">${esc(preview)}</span>`
+            );
+          }
+        }
+        if (isTurnCurrent() && !chatAbort.signal.aborted) {
+          nextWaveChainPayload = {
+            resumeCheckpoint: true,
+            silentAutoResume: true,
+            localExecResults,
+            _forceCloudRunner: forceCloudNext,
+            _localExecCount: localExecCount + 1,
+            _waveCount: waveCount,
+            _waveTouched: mergedTouched,
+            _waveDeleted: mergedDeleted
+          };
+        }
+      } else if (result.waveContinue && waveCount < 8) {
         nextWaveChainPayload = {
           resumeCheckpoint: true,
           silentAutoResume: true,
+          _localExecCount: localExecCount,
           _waveCount: waveCount + 1,
           _waveTouched: mergedTouched,
           _waveDeleted: mergedDeleted
@@ -6294,12 +6515,16 @@ async function sendMessage(overrideText, opts = {}) {
     syncAgentUi();
     loadConversations();
     if (nextWaveChainPayload) {
-      setSync('busy', `🌊 انتقال خودکار به موج ${faNum((nextWaveChainPayload._waveCount || 1) + 1)}…`);
+      const syncMsg = Array.isArray(nextWaveChainPayload.localExecResults)
+        ? '📱 خروجی Termux آماده شد · ارسال به مدل و ادامه…'
+        : `🌊 انتقال خودکار به موج ${faNum((nextWaveChainPayload._waveCount || 1) + 1)}…`;
+      setSync('busy', syncMsg);
+      const chainDelay = Array.isArray(nextWaveChainPayload.localExecResults) ? 80 : 350;
       setTimeout(() => {
         if (!state.busy && state.conversationId === turnConvId) {
           sendMessage('ادامه', nextWaveChainPayload);
         }
-      }, 350);
+      }, chainDelay);
     } else if (scheduleAutoResumeNext > 0) {
       setTimeout(() => {
         if (!state.busy && state.conversationId === turnConvId) {
@@ -6323,6 +6548,8 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
   let persisted = false;
   let resumableStop = false;
   let waveContinue = false;
+  let localExecContinue = false;
+  let pendingLocalCommands = null;
   let marathonCompleted = false;
   let turnSteps = 0;
   let userStopped = false;
@@ -6436,6 +6663,10 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
           `<span style="color:var(--muted)">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:160px">${esc(preview)}</span>`
         );
       }
+    } else if (event === 'local_exec') {
+      const verbEl = bubble.querySelector('.claude-verb');
+      if (verbEl) verbEl.textContent = '📱 ارسال دستور به پل مستقیم Termux (127.0.0.1)…';
+      setSync('busy', '📱 اتصال به Termux گوشی…');
     } else if (event === 'generated_image') {
       if (data?.url && /^\/api\/images\/[a-zA-Z0-9_-]{8,64}$/.test(String(data.url))) {
         let liveGallery = bubble.querySelector('.live-gen-images');
@@ -6552,9 +6783,15 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
       persisted = true;
       waveContinue = Boolean(data.waveContinue);
+      localExecContinue = Boolean(data.localExecContinue);
+      pendingLocalCommands = Array.isArray(data.pendingLocalCommands) ? data.pendingLocalCommands : null;
       marathonCompleted = Boolean(data.marathonCompleted);
       turnSteps = Number(data.cumulativeSteps || data.steps || currentStep || 1);
-      if (waveContinue) {
+      if (localExecContinue) {
+        state.activeCheckpoint = null;
+        textArea.innerHTML = `<span class="tiny" style="color:var(--claude-bright)">📱 در حال اجرای دستور روی Termux گوشی شما (127.0.0.1)…</span>`;
+        setSync('busy', '📱 اجرای زنده در Termux…');
+      } else if (waveContinue) {
         state.activeCheckpoint = null;
         const wNum = faNum(data.waveNumber || 1);
         const cSteps = faNum(data.cumulativeSteps || data.steps || 0);
@@ -6667,6 +6904,8 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
   return {
     ok: persisted,
     waveContinue,
+    localExecContinue,
+    pendingLocalCommands,
     marathonCompleted,
     steps: turnSteps || currentStep || 1,
     userStopped,
@@ -7077,6 +7316,433 @@ async function resetProviderConfig() {
     toast('به API پیش‌فرض سرور بازگردانده شد');
   } catch (error) {
     toast('خطا: ' + error.message);
+  }
+}
+
+/* =========================================================================
+   Personal Sandbox, 24/7 Cloud Runner & Direct Local Termux Bridge (127.0.0.1)
+   ========================================================================= */
+const LOCAL_TERMUX_TOKEN_STORE = 'cp.localTermuxToken';
+let sbDraftMode = 'auto';
+
+function generateRandomCpToken() {
+  const bytes = new Uint8Array(18);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return 'cp_' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function getLocalTermuxToken() {
+  try {
+    let tok = localStorage.getItem(LOCAL_TERMUX_TOKEN_STORE) || '';
+    if (!tok) {
+      tok = generateRandomCpToken();
+      localStorage.setItem(LOCAL_TERMUX_TOKEN_STORE, tok);
+    }
+    return tok;
+  } catch {
+    return 'cp_local_termux';
+  }
+}
+
+function setLocalTermuxToken(tok) {
+  const clean = cleanClientCredential(tok || '').replace(/^bearer\s+/i, '').trim();
+  try {
+    if (clean) localStorage.setItem(LOCAL_TERMUX_TOKEN_STORE, clean);
+  } catch { /* ignore */ }
+  return clean;
+}
+
+function isLocalTermuxActive() {
+  return Boolean(state.sandboxConfig?.mode === 'local-termux');
+}
+
+function normalizeClientLocalUrl(rawUrl) {
+  const trimmed = cleanClientCredential(rawUrl || '');
+  if (!trimmed) return 'http://127.0.0.1:8787';
+  let candidate = /^\d{2,5}$/.test(trimmed)
+    ? `http://127.0.0.1:${trimmed}`
+    : /^[a-z]+:\/\//i.test(trimmed)
+      ? trimmed
+      : `http://${trimmed}`;
+  const u = new URL(candidate);
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== 'http:' || (host !== '127.0.0.1' && host !== 'localhost')) {
+    throw new Error('آدرس محلی Termux فقط می‌تواند روی http://127.0.0.1 یا http://localhost باشد.');
+  }
+  const port = u.port ? Number(u.port) : 8787;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('پورت Termux باید عددی بین ۱ تا ۶۵۵۳۵ باشد.');
+  }
+  return `http://${host}:${port}`;
+}
+
+function getLocalTermuxEndpoint() {
+  try {
+    return normalizeClientLocalUrl(state.sandboxConfig?.localUrl || 'http://127.0.0.1:8787');
+  } catch {
+    return 'http://127.0.0.1:8787';
+  }
+}
+
+function applyClientRunnerWorkspaceSync(data, persistRemote = false) {
+  if (!data || typeof data !== 'object' || !state.workspace?.files) return;
+  let mutated = false;
+  if (data.changedFiles && typeof data.changedFiles === 'object') {
+    for (const [rel, content] of Object.entries(data.changedFiles)) {
+      if (!rel || rel.startsWith('/') || rel.includes('..') || rel.includes('\\')) continue;
+      const text = String(content ?? '');
+      if (state.workspace.files[rel] !== text) {
+        state.workspace.files[rel] = text;
+        if (!state.workspace.active) state.workspace.active = rel;
+        if (state.repo) state.dirtyFiles.add(rel);
+        mutated = true;
+      }
+    }
+  }
+  if (Array.isArray(data.deletedFiles)) {
+    for (const rel of data.deletedFiles) {
+      if (state.workspace.files[rel] !== undefined) {
+        delete state.workspace.files[rel];
+        if (state.workspace.active === rel) {
+          state.workspace.active = Object.keys(state.workspace.files)[0] || '';
+        }
+        mutated = true;
+      }
+    }
+  }
+  if (mutated) {
+    renderTree();
+    renderEditor();
+    if (persistRemote) saveEditor(false);
+  }
+}
+
+async function callLocalTermuxRunner(command, filesMap = {}, externalSignal = null) {
+  const baseUrl = getLocalTermuxEndpoint();
+  const tok = getLocalTermuxToken();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), 28_000);
+  if (externalSignal) {
+    if (externalSignal.aborted) ctrl.abort();
+    else externalSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  try {
+    const res = await fetch(`${baseUrl}/run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(tok ? { Authorization: `Bearer ${tok}` } : {})
+      },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        cmd: command,
+        cwd: '/workspace',
+        timeoutMs: 25_000,
+        files: filesMap
+      })
+    });
+    const data = await res.json().catch(() => null);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('توکن محلی Termux با توکن ذخیره‌شده در مرورگر هم‌خوانی ندارد (401).');
+    }
+    if (!res.ok || !data) {
+      throw new Error((data && data.error) || `کد خطای HTTP ${res.status}`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function executeAgentCommandOnLocalTermux(cmdItem, signal) {
+  const command = String(cmdItem?.command || '').trim();
+  const callId = String(cmdItem?.callId || '');
+  try {
+    const res = await callLocalTermuxRunner(command, state.workspace?.files || {}, signal);
+    applyClientRunnerWorkspaceSync(res, false);
+    addTerminal(`$ ${command}`, 'dim');
+    addTerminal('  mode: local-termux (اجرای مستقیم روی گوشی شما)', res.ok ? 'ok' : 'err');
+    return {
+      callId,
+      ok: Boolean(res.ok ?? res.exitCode === 0),
+      runner: 'local-termux',
+      exitCode: Number.isFinite(res.exitCode) ? res.exitCode : 0,
+      durationMs: res.durationMs || null,
+      stdout: String(res.stdout ?? ''),
+      stderr: String(res.stderr ?? ''),
+      changedFiles: res.changedFiles || undefined,
+      deletedFiles: res.deletedFiles || undefined
+    };
+  } catch (localErr) {
+    // Graceful cloud container fallback so an AI turn NEVER stalls if Termux is asleep!
+    toast('⚠ Termux در دسترس نبود — این دستور به‌صورت خودکار روی کانتینر ابری اجرا شد');
+    try {
+      const fb = await api(API.run, {
+        method: 'POST',
+        body: JSON.stringify({
+          command,
+          conversationId: state.conversationId || '',
+          workspace: snapshotWorkspace()
+        })
+      });
+      applyClientRunnerWorkspaceSync(fb, false);
+      return {
+        callId,
+        ok: Boolean(fb.ok),
+        runner: 'fallback-cloud',
+        exitCode: fb.exitCode ?? (fb.ok ? 0 : 1),
+        durationMs: fb.durationMs || null,
+        stdout: String(fb.stdout ?? ''),
+        stderr: String(fb.stderr ?? ''),
+        changedFiles: fb.changedFiles || undefined,
+        deletedFiles: fb.deletedFiles || undefined
+      };
+    } catch (fbErr) {
+      return {
+        callId,
+        ok: false,
+        runner: 'local-termux',
+        exitCode: 1,
+        stdout: '',
+        stderr: `Local Termux error: ${localErr.message}; Cloud fallback error: ${fbErr.message}`
+      };
+    }
+  }
+}
+
+function buildTermuxOneLineInstaller(localUrl, token) {
+  let port = 8787;
+  try {
+    const u = new URL(normalizeClientLocalUrl(localUrl));
+    port = Number(u.port) || 8787;
+  } catch { port = 8787; }
+  const safeTok = (cleanClientCredential(token || '') || getLocalTermuxToken()).replace(/[^a-zA-Z0-9._-]/g, '');
+  const rawBase = 'https://raw.githubusercontent.com/shayanrdaqly38-gif/codepilot-cloudflare/main/runner-kit';
+  return `pkg update -y && pkg install -y nodejs curl python git && mkdir -p ~/.codepilot-runner && curl -fsSL ${rawBase}/server.mjs -o ~/.codepilot-runner/server.mjs && printf '#!/data/data/com.termux/files/usr/bin/bash\\nexport CP_HOST=127.0.0.1 CP_PORT=${port} CP_TOKEN=${safeTok}\\nexec node ~/.codepilot-runner/server.mjs\\n' > ~/.codepilot-runner/start.sh && chmod +x ~/.codepilot-runner/start.sh && ~/.codepilot-runner/start.sh`;
+}
+
+function refreshTermuxInstallSnippet() {
+  const box = $('sbModalTermuxCmdPreview');
+  if (!box) return;
+  const localUrl = $('sbModalLocalUrl')?.value || state.sandboxConfig?.localUrl || 'http://127.0.0.1:8787';
+  const tok = $('sbModalLocalToken')?.value || getLocalTermuxToken();
+  box.textContent = buildTermuxOneLineInstaller(localUrl, tok);
+}
+
+function selectSandboxMode(mode) {
+  sbDraftMode = ['local-termux', 'cloud-url', 'auto'].includes(mode) ? mode : 'auto';
+  $('sbModalModeLocal')?.classList.toggle('active', sbDraftMode === 'local-termux');
+  $('sbModalModeCloud')?.classList.toggle('active', sbDraftMode === 'cloud-url');
+  $('sbModalModeAuto')?.classList.toggle('active', sbDraftMode === 'auto');
+  if ($('sbModalPanelLocal')) $('sbModalPanelLocal').hidden = sbDraftMode !== 'local-termux';
+  if ($('sbModalPanelCloud')) $('sbModalPanelCloud').hidden = sbDraftMode !== 'cloud-url';
+  if ($('sbModalPanelAuto')) $('sbModalPanelAuto').hidden = sbDraftMode !== 'auto';
+}
+
+function openSandboxModal() {
+  const cfg = state.sandboxConfig || {};
+  const activeMode = cfg.mode || 'auto';
+  if ($('sbModalLocalUrl')) $('sbModalLocalUrl').value = cfg.localUrl || 'http://127.0.0.1:8787';
+  if ($('sbModalLocalToken')) $('sbModalLocalToken').value = getLocalTermuxToken();
+  if ($('sbModalCloudUrl')) $('sbModalCloudUrl').value = cfg.cloudUrl || '';
+  if ($('sbModalCloudToken')) {
+    $('sbModalCloudToken').value = '';
+    $('sbModalCloudToken').placeholder = cfg.hasCloudToken
+      ? `توکن ذخیره شده (${cfg.tokenHint || '***'}) — برای تغییر وارد کنید`
+      : 'cp_...';
+  }
+  const badge = $('sbModalStatusBadge');
+  if (badge) {
+    badge.textContent =
+      activeMode === 'local-termux'
+        ? '📱 پل Termux فعال'
+        : activeMode === 'cloud-url' && cfg.cloudUrl
+          ? '☁️ سرور ۲۴ ساعته متصل'
+          : '⚡ کانتینر ابری خودکار';
+  }
+  if ($('sbModalLocalProbeOut')) $('sbModalLocalProbeOut').innerHTML = '';
+  if ($('sbModalCloudProbeOut')) $('sbModalCloudProbeOut').innerHTML = '';
+  selectSandboxMode(activeMode);
+  refreshTermuxInstallSnippet();
+  $('sandboxModal')?.classList.add('open');
+}
+
+function generateLocalTermuxToken() {
+  const tok = generateRandomCpToken();
+  if ($('sbModalLocalToken')) $('sbModalLocalToken').value = tok;
+  setLocalTermuxToken(tok);
+  refreshTermuxInstallSnippet();
+  toast('توکن امن جدید ساخته شد — دستور Termux به‌روز شد');
+}
+
+function generateCloudSandboxToken() {
+  const tok = generateRandomCpToken();
+  const input = $('sbModalCloudToken');
+  if (input) {
+    input.type = 'text';
+    input.value = tok;
+  }
+  navigator.clipboard?.writeText(tok).catch(() => {});
+  toast('توکن تصادفی ساخته و در کلیپ‌بورد کپی شد (در Secret فضای Hugging Face قرار دهید)');
+}
+
+function copyTermuxSetupCommand() {
+  refreshTermuxInstallSnippet();
+  const cmd = $('sbModalTermuxCmdPreview')?.textContent || '';
+  const tokInput = $('sbModalLocalToken')?.value || '';
+  if (tokInput) setLocalTermuxToken(tokInput);
+  if (!cmd) return;
+  navigator.clipboard?.writeText(cmd).then(
+    () => toast('📋 دستور نصب ۱-کلیکی کپی شد — در Termux پیست کنید!'),
+    () => toast('کپی ناموفق بود؛ متن دستور را دستی انتخاب کنید')
+  );
+}
+
+async function probeLocalTermux() {
+  const out = $('sbModalLocalProbeOut');
+  const btn = $('sbModalProbeLocalBtn');
+  let baseUrl;
+  try {
+    baseUrl = normalizeClientLocalUrl($('sbModalLocalUrl')?.value || 'http://127.0.0.1:8787');
+  } catch (err) {
+    if (out) out.innerHTML = `<div class="notice bad">${esc(err.message)}</div>`;
+    return;
+  }
+  const tok = cleanClientCredential($('sbModalLocalToken')?.value || '') || getLocalTermuxToken();
+  setLocalTermuxToken(tok);
+  if (btn) { btn.disabled = true; btn.textContent = 'در حال تست اتصال 127.0.0.1…'; }
+  const started = Date.now();
+  try {
+    const res = await fetch(`${baseUrl}/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
+      signal: AbortSignal.timeout(5000)
+    });
+    const info = await res.json().catch(() => null);
+    if (res.status === 401 || res.status === 403) {
+      if (out) out.innerHTML = `<div class="notice bad">❌ توکن امنیتی نادرست است (401). دستور Termux را دوباره کپی و اجرا کنید تا توکن یکسان شود.</div>`;
+      return;
+    }
+    if (!res.ok || !info?.ok) {
+      if (out) out.innerHTML = `<div class="notice bad">❌ پاسخ نامعتبر از پورت محلی (HTTP ${res.status}).</div>`;
+      return;
+    }
+    const ms = Date.now() - started;
+    if (out) {
+      out.innerHTML = `<div class="notice ok">✔ <b>متصل شد!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code></div>`;
+    }
+  } catch (err) {
+    if (out) {
+      out.innerHTML = `<div class="notice bad">❌ اتصال به <code>${esc(baseUrl)}</code> برقرار نشد. مطمئن شوید در Termux دستور نصب/اجرا روشن است و اگر مرورگر اجازه‌ی Local Network خواست، گزینه <b>Allow</b> را زده‌اید.</div>`;
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ تست زنده اتصال Termux (127.0.0.1)'; }
+  }
+}
+
+async function probeCloudSandbox() {
+  const out = $('sbModalCloudProbeOut');
+  const btn = $('sbModalProbeCloudBtn');
+  const url = cleanClientCredential($('sbModalCloudUrl')?.value || '');
+  const token = cleanClientCredential($('sbModalCloudToken')?.value || '').replace(/^bearer\s+/i, '').trim();
+  if (!url && !state.sandboxConfig?.cloudUrl) {
+    if (out) out.innerHTML = '<div class="notice bad">لطفاً ابتدا آدرس HTTPS سرور ابری را وارد کنید.</div>';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'در حال تست سرور ابری…'; }
+  try {
+    const res = await api(API.run, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'probe', url, token })
+    });
+    if (res.ok) {
+      if (out) {
+        out.innerHTML = `<div class="notice ok">✔ <b>سرور ابری آماده است!</b> (${faNum(res.latencyMs || 0)}ms) · <code style="direction:ltr;display:inline-block">${esc(res.runner || 'cloud-linux')} ${esc(res.node || res.stdout || '')}</code></div>`;
+      }
+    } else if (out) {
+      out.innerHTML = `<div class="notice bad">❌ ${esc(res.error || 'اتصال برقرار نشد')}</div>`;
+    }
+  } catch (err) {
+    if (out) out.innerHTML = `<div class="notice bad">❌ خطا: ${esc(err.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 تست اتصال سرور ابری'; }
+  }
+}
+
+async function saveSandboxSettings() {
+  const btn = $('sbModalSaveBtn');
+  let localUrl = 'http://127.0.0.1:8787';
+  try {
+    localUrl = normalizeClientLocalUrl($('sbModalLocalUrl')?.value || 'http://127.0.0.1:8787');
+  } catch (err) {
+    toast(err.message);
+    return;
+  }
+  const localTok = cleanClientCredential($('sbModalLocalToken')?.value || '');
+  if (localTok) setLocalTermuxToken(localTok);
+
+  const cloudUrl = cleanClientCredential($('sbModalCloudUrl')?.value || '');
+  const cloudToken = cleanClientCredential($('sbModalCloudToken')?.value || '').replace(/^bearer\s+/i, '').trim();
+  if (sbDraftMode === 'cloud-url' && !cloudUrl && !state.sandboxConfig?.cloudUrl) {
+    toast('لطفاً آدرس HTTPS سرور ابری را وارد کنید');
+    $('sbModalCloudUrl')?.focus();
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'در حال ذخیره…'; }
+  try {
+    const res = await api(API.config, {
+      method: 'POST',
+      body: JSON.stringify({
+        sandboxConfig: {
+          mode: sbDraftMode,
+          localUrl,
+          cloudUrl,
+          ...(cloudToken ? { cloudToken } : {})
+        }
+      })
+    });
+    if (res?.sandboxConfig) {
+      state.sandboxConfig = { ...state.sandboxConfig, ...res.sandboxConfig };
+    }
+    if (res?.executionMode) state.executionMode = res.executionMode;
+    syncShellBadge();
+    closeModal('sandboxModal');
+    const msg =
+      sbDraftMode === 'local-termux'
+        ? '📱 پل مستقیم Termux گوشی فعال شد'
+        : sbDraftMode === 'cloud-url'
+          ? '☁️ سرور لینوکس ابری ۲۴ ساعته متصل و ذخیره شد'
+          : '⚡ کانتینر لینوکس ابری خودکار فعال شد';
+    toast(msg);
+  } catch (err) {
+    toast('خطا در ذخیره تنظیمات سندباکس: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✔ ذخیره و فعال‌سازی سندباکس'; }
+  }
+}
+
+async function resetSandboxSettings() {
+  try {
+    const res = await api(API.config, {
+      method: 'POST',
+      body: JSON.stringify({ sandboxConfig: { reset: true } })
+    });
+    if (res?.sandboxConfig) {
+      state.sandboxConfig = { ...state.sandboxConfig, ...res.sandboxConfig };
+    } else {
+      state.sandboxConfig = { mode: 'auto', cloudUrl: '', hasCloudToken: false, tokenHint: '', localUrl: 'http://127.0.0.1:8787' };
+    }
+    syncShellBadge();
+    closeModal('sandboxModal');
+    toast('تنظیمات سندباکس به حالت خودکار بازگردانده شد');
+  } catch (err) {
+    toast('خطا: ' + err.message);
   }
 }
 

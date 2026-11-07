@@ -135,9 +135,69 @@ async function callSandbox(env, { cmd, cwd = '/workspace', timeoutMs = DEFAULT_T
   };
 }
 
+function sanitizeFilesMapForRunner(rawFiles, secrets) {
+  if (!rawFiles || typeof rawFiles !== 'object') return null;
+  const out = {};
+  let count = 0;
+  let totalChars = 0;
+  for (const [path, rawContent] of Object.entries(rawFiles)) {
+    if (count >= MAX_MOUNT_FILES) break;
+    if (typeof path !== 'string' || !path || path.length > 200) continue;
+    if (path.startsWith('/') || path.includes('..') || path.includes('\\')) continue;
+    if (/^(\.env|\.dev\.vars|.*\.pem|.*\.key|id_rsa)/i.test(path)) continue;
+    const clean = redactCode(String(rawContent ?? ''), secrets);
+    if (totalChars + clean.length > MAX_MOUNT_TOTAL_CHARS) continue;
+    totalChars += clean.length;
+    count += 1;
+    out[path] = clean;
+  }
+  return out;
+}
+
+export function applyRunnerFileChanges(workspace, payload = {}, secrets = []) {
+  const touchedFiles = [];
+  const deletedFiles = [];
+  if (!workspace || typeof workspace !== 'object') return { touchedFiles, deletedFiles };
+  if (!workspace.files || typeof workspace.files !== 'object') workspace.files = {};
+
+  if (payload?.changedFiles && typeof payload.changedFiles === 'object') {
+    let syncedCount = 0;
+    for (const [rel, rawContent] of Object.entries(payload.changedFiles)) {
+      if (syncedCount >= 50) break;
+      if (typeof rel !== 'string' || !rel || rel.length > 200) continue;
+      if (rel.startsWith('/') || rel.includes('..') || rel.includes('\\') || rel.includes('\0')) continue;
+      if (!/^[\w./[\]-]{1,200}$/.test(rel)) continue;
+      if (/^(\.env|\.dev\.vars|.*\.pem|.*\.key|id_rsa)/i.test(rel)) continue;
+      const clean = redactSecrets(String(rawContent ?? '').slice(0, 600_000), secrets);
+      if (workspace.files[rel] !== clean) {
+        workspace.files[rel] = clean;
+        touchedFiles.push(rel);
+        syncedCount += 1;
+      }
+    }
+  }
+
+  if (Array.isArray(payload?.deletedFiles)) {
+    for (const rel of payload.deletedFiles.slice(0, 40)) {
+      if (typeof rel !== 'string' || !rel || rel.length > 200) continue;
+      if (workspace.files[rel] !== undefined) {
+        delete workspace.files[rel];
+        deletedFiles.push(rel);
+      }
+    }
+  }
+
+  return { touchedFiles, deletedFiles };
+}
+
 async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS, externalSignal = null }) {
   const endpoint = String(env?.SANDBOX_URL || '').trim();
   if (!endpoint) return null;
+  const secrets = envSecrets(env || {});
+  if (secrets.some((s) => s && cmd.includes(s))) {
+    return { ok: false, unavailable: false, exitCode: 1, stdout: '', stderr: 'Blocked: command contains a server secret.' };
+  }
+  const safeFiles = sanitizeFilesMapForRunner(files, secrets);
   const started = Date.now();
   const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
   if (env.SANDBOX_TOKEN) headers.Authorization = `Bearer ${env.SANDBOX_TOKEN}`;
@@ -148,7 +208,7 @@ async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_M
       headers,
       redirect: 'manual',
       signal: mergeTimeoutSignal(timeoutMs, externalSignal),
-      body: JSON.stringify({ cmd, cwd: '/workspace', timeoutMs, files })
+      body: JSON.stringify({ cmd, cwd: '/workspace', timeoutMs, files: safeFiles })
     });
   } catch (error) {
     return { ok: false, unavailable: true, error: error?.message || 'remote runner unreachable' };
@@ -162,11 +222,82 @@ async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_M
   }
   return {
     ok: Boolean(data.ok ?? data.exitCode === 0),
+    runner: typeof data.runner === 'string' ? data.runner : 'remote',
     exitCode: Number.isFinite(data.exitCode) ? data.exitCode : 0,
-    stdout: clampOutput(data.stdout),
-    stderr: clampOutput(data.stderr),
-    durationMs: Number.isFinite(data.durationMs) ? data.durationMs : Date.now() - started
+    stdout: clampOutput(redactSecrets(String(data.stdout ?? ''), secrets)),
+    stderr: clampOutput(redactSecrets(String(data.stderr ?? ''), secrets)),
+    durationMs: Number.isFinite(data.durationMs) ? data.durationMs : Date.now() - started,
+    changedFiles: data.changedFiles && typeof data.changedFiles === 'object' ? data.changedFiles : null,
+    deletedFiles: Array.isArray(data.deletedFiles) ? data.deletedFiles : null
   };
+}
+
+export async function probeCustomRunner(env, { overrideUrl = '', overrideToken = '' } = {}) {
+  const base = String(overrideUrl || env?.SANDBOX_URL || '').trim().replace(/\/+$/, '');
+  if (!base) {
+    return { ok: false, error: 'هیچ آدرس سرور سندباکسی تنظیم نشده است.' };
+  }
+  const token = String(overrideToken || env?.SANDBOX_TOKEN || '').trim();
+  const headers = { Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const started = Date.now();
+  try {
+    const healthUrl = base.endsWith('/run') ? `${base.slice(0, -4)}/health` : `${base}/health`;
+    const res = await fetch(healthUrl, {
+      method: 'GET',
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8_000)
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, status: res.status, error: 'توکن امنیتی رانر نادرست است (401 Unauthorized).' };
+    }
+    if (res.ok) {
+      const info = await res.json().catch(() => null);
+      if (info && typeof info === 'object' && info.ok !== false) {
+        return {
+          ok: true,
+          latencyMs: Date.now() - started,
+          runner: info.runner || 'cloud-linux',
+          platform: info.platform || 'linux',
+          arch: info.arch || '',
+          node: info.node || '',
+          shell: info.shell || ''
+        };
+      }
+    }
+  } catch {
+    // Fall through to POST probe for minimal custom webhook runners without GET /health
+  }
+
+  try {
+    const postRes = await fetch(base, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({ cmd: 'uname -srm && node -v 2>/dev/null || echo ok', cwd: '/workspace', timeoutMs: 8000, files: {} })
+    });
+    if (postRes.status === 401 || postRes.status === 403) {
+      return { ok: false, status: postRes.status, error: 'توکن امنیتی رانر نادرست است (401 Unauthorized).' };
+    }
+    if (!postRes.ok) {
+      return { ok: false, status: postRes.status, error: `سرور کد HTTP ${postRes.status} برگرداند.` };
+    }
+    const data = await postRes.json().catch(() => null);
+    if (!data || typeof data !== 'object') {
+      return { ok: false, error: 'پاسخ سرور JSON معتبر نیست.' };
+    }
+    return {
+      ok: true,
+      latencyMs: Date.now() - started,
+      runner: data.runner || 'remote-runner',
+      stdout: String(data.stdout || '').trim().slice(0, 160)
+    };
+  } catch (err) {
+    return { ok: false, error: `اتصال برقرار نشد: ${err?.message || 'خطای شبکه'}` };
+  }
 }
 
 function mountSafeFiles(rawFiles, secrets) {
@@ -276,7 +407,7 @@ function clampOutput(value) {
   return `${text.slice(0, MAX_OUTPUT_CHARS)}\n… (${text.length - MAX_OUTPUT_CHARS} کاراکتر دیگر بریده شد)`;
 }
 
-function formatRealResult(label, result) {
+export function formatRealResult(label, result) {
   const parts = [
     `${label} (exit ${result.exitCode}${result.durationMs ? `, ${result.durationMs}ms` : ''})`,
     result.stdout ? `stdout:\n${result.stdout}` : 'stdout: (empty)',
@@ -348,16 +479,25 @@ export async function runCommand(env, { command, workspace, externalSignal }) {
 
   // Tier 2: Custom remote sandbox URL (if configured)
   if (env?.SANDBOX_URL) {
-    const remote = await callCustomRunner(env, { cmd: command, files });
+    const remote = await callCustomRunner(env, { cmd: command, files, externalSignal });
     if (remote && !remote.unavailable) {
+      const secrets = envSecrets(env || {});
+      const syncInfo = applyRunnerFileChanges(workspace, remote, secrets);
+      const label =
+        remote.runner === 'termux'
+          ? 'Real Termux execution (remote tunnel)'
+          : 'Real remote Linux execution';
       return {
         mode: 'remote-sandbox',
+        runner: remote.runner || 'remote',
         ok: remote.ok,
         exitCode: remote.exitCode,
         stdout: remote.stdout,
         stderr: remote.stderr,
         durationMs: remote.durationMs,
-        text: formatRealResult('Real remote Linux execution', remote)
+        touchedFiles: syncInfo.touchedFiles,
+        deletedFiles: syncInfo.deletedFiles,
+        text: formatRealResult(label, remote)
       };
     }
   }

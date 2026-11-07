@@ -73,6 +73,20 @@ function mockFetch(url, init = {}) {
   }
   if (path === '/api/config' && init.method === 'POST') {
     const body = JSON.parse(init.body || '{}');
+    if (body.sandboxConfig) {
+      const sbMode = body.sandboxConfig.reset ? 'auto' : (body.sandboxConfig.mode || 'auto');
+      return jsonResponse({
+        ok: true,
+        sandboxConfig: {
+          mode: sbMode,
+          cloudUrl: body.sandboxConfig.cloudUrl || '',
+          hasCloudToken: Boolean(body.sandboxConfig.cloudToken),
+          tokenHint: body.sandboxConfig.cloudToken ? 'cp_••••9999' : '',
+          localUrl: body.sandboxConfig.localUrl || 'http://127.0.0.1:8787'
+        },
+        executionMode: sbMode === 'local-termux' ? 'local-termux' : (sbMode === 'cloud-url' ? 'remote-sandbox' : 'linux-container')
+      });
+    }
     return jsonResponse({
       ok: true,
       provider: {
@@ -753,6 +767,53 @@ let capturedFsOpts = null;
 window.document.body.requestFullscreen = async (opts) => { capturedFsOpts = opts; };
 await window.toggleFullscreen();
 assert.equal(capturedFsOpts?.navigationUI, 'hide', 'toggleFullscreen calls body.requestFullscreen with navigationUI:"hide"');
+
+// Personal Sandbox & Direct Local Termux Bridge (`#sandboxModal` + `127.0.0.1:8787` health probe & interactive terminal sync)
+assert.ok($('sandboxSettingsBtn'), '#sandboxSettingsBtn exists in top drawer');
+assert.ok($('sandboxModal'), '#sandboxModal exists');
+window.openSandboxModal();
+assert.ok($('sandboxModal').classList.contains('open'), 'openSandboxModal opens #sandboxModal');
+window.selectSandboxMode('local-termux');
+assert.equal($('sbModalPanelLocal').hidden, false, 'local-termux panel visible');
+assert.ok($('sbModalTermuxCmdPreview').textContent.includes('server.mjs'), '1-click Termux setup snippet rendered');
+
+// Mock http://127.0.0.1:8787/health & /run inside mockFetch via temporary window.fetch wrapper
+const prevUiFetch = window.fetch;
+window.fetch = async (u, init = {}) => {
+  const s = String(u);
+  if (s === 'http://127.0.0.1:8787/health') {
+    return jsonResponse({ ok: true, runner: 'termux', platform: 'android', arch: 'arm64', node: 'v22.12.0' });
+  }
+  if (s === 'http://127.0.0.1:8787/run') {
+    const payload = JSON.parse(init.body || '{}');
+    return jsonResponse({
+      ok: true,
+      runner: 'termux',
+      exitCode: 0,
+      stdout: 'TERMUX_UI_OK: ' + payload.cmd,
+      stderr: '',
+      changedFiles: { 'from-termux.txt': 'synced from android!' }
+    });
+  }
+  return prevUiFetch(u, init);
+};
+await window.probeLocalTermux();
+assert.ok($('sbModalLocalProbeOut').textContent.includes('متصل شد'), 'local Termux health probe succeeds');
+await window.saveSandboxSettings();
+assert.ok(!$('sandboxModal').classList.contains('open'), 'saveSandboxSettings closes modal');
+assert.ok($('shellMode').textContent.includes('Termux'), '#shellMode badge reflects active Local Termux bridge');
+
+// Run a command in interactive #terminal -> routes to 127.0.0.1:8787/run & syncs changedFiles into workspace!
+const termInput = window.document.querySelector('#terminal input');
+assert.ok(termInput, 'interactive terminal input exists');
+termInput.value = 'uname -a';
+termInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+await new Promise((r) => setTimeout(r, 40));
+assert.ok($('terminal').textContent.includes('TERMUX_UI_OK: uname -a'), 'terminal printed live Termux output');
+window.openFile('from-termux.txt');
+assert.equal($('editor').value, 'synced from android!', 'changedFiles from Local Termux synced directly into workspace editor');
+await window.resetSandboxSettings();
+window.fetch = prevUiFetch;
 
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
