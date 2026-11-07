@@ -19,11 +19,11 @@
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html{width:100%;max-width:100%;height:100%;background:#211b17;color-scheme:dark;overflow-x:hidden;-webkit-text-size-adjust:100%}
+html{width:100%;max-width:100%;background:#211b17;color-scheme:dark;overflow-x:hidden;-webkit-text-size-adjust:100%}
 html[data-theme="claude-day"]{background:#FAF5EE;color-scheme:light}
 html[data-theme="midnight"]{background:#11141a;color-scheme:dark}
-body{margin:0;width:100%;max-width:100%;position:relative;background:var(--bg);color:var(--text);height:100%;min-height:100dvh;overflow:hidden;overflow-x:clip;font-size:13px}
-html:fullscreen,html:fullscreen body,:fullscreen,::backdrop{width:100%;height:100%;min-height:100%;background:var(--bg,#211b17)}
+body{margin:0;width:100%;max-width:100%;position:relative;background:var(--bg);color:var(--text);height:100vh;height:100dvh;overflow:hidden;overflow-x:clip;font-size:13px}
+body:fullscreen,body:-webkit-full-screen{width:100vw!important;height:100vh!important;height:100dvh!important;max-width:100vw!important;display:flex!important;flex-direction:column!important;background:var(--bg)!important;overflow:hidden!important}
 button,input,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:1px solid var(--line);background:#1b2130;border-radius:7px;padding:7px 10px}
 button:hover{background:#252d3e;border-color:#3a465b}
@@ -268,7 +268,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 /* Independent RTL workspace: history → conversation → code, with compact task views. */
 :root{--bg:#101216;--panel:#17191e;--panel2:#202329;--line:#2b2e36;--text:#eceef3;--muted:#a1a7b4;--green:#92d4b1}
-body{height:100%;min-height:100dvh;display:flex;flex-direction:column;font-size:13px}
+body{height:100vh;height:100dvh;display:flex;flex-direction:column;font-size:13px}
 button{transition:background .15s,border-color .15s;min-height:34px;border-radius:9px}
 button:focus-visible,[role=button]:focus-visible,a:focus-visible{outline:2px solid var(--green);outline-offset:3px}
 textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
@@ -1916,15 +1916,15 @@ async function toggleFullscreen() {
       if (document.exitFullscreen) await document.exitFullscreen();
       else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
     } else {
-      const root = document.documentElement;
-      if (root.requestFullscreen) {
+      const target = document.body || document.documentElement;
+      if (target.requestFullscreen) {
         try {
-          await root.requestFullscreen({ navigationUI: 'hide' });
+          await target.requestFullscreen({ navigationUI: 'hide' });
         } catch (_) {
-          await root.requestFullscreen();
+          await target.requestFullscreen();
         }
-      } else if (root.webkitRequestFullscreen) {
-        await root.webkitRequestFullscreen();
+      } else if (target.webkitRequestFullscreen) {
+        await target.webkitRequestFullscreen();
       } else {
         alert('تمام‌صفحه در این مرورگر پشتیبانی نمی‌شود.');
       }
