@@ -246,6 +246,139 @@ export const VALID_AGENT_MODES = ['plan', 'suggest', 'auto-edit', 'full-auto'];
 export const VALID_RESPONSE_STYLES = ['balanced', 'concise', 'explanatory', 'senior-reviewer'];
 export const VALID_THEMES = ['claude-warm', 'claude-day', 'midnight'];
 export const VALID_POWER_LEVELS = ['low', 'medium', 'hard', 'very-hard', 'max', 'ultra-code'];
+export const VALID_SANDBOX_MODES = ['auto', 'cloud-url', 'local-termux'];
+
+/**
+ * Validate and normalize a remote Cloud Runner URL (e.g. Hugging Face Spaces
+ * `https://user-space.hf.space` or Cloudflare Tunnel `https://xxx.trycloudflare.com`).
+ * Enforces SSRF protection so server-side Workers never fetch private/loopback IPs.
+ */
+export function normalizeSandboxUrl(rawUrl) {
+  let trimmed = cleanCredentialInput(rawUrl);
+  if (!trimmed) return '';
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    trimmed = `https://${trimmed}`;
+  }
+  const parsed = assertSafeExternalUrl(trimmed);
+  return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '');
+}
+
+/**
+ * Validate a browser-local Termux loopback endpoint (`http://127.0.0.1:<port>` or `http://localhost:<port>`).
+ * Strictly restricted to loopback HTTP so the browser never leaks workspace code to non-local hosts.
+ */
+export function normalizeLocalTermuxUrl(rawUrl) {
+  const trimmed = cleanCredentialInput(rawUrl);
+  if (!trimmed) return 'http://127.0.0.1:8787';
+  let candidate = trimmed;
+  if (/^\d{2,5}$/.test(candidate)) {
+    candidate = `http://127.0.0.1:${candidate}`;
+  } else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) {
+    candidate = `http://${candidate}`;
+  }
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    fail('آدرس محلی Termux معتبر نیست (مثلاً http://127.0.0.1:8787).', 400, 'bad_local_termux_url');
+  }
+  if (parsed.protocol !== 'http:') {
+    fail('پل محلی Termux باید از پروتکل http روی 127.0.0.1 یا localhost استفاده کند.', 400, 'bad_local_termux_url');
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    fail('آدرس پل محلی Termux فقط می‌تواند 127.0.0.1 یا localhost باشد (برای آدرس‌های اینترنتی از حالت «سرور ابری ۲۴ ساعته» استفاده کنید).', 400, 'bad_local_termux_url');
+  }
+  const port = parsed.port ? Number(parsed.port) : 8787;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    fail('پورت Termux باید عددی بین ۱ تا ۶۵۵۳۵ باشد.', 400, 'bad_local_termux_port');
+  }
+  return `http://${host}:${port}`;
+}
+
+export async function getUserSandboxSummary(env, owner) {
+  const settings = await readUserSettingsObj(env, owner);
+  const s = settings.sandbox && typeof settings.sandbox === 'object' ? settings.sandbox : null;
+  const mode = VALID_SANDBOX_MODES.includes(s?.mode) ? s.mode : 'auto';
+  const cloudUrl = s?.cloudUrl ? String(s.cloudUrl) : '';
+  const hasCloudToken = Boolean(s?.tokenEnc);
+  const tokenHint = s?.tokenHint ? String(s.tokenHint) : '';
+  const localUrl = s?.localUrl ? String(s.localUrl) : 'http://127.0.0.1:8787';
+  const serverHasSandboxUrl = Boolean(env?.SANDBOX_URL);
+
+  let effectiveMode = 'linux-container';
+  if (mode === 'local-termux') effectiveMode = 'local-termux';
+  else if (mode === 'cloud-url' && cloudUrl) effectiveMode = 'cloud-url';
+  else if (serverHasSandboxUrl) effectiveMode = 'server-remote';
+
+  return {
+    mode,
+    cloudUrl,
+    hasCloudToken,
+    tokenHint,
+    localUrl,
+    serverHasSandboxUrl,
+    effectiveMode
+  };
+}
+
+export async function saveUserSandboxConfig(env, owner, input = {}) {
+  const settings = await readUserSettingsObj(env, owner);
+  if (input.reset) {
+    delete settings.sandbox;
+    await writeUserSettingsObj(env, owner, settings);
+    return getUserSandboxSummary(env, owner);
+  }
+
+  const prev = settings.sandbox && typeof settings.sandbox === 'object' ? settings.sandbox : {};
+  const mode =
+    input.mode !== undefined
+      ? (VALID_SANDBOX_MODES.includes(input.mode) ? input.mode : 'auto')
+      : (VALID_SANDBOX_MODES.includes(prev.mode) ? prev.mode : 'auto');
+
+  const cloudUrl =
+    input.cloudUrl !== undefined ? normalizeSandboxUrl(input.cloudUrl) : String(prev.cloudUrl || '');
+  const localUrl =
+    input.localUrl !== undefined
+      ? normalizeLocalTermuxUrl(input.localUrl)
+      : String(prev.localUrl || 'http://127.0.0.1:8787');
+
+  if (mode === 'cloud-url' && !cloudUrl) {
+    fail('لطفاً آدرس HTTPS سرور ابری (مثلاً لینک Hugging Face Space یا Cloudflare Tunnel) را وارد کنید.', 400, 'missing_sandbox_url');
+  }
+
+  let tokenEnc = prev.tokenEnc || '';
+  let tokenHint = prev.tokenHint || '';
+  if (input.clearToken) {
+    tokenEnc = '';
+    tokenHint = '';
+  } else if (typeof input.cloudToken === 'string') {
+    const cleaned = cleanCredentialInput(input.cloudToken).replace(/^bearer\s+/i, '').trim();
+    if (cleaned) {
+      if (cleaned.length > 1024 || /\s/.test(cleaned)) {
+        fail('قالب توکن سندباکس معتبر نیست (فاصله را حذف کنید).', 400, 'bad_sandbox_token');
+      }
+      tokenEnc = await encryptApiKey(env, cleaned);
+      tokenHint = maskApiKey(cleaned);
+    }
+  }
+
+  if (mode === 'auto' && !cloudUrl && !tokenEnc && localUrl === 'http://127.0.0.1:8787') {
+    delete settings.sandbox;
+  } else {
+    settings.sandbox = {
+      mode,
+      cloudUrl,
+      tokenEnc,
+      tokenHint,
+      localUrl,
+      updatedAt: Date.now()
+    };
+  }
+
+  await writeUserSettingsObj(env, owner, settings);
+  return getUserSandboxSummary(env, owner);
+}
 
 export const POWER_LEVEL_RANK = Object.freeze({
   low: 0,
@@ -471,12 +604,18 @@ export async function resolveEffectiveEnv(env, owner) {
   if (!env?.DB || !owner) return env;
   const settings = await readUserSettingsObj(env, owner);
   const p = settings.provider && typeof settings.provider === 'object' ? settings.provider : null;
+  const sbCfg = settings.sandbox && typeof settings.sandbox === 'object' ? settings.sandbox : null;
   const agentConfig = normalizeAgentConfig(settings.agentConfig, DEFAULT_AGENT_CONFIG);
 
   let customKey = '';
   if (p?.apiKeyEnc) {
     customKey = await decryptApiKey(env, p.apiKeyEnc);
   }
+  let customSandboxToken = '';
+  if (sbCfg?.tokenEnc) {
+    customSandboxToken = await decryptApiKey(env, sbCfg.tokenEnc);
+  }
+  const useCustomCloudSandbox = Boolean(sbCfg?.mode === 'cloud-url' && sbCfg?.cloudUrl);
   const customBaseUrl = p?.baseUrl ? String(p.baseUrl) : '';
   const customDefaultModel = p?.defaultModel ? String(p.defaultModel) : '';
   const hasCustom = Boolean(customBaseUrl || customKey || customDefaultModel);
@@ -500,9 +639,13 @@ export async function resolveEffectiveEnv(env, owner) {
     MODEL_API_KEY: customKey || env.MODEL_API_KEY || '',
     MODEL_NAME: resolvedModelName,
     MODEL_FALLBACK: !isTooken && customBaseUrl ? 'off' : env.MODEL_FALLBACK,
+    SANDBOX_URL: useCustomCloudSandbox ? String(sbCfg.cloudUrl) : env.SANDBOX_URL,
+    SANDBOX_TOKEN: useCustomCloudSandbox ? (customSandboxToken || '') : env.SANDBOX_TOKEN,
     CONTEXT_BUDGET_TOKENS:
       settings.agentConfig?.contextBudget ? String(agentConfig.contextBudget) : env.CONTEXT_BUDGET_TOKENS,
     _customProvider: hasCustom,
+    _customSandbox: useCustomCloudSandbox,
+    _sandboxMode: VALID_SANDBOX_MODES.includes(sbCfg?.mode) ? sbCfg.mode : 'auto',
     _agentConfig: agentConfig,
     _discoveredSpecs: discoveredMap
   };
