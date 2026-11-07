@@ -744,6 +744,14 @@ assert.equal(window.getComputedStyle($('sendBtn')).display, 'none', '#sendBtn co
 window.document.body.classList.remove('is-working');
 assert.notEqual(window.getComputedStyle($('sendBtn')).display, 'none', '#sendBtn computed display is restored when idle');
 
+// Immersive fullscreen hides Android navigation bar ({ navigationUI: 'hide' }) + dark root canvas & manifest
+assert.ok(window.document.querySelector('link[rel="manifest"][href="/manifest.webmanifest"]'), 'PWA fullscreen manifest linked');
+assert.equal(window.document.documentElement.dataset.theme, 'claude-warm', 'html root syncs active theme against white chin');
+let capturedFsOpts = null;
+window.document.documentElement.requestFullscreen = async (opts) => { capturedFsOpts = opts; };
+await window.toggleFullscreen();
+assert.equal(capturedFsOpts?.navigationUI, 'hide', 'toggleFullscreen passes navigationUI:"hide" to hide Android nav buttons');
+
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
 process.exit(0);

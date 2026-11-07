@@ -6,6 +6,9 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" id="metaThemeColor" content="#211b17">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>CodePilot — محیط توسعه هوشمند Claude Code &amp; Codex</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23E87B52'/><text x='16' y='22.5' font-size='19' font-weight='900' text-anchor='middle' fill='%231F1612'>✳</text></svg>">
 <style>
@@ -16,8 +19,11 @@
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html{width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%}
-body{margin:0;width:100%;max-width:100%;position:relative;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;overflow-x:clip;font-size:13px}
+html{width:100%;max-width:100%;height:100%;background:#211b17;color-scheme:dark;overflow-x:hidden;-webkit-text-size-adjust:100%}
+html[data-theme="claude-day"]{background:#FAF5EE;color-scheme:light}
+html[data-theme="midnight"]{background:#11141a;color-scheme:dark}
+body{margin:0;width:100%;max-width:100%;position:relative;background:var(--bg);color:var(--text);height:100%;min-height:100dvh;overflow:hidden;overflow-x:clip;font-size:13px}
+html:fullscreen,html:fullscreen body,:fullscreen,::backdrop{width:100%;height:100%;min-height:100%;background:var(--bg,#211b17)}
 button,input,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:1px solid var(--line);background:#1b2130;border-radius:7px;padding:7px 10px}
 button:hover{background:#252d3e;border-color:#3a465b}
@@ -262,7 +268,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 /* Independent RTL workspace: history → conversation → code, with compact task views. */
 :root{--bg:#101216;--panel:#17191e;--panel2:#202329;--line:#2b2e36;--text:#eceef3;--muted:#a1a7b4;--green:#92d4b1}
-body{height:100vh;height:100dvh;display:flex;flex-direction:column;font-size:13px}
+body{height:100%;min-height:100dvh;display:flex;flex-direction:column;font-size:13px}
 button{transition:background .15s,border-color .15s;min-height:34px;border-radius:9px}
 button:focus-visible,[role=button]:focus-visible,a:focus-visible{outline:2px solid var(--green);outline-offset:3px}
 textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
@@ -1222,10 +1228,12 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
 }
 @media(max-width:390px){
   .top .brand .logo{display:none}
+  .fs-top-btn{display:none!important}
   .comp-icon-btn{width:30px!important;height:30px!important;min-width:30px!important;min-height:30px!important;font-size:12.5px}
   .mode-pill,.power-pill{min-height:30px!important;padding:2px 6px!important;font-size:10px}
   .send-pill{min-height:30px!important;padding:3px 10px!important;font-size:11px}
 }
+.fs-top-btn[aria-pressed="true"]{border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
@@ -1233,6 +1241,7 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
   <div class="top-start">
     <button class="mobile-files icon-pill" id="sidebarToggle" aria-controls="workspaceSidebar" aria-expanded="false" onclick="toggleSidebar()" title="تاریخچه و فایل‌ها" aria-label="تاریخچه و فایل‌ها">☰</button>
     <button type="button" class="quick-new-btn" id="quickNewChatBtn" onclick="newConversation()" title="گفتگوی جدید فوری" aria-label="گفتگوی جدید">＋</button>
+    <button type="button" class="icon-pill fs-top-btn" id="topFullscreenBtn" onclick="toggleFullscreen()" title="تمام‌صفحه کامل (مخفی‌سازی نوار پایین گوشی)" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
     <div class="brand">
       <div class="logo">✳</div>
       <span class="brand-name">CodePilot</span>
@@ -1886,24 +1895,47 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
    ========================================================================= */
 'use strict';
 
+function getFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
 function updateFullscreenButton() {
-  const button = document.getElementById('fullscreenButton');
-  const active = !!document.fullscreenElement;
+  const active = !!getFullscreenElement();
   const label = active ? 'خروج از تمام‌صفحه' : 'تمام‌صفحه';
-  button.setAttribute('aria-pressed', String(active));
-  button.setAttribute('aria-label', label);
-  button.title = label;
+  for (const id of ['fullscreenButton', 'topFullscreenBtn']) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.setAttribute('aria-pressed', String(active));
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  }
 }
 async function toggleFullscreen() {
+  if (typeof toggleTopDrawer === 'function') toggleTopDrawer(false);
   try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
-    else alert('تمام‌صفحه در این مرورگر پشتیبانی نمی‌شود.');
+    if (getFullscreenElement()) {
+      if (document.exitFullscreen) await document.exitFullscreen();
+      else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+    } else {
+      const root = document.documentElement;
+      if (root.requestFullscreen) {
+        try {
+          await root.requestFullscreen({ navigationUI: 'hide' });
+        } catch (_) {
+          await root.requestFullscreen();
+        }
+      } else if (root.webkitRequestFullscreen) {
+        await root.webkitRequestFullscreen();
+      } else {
+        alert('تمام‌صفحه در این مرورگر پشتیبانی نمی‌شود.');
+      }
+    }
   } catch (_) {
     alert('امکان تغییر حالت تمام‌صفحه وجود ندارد.');
   }
+  updateFullscreenButton();
 }
 document.addEventListener('fullscreenchange', updateFullscreenButton);
+document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
 
 const API = {
   auth: '/api/auth',
@@ -3106,13 +3138,18 @@ async function refreshLiveModels(silent = false, force = !silent) {
 function applyTheme(themeId, persistLocal = false) {
   const valid = ['claude-warm', 'claude-day', 'midnight'];
   const next = valid.includes(themeId) ? themeId : 'claude-warm';
+  const bgHex = next === 'claude-day' ? '#FAF5EE' : next === 'midnight' ? '#101216' : '#211b17';
+  const scheme = next === 'claude-day' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.backgroundColor = bgHex;
+  document.documentElement.style.colorScheme = scheme;
   document.body.dataset.theme = next;
   state.agentConfig.theme = next;
   const metaColor = document.querySelector('meta[name="color-scheme"]');
-  if (metaColor) metaColor.setAttribute('content', next === 'claude-day' ? 'light' : 'dark');
+  if (metaColor) metaColor.setAttribute('content', scheme);
   const metaTheme = $('metaThemeColor');
   if (metaTheme) {
-    metaTheme.setAttribute('content', next === 'claude-day' ? '#FAF5EE' : next === 'midnight' ? '#101216' : '#211b17');
+    metaTheme.setAttribute('content', bgHex);
   }
   document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.themeChoice === next);
