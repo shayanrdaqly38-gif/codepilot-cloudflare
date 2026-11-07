@@ -87,6 +87,20 @@ function mockFetch(url, init = {}) {
         executionMode: sbMode === 'local-termux' ? 'local-termux' : (sbMode === 'cloud-url' ? 'remote-sandbox' : 'linux-container')
       });
     }
+    const mockFallbacks = !body.reset && Array.isArray(body.fallbacks)
+      ? body.fallbacks.map((fb, idx) => ({
+          id: fb.id || `gw-${idx + 2}`,
+          slot: idx + 2,
+          label: fb.label || '',
+          baseUrl: fb.baseUrl || '',
+          hasKey: Boolean(fb.apiKey),
+          keyHint: 'sk-b••••9999',
+          defaultModel: fb.defaultModel || '',
+          active: Boolean(fb.baseUrl && fb.apiKey),
+          healthy: true,
+          cooldownRemainingSec: 0
+        }))
+      : [];
     return jsonResponse({
       ok: true,
       provider: {
@@ -94,7 +108,11 @@ function mockFetch(url, init = {}) {
         baseUrl: body.baseUrl || '',
         effectiveBaseUrl: body.baseUrl || 'https://tooken.club/v1',
         hasCustomKey: Boolean(body.apiKey),
-        keyHint: 'sk-t••••1234'
+        keyHint: 'sk-t••••1234',
+        maxGateways: 10,
+        activeGatewayCount: body.reset ? 1 : (1 + mockFallbacks.length),
+        workingGatewaySlot: 1,
+        fallbacks: mockFallbacks
       },
       model: 'omega-next-v1',
       modelsSource: 'remote',
@@ -814,6 +832,36 @@ window.openFile('from-termux.txt');
 assert.equal($('editor').value, 'synced from android!', 'changedFiles from Local Termux synced directly into workspace editor');
 await window.resetSandboxSettings();
 window.fetch = prevUiFetch;
+
+// 10-Gateway Smart Pool UI (`#providerGatewaysList` + `addBackupGatewaySlot` up to 10 gateways + `saveProviderConfig`)
+window.openSettings();
+assert.ok($('providerGatewaysList'), '#providerGatewaysList exists');
+assert.ok($('addProviderGatewayBtn'), '#addProviderGatewayBtn exists');
+$('providerBaseUrlInput').value = 'https://openrouter.ai/api/v1';
+$('providerApiKeyInput').value = 'sk-or-ui-gw1-12345678';
+// Slot #2 is already rendered ready-to-fill; fill slot #2 and add slots #3..#10 (total 9 backup cards = 10 gateways)
+$('providerFallbackUrlInput').value = 'https://zro.moonmath.ai/v1';
+$('providerFallbackKeyInput').value = 'zro-ui-gw2-12345678';
+for (let s = 3; s <= 10; s += 1) {
+  window.addBackupGatewaySlot(`https://gw${s}.example.com/v1`, `GW-${s}`);
+  const cards = window.document.querySelectorAll('#providerGatewaysList [data-gw-idx]');
+  const lastCard = cards[cards.length - 1];
+  lastCard.querySelector('[data-gw-field="apiKey"]').value = `key_ui_gw_${s}_12345678`;
+}
+assert.equal(
+  window.document.querySelectorAll('#providerGatewaysList [data-gw-idx]').length,
+  9,
+  'Renders 9 backup gateway cards (درگاه ۲ تا ۱۰) alongside Gateway 1 = 10 total gateways'
+);
+assert.equal($('addProviderGatewayBtn').disabled, true, 'Add button disables at 10-gateway maximum');
+await window.saveProviderConfig();
+assert.equal(
+  window.document.querySelectorAll('#providerGatewaysList [data-gw-idx]').length,
+  9,
+  'All 10 gateways persist in D1 and re-render after saveProviderConfig()'
+);
+await window.resetProviderConfig();
+window.closeModal('settingsModal');
 
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);

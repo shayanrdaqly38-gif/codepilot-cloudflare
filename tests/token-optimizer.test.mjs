@@ -685,3 +685,200 @@ test('OpenRouter 50-Req/Day Suite: 0-probe metadata, 1-shot fast-finish edit, mu
     globalThis.fetch = origFetch;
   }
 });
+
+test('10-Gateway Smart Pool (درگاه ۱ تا ۱۰): saves up to 10 encrypted gateways, preserves keys on edit, auto-finds working gateway #5 when 1..4 hit quota/limits, and remembers healthy gateway on next turn', async () => {
+  const origFetch = globalThis.fetch;
+  fakeJwks(sharedKeys);
+  const jwksFetch = globalThis.fetch;
+  const env = makeEnv(sharedKeys);
+
+  const authRes = await authApi.onRequestGet(
+    ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(sharedKeys) } }), env)
+  );
+  const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
+
+  // 1. Reject > 10 gateways cleanly
+  const elevenFallbacks = Array.from({ length: 10 }, (_, idx) => ({
+    baseUrl: `https://gw${idx + 2}.example.com/v1`,
+    apiKey: `key_gw_${idx + 2}_12345678`
+  }));
+  const tooManyRes = await configApi.onRequestPost(
+    ctx(
+      req('/api/config', {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'sk-or-gw1-11112222',
+          fallbacks: elevenFallbacks,
+          skipModels: true
+        }
+      }),
+      env
+    )
+  );
+  assert.equal(tooManyRes.status, 400, 'More than 10 total gateways must return 400');
+
+  // 2. Configure ALL 10 Gateways (Gateway 1 + Gateways 2..10)
+  const nineBackups = [
+    { label: 'OR #2', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-gw2-22223333', defaultModel: 'qwen/qwen3-coder:free' },
+    { label: 'Paid Exhausted', baseUrl: 'https://gw3.example.com/v1', apiKey: 'sk-gw3-33334444', defaultModel: 'coder-v3' },
+    { label: 'Expired Key', baseUrl: 'https://gw4.example.com/v1', apiKey: 'sk-gw4-44445555', defaultModel: 'coder-v4' },
+    { label: 'Zro Healthy #5', baseUrl: 'https://zro.moonmath.ai/v1', apiKey: 'zro_gw5_healthy_9999', defaultModel: 'deepseek-v4.1-flash' },
+    { label: 'GW 6', baseUrl: 'https://gw6.example.com/v1', apiKey: 'sk-gw6-66667777', defaultModel: 'model-6' },
+    { label: 'GW 7', baseUrl: 'https://gw7.example.com/v1', apiKey: 'sk-gw7-77778888', defaultModel: 'model-7' },
+    { label: 'GW 8', baseUrl: 'https://gw8.example.com/v1', apiKey: 'sk-gw8-88889999', defaultModel: 'model-8' },
+    { label: 'GW 9', baseUrl: 'https://gw9.example.com/v1', apiKey: 'sk-gw9-99990000', defaultModel: 'model-9' },
+    { label: 'GW 10', baseUrl: 'https://gw10.example.com/v1', apiKey: 'sk-gw10-00001111', defaultModel: 'model-10' }
+  ];
+
+  const cfgRes = await configApi.onRequestPost(
+    ctx(
+      req('/api/config', {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'sk-or-gw1-11112222',
+          defaultModel: 'qwen/qwen3-coder:free',
+          fallbacks: nineBackups,
+          skipModels: true
+        }
+      }),
+      env
+    )
+  );
+  assert.equal(cfgRes.status, 200);
+  const cfgBody = await cfgRes.json();
+  assert.equal(cfgBody.provider.maxGateways, 10);
+  assert.equal(cfgBody.provider.gateways.length, 10, 'All 10 gateways must be stored');
+  assert.equal(cfgBody.provider.activeGatewayCount, 10, 'All 10 gateways must be active');
+
+  // 3. Re-save with blank `apiKey: ""` on Gateways 2..10 (simulating UI edit of labels) -> encrypted keys MUST be preserved!
+  const editRes = await configApi.onRequestPost(
+    ctx(
+      req('/api/config', {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: '',
+          defaultModel: 'qwen/qwen3-coder:free',
+          fallbacks: cfgBody.provider.fallbacks.map((fb, idx) => ({
+            id: fb.id,
+            label: idx === 3 ? 'Zro Working Gateway #5' : fb.label,
+            baseUrl: fb.baseUrl,
+            apiKey: '',
+            defaultModel: fb.defaultModel
+          })),
+          skipModels: true
+        }
+      }),
+      env
+    )
+  );
+  const editBody = await editRes.json();
+  assert.equal(editBody.provider.activeGatewayCount, 10, 'Encrypted keys for all 10 gateways must survive blank password re-save');
+  assert.equal(editBody.provider.fallbacks[3].label, 'Zro Working Gateway #5');
+
+  const created = await (
+    await stateApi.onRequestPost(
+      ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+    )
+  ).json();
+
+  const seenUrls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes('/cdn-cgi/access/certs')) return jwksFetch(url, init);
+    const authHeader = String(init?.headers?.Authorization || init?.headers?.authorization || '');
+    seenUrls.push({ url: u, auth: authHeader });
+
+    // Gateway 1 & 2 (OpenRouter accounts #1 & #2): 50 RPD daily limit!
+    if (u.includes('openrouter.ai/api/v1/chat/completions')) {
+      return new Response(
+        JSON.stringify({ error: { message: 'Rate limit exceeded: free-models-per-day.', code: 429 } }),
+        { status: 429, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    // Gateway 3: 402 Quota Exhausted
+    if (u.includes('gw3.example.com/v1/chat/completions')) {
+      return new Response(
+        JSON.stringify({ error: { message: 'Insufficient balance / quota exhausted' } }),
+        { status: 402, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    // Gateway 4: 401 Invalid API Key
+    if (u.includes('gw4.example.com/v1/chat/completions')) {
+      return new Response(
+        JSON.stringify({ error: { message: 'Invalid API key' } }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    // Gateway 5 (Zro): WORKS!
+    if (u.includes('zro.moonmath.ai/v1/chat/completions')) {
+      assert.equal(authHeader, 'Bearer zro_gw5_healthy_9999');
+      const sse = [
+        `data: ${JSON.stringify({
+          id: 'gw5-ok',
+          model: 'deepseek-v4.1-flash',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'پاسخ سالم از درگاه ۵ (Zro) دریافت شد!' }, finish_reason: null }]
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          id: 'gw5-ok',
+          model: 'deepseek-v4.1-flash',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 180, completion_tokens: 20, total_tokens: 200 }
+        })}\n\n`,
+        'data: [DONE]\n\n'
+      ].join('');
+      return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }
+    return new Response('unexpected gateway', { status: 500 });
+  };
+
+  try {
+    // Turn 1: Gateways 1, 2, 3, 4 fail -> automatically walks chain and succeeds on Gateway #5!
+    const turn1Res = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'تست انتخاب خودکار درگاه سالم', model: 'qwen/qwen3-coder:free' }
+        }),
+        env
+      )
+    );
+    const turn1Evts = await parseSse(turn1Res);
+    const turn1Done = turn1Evts.find((e) => e.event === 'done');
+    assert.ok(turn1Done, 'Turn 1 must succeed via Gateway #5');
+    assert.match(turn1Done.data.content, /درگاه ۵/);
+    assert.equal(turn1Done.data.activeGateway?.slot, 5, 'Active gateway slot must be 5');
+    assert.equal(seenUrls.length, 5, 'Must try Gateways 1..4 once each with 0 retry waste and succeed on Gateway 5');
+
+    // Turn 2 (Next message right after): Gateways 1..4 are now on cooldown, so Gateway #5 MUST be selected IMMEDIATELY on try #1!
+    seenUrls.length = 0;
+    const turn2Res = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'پیام دوم بدون اتلاف درخواست روی درگاه‌های سوخته', model: 'qwen/qwen3-coder:free' }
+        }),
+        env
+      )
+    );
+    const turn2Evts = await parseSse(turn2Res);
+    const turn2Done = turn2Evts.find((e) => e.event === 'done');
+    assert.ok(turn2Done, 'Turn 2 must succeed immediately');
+    assert.equal(
+      seenUrls.length,
+      1,
+      'Smart health memory must skip dead Gateways 1..4 and hit working Gateway #5 on the VERY FIRST HTTP request!'
+    );
+    assert.match(seenUrls[0].url, /zro\.moonmath\.ai/);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
