@@ -137,14 +137,14 @@ test('resolveAdaptiveStepEffort steps down greetings on Step 1 & clean Step 2+ w
     'low'
   );
   assert.equal(
-    resolveAdaptiveStepEffort({ baseEffort: 'high', step: 1, userText: 'موتور بازی را بساز', tokenSaver: 'max', supportedLevels: levels }),
+    resolveAdaptiveStepEffort({ baseEffort: 'high', step: 1, userText: 'موتور ویرایشگر را بساز', tokenSaver: 'max', supportedLevels: levels }),
     'high'
   );
   assert.equal(
     resolveAdaptiveStepEffort({
       baseEffort: 'high',
       step: 2,
-      userText: 'موتور بازی را بساز',
+      userText: 'موتور ویرایشگر را بساز',
       lastStepInfo: { hadError: false, justVerifiedClean: false },
       tokenSaver: 'max',
       supportedLevels: levels
@@ -155,7 +155,7 @@ test('resolveAdaptiveStepEffort steps down greetings on Step 1 & clean Step 2+ w
     resolveAdaptiveStepEffort({
       baseEffort: 'high',
       step: 2,
-      userText: 'موتور بازی را بساز',
+      userText: 'موتور ویرایشگر را بساز',
       lastStepInfo: { hadError: true },
       tokenSaver: 'max',
       supportedLevels: levels
