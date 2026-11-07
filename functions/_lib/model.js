@@ -3166,6 +3166,25 @@ export async function callModel(env, payload) {
               0
           ) || 0;
 
+        const promptTok = Number(data?.usage?.prompt_tokens ?? data?.usage?.input_tokens) || 0;
+        const rawCompletionTok = Number(data?.usage?.completion_tokens ?? data?.usage?.output_tokens) || 0;
+        const rawTotalTok = Number(data?.usage?.total_tokens) || 0;
+        // Prevent 2x double-counting of `reasoning_tokens`: in OpenAI / OpenRouter / DeepSeek / Gemini standard,
+        // `completion_tokens` ALREADY includes `completion_tokens_details.reasoning_tokens` (`total_tokens === prompt + completion`).
+        const reasoningAlreadyInCompletion =
+          reasoningTokens > 0 &&
+          rawCompletionTok >= reasoningTokens &&
+          (rawTotalTok > 0
+            ? Math.abs(rawTotalTok - (promptTok + rawCompletionTok)) <= Math.max(8, Math.floor(reasoningTokens * 0.15))
+            : Boolean(data?.usage?.completion_tokens_details || data?.usage?.output_tokens_details));
+        const visibleCompletionTok = reasoningAlreadyInCompletion
+          ? Math.max(0, rawCompletionTok - reasoningTokens)
+          : rawCompletionTok;
+        const exactTotalTok =
+          rawTotalTok > 0
+            ? rawTotalTok
+            : promptTok + visibleCompletionTok + reasoningTokens;
+
         return {
           model: String(data.model || model),
           finishReason: String(choice.finish_reason || 'stop'),
@@ -3179,10 +3198,11 @@ export async function callModel(env, payload) {
             ...(toolCalls.length ? { tool_calls: toolCalls } : {})
           },
           usage: {
-            prompt_tokens: Number(data?.usage?.prompt_tokens ?? data?.usage?.input_tokens) || 0,
-            completion_tokens: Number(data?.usage?.completion_tokens ?? data?.usage?.output_tokens) || 0,
+            prompt_tokens: promptTok,
+            completion_tokens: visibleCompletionTok,
             reasoning_tokens: reasoningTokens,
-            cached_tokens: cachedTokens
+            cached_tokens: cachedTokens,
+            total_tokens: exactTotalTok
           }
         };
       }
