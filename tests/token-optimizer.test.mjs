@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 
 import {
   VALID_TOKEN_SAVER_MODES,
+  isCacheDiscountedEndpoint,
   buildSmartFileRead,
   buildPatchFailureContext,
   pruneInTurnWireMessages,
-  extractMentionedFileContext,
   resolveAdaptiveStepEffort,
   applyPromptCacheBreakpoints
 } from '../functions/_lib/token-optimizer.js';
 import { normalizeAgentConfig } from '../functions/_lib/provider.js';
-import { buildWorkingContext, buildSystemPrompt, currentClockLine } from '../functions/_lib/memory.js';
+import { buildWorkingContext, buildSystemPrompt } from '../functions/_lib/memory.js';
 import { callModel } from '../functions/_lib/model.js';
 import { accessToken, fakeJwks, makeEnv, req, ctx, rsaKeys } from './harness.mjs';
 import * as authApi from '../functions/api/auth.js';
@@ -46,23 +46,41 @@ function generateSyntheticSourceFile(lineCount = 700) {
   return lines.join('\n');
 }
 
-test('normalizeAgentConfig defaults tokenSaver safely to max and validates allowed modes', () => {
+test('normalizeAgentConfig & isCacheDiscountedEndpoint classify openrouter.ai vs zro.moonmath.ai & tooken.club', () => {
   assert.deepEqual(VALID_TOKEN_SAVER_MODES, ['off', 'balanced', 'max']);
   assert.equal(normalizeAgentConfig({}).tokenSaver, 'max');
   assert.equal(normalizeAgentConfig({ tokenSaver: 'invalid' }).tokenSaver, 'max');
   assert.equal(normalizeAgentConfig({ tokenSaver: 'balanced' }).tokenSaver, 'balanced');
   assert.equal(normalizeAgentConfig({ tokenSaver: 'off' }).tokenSaver, 'off');
+
+  assert.equal(isCacheDiscountedEndpoint('https://openrouter.ai/api/v1'), true);
+  assert.equal(isCacheDiscountedEndpoint('https://api.anthropic.com/v1'), true);
+  assert.equal(isCacheDiscountedEndpoint('https://api.openai.com/v1'), true);
+  assert.equal(isCacheDiscountedEndpoint('https://zro.moonmath.ai/v1'), false);
+  assert.equal(isCacheDiscountedEndpoint('https://api.tooken.club/v1'), false);
 });
 
-test('buildSmartFileRead returns 100% verbatim up to 24KB (zero extra round-trips) and clean un-prefixed lines for apply_patch', () => {
-  // 18KB medium-large file must return 100% verbatim in 1 shot so no extra read_file round-trips happen!
-  const medium18k = generateSyntheticSourceFile(240);
-  assert.ok(medium18k.length > 12_000 && medium18k.length < 24_000);
-  const medRes = buildSmartFileRead('src/medium.js', medium18k, { tokenSaver: 'max' });
-  assert.equal(medRes.mode, 'full');
-  assert.equal(medRes.text, medium18k);
+test('Compressed TOOLS schema & buildSystemPrompt cut fixed per-step wire overhead dramatically', () => {
+  const toolsJson = JSON.stringify(chatApi.TOOLS);
+  assert.equal(chatApi.TOOLS.length, 14);
+  assert.ok(toolsJson.length < 4200, `Expected TOOLS JSON < 4200 chars (down from 5424), got ${toolsJson.length}`);
+  const readTool = chatApi.TOOLS.find((t) => t.function.name === 'read_file');
+  assert.ok(readTool.function.parameters.properties.query, 'read_file must support query jump');
 
-  // Truly giant file (>24KB) returns 16KB raw code + structural landmarks without corrupting lines with tabs
+  const sys = buildSystemPrompt({
+    files: { 'src/app.js': 'const a = 1;\n', 'index.html': '<h1>Hi</h1>\n' },
+    activeFile: 'src/app.js'
+  });
+  assert.ok(sys.length > 300 && sys.length < 1350, `Expected compact system prompt < 1350 chars, got ${sys.length}`);
+});
+
+test('buildSmartFileRead supports 15KB full read, 1-shot query jump, and tab-free landmark slices', () => {
+  const medium12k = generateSyntheticSourceFile(175);
+  assert.ok(medium12k.length > 9_000 && medium12k.length < 15_000);
+  const medRes = buildSmartFileRead('src/medium.js', medium12k, { tokenSaver: 'max' });
+  assert.equal(medRes.mode, 'full');
+  assert.equal(medRes.text, medium12k);
+
   const huge55k = generateSyntheticSourceFile(800);
   assert.ok(huge55k.length > 45_000);
   const largeRes = buildSmartFileRead('src/huge.js', huge55k, { tokenSaver: 'max' });
@@ -70,15 +88,15 @@ test('buildSmartFileRead returns 100% verbatim up to 24KB (zero extra round-trip
   assert.match(largeRes.text, /Structural Landmarks Across Entire File/);
   assert.doesNotMatch(largeRes.text, /^\d+\t/m, 'Must NEVER prepend lineNum+tab to code lines');
 
-  // Explicit slice returns clean raw lines ready for verbatim copy into apply_patch
-  const sliceRes = buildSmartFileRead('src/huge.js', huge55k, {
-    startLine: 250,
-    endLine: 265,
+  // Direct 1-call query jump into middle of 55KB file!
+  const queryRes = buildSmartFileRead('src/huge.js', huge55k, {
+    query: 'handlerSection10',
     tokenSaver: 'max'
   });
-  assert.equal(sliceRes.mode, 'ranged');
-  assert.match(sliceRes.text, /^export async function handlerSection6/m);
-  assert.doesNotMatch(sliceRes.text, /^\d+\t/m);
+  assert.equal(queryRes.mode, 'query');
+  assert.match(queryRes.text, /^export async function handlerSection10/m);
+  assert.doesNotMatch(queryRes.text, /^\d+\t/m);
+  assert.ok(queryRes.savedChars > 35_000);
 });
 
 test('buildPatchFailureContext returns clean copy-paste-exact lines with zero tab prefixes', () => {
@@ -107,10 +125,45 @@ test('buildPatchFailureContext returns clean copy-paste-exact lines with zero ta
   assert.doesNotMatch(ctxText, /^\d+\t/m);
 });
 
-test('pruneInTurnWireMessages preserves 100% append-only KV-cache below emergency threshold and compacts only on force/emergency', () => {
+test('resolveAdaptiveStepEffort steps down greetings on Step 1 & clean Step 2+ while keeping full Step 1 coding power', () => {
+  const levels = ['low', 'medium', 'high'];
+  assert.equal(
+    resolveAdaptiveStepEffort({ baseEffort: 'high', step: 1, userText: 'سلام خوبی؟', tokenSaver: 'max', supportedLevels: levels }),
+    'low'
+  );
+  assert.equal(
+    resolveAdaptiveStepEffort({ baseEffort: 'high', step: 1, userText: 'موتور بازی را بساز', tokenSaver: 'max', supportedLevels: levels }),
+    'high'
+  );
+  assert.equal(
+    resolveAdaptiveStepEffort({
+      baseEffort: 'high',
+      step: 2,
+      userText: 'موتور بازی را بساز',
+      lastStepInfo: { hadError: false, justVerifiedClean: false },
+      tokenSaver: 'max',
+      supportedLevels: levels
+    }),
+    'medium'
+  );
+  assert.equal(
+    resolveAdaptiveStepEffort({
+      baseEffort: 'high',
+      step: 2,
+      userText: 'موتور بازی را بساز',
+      lastStepInfo: { hadError: true },
+      tokenSaver: 'max',
+      supportedLevels: levels
+    }),
+    'high'
+  );
+});
+
+test('pruneInTurnWireMessages: aggressive compaction on zro.moonmath.ai vs prefix-safe post-anchor giant-write stripping on openrouter.ai', () => {
   const bigSnapshot = `[src/app.js · lines 1-200 of 200]\n${generateSyntheticSourceFile(200)}`;
+  const giantWriteContent = generateSyntheticSourceFile(220);
   const wireMessages = [
-    { role: 'user', content: 'Fix handlerSection1 in src/app.js' },
+    { role: 'user', content: 'Rewrite src/app.js' },
     {
       role: 'assistant',
       content: '',
@@ -124,30 +177,32 @@ test('pruneInTurnWireMessages preserves 100% append-only KV-cache below emergenc
       content: '',
       tool_calls: [
         {
-          id: 'tc_patch_1',
+          id: 'tc_write_1',
           type: 'function',
           function: {
-            name: 'apply_patch',
-            arguments: JSON.stringify({ path: 'src/app.js', edits: [{ search: 'a', replace: 'b' }] })
+            name: 'write_file',
+            arguments: JSON.stringify({ path: 'src/app.js', content: giantWriteContent })
           }
         }
       ]
     },
-    { role: 'tool', tool_call_id: 'tc_patch_1', content: 'Patched src/app.js (+1 / -1 lines).' }
+    { role: 'tool', tool_call_id: 'tc_write_1', content: 'Wrote src/app.js (15200 chars, 220 lines). Validation: OK.' }
   ];
 
-  // Normal turn (<140k chars): MUST stay 100% untouched so Prefix KV-Cache hits!
-  const normal = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max' });
-  assert.equal(normal.savedChars, 0);
-  assert.equal(normal.messages[2].content, bigSnapshot);
+  // On zro.moonmath.ai (cacheDiscounted: false): strips both giant write_file args AND stale pre-edit read_file!
+  const moonmath = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max', cacheDiscounted: false });
+  assert.ok(moonmath.savedChars > 24_000);
+  assert.match(moonmath.messages[2].content, /Stale read_file\(src\/app\.js\) superseded/i);
+  assert.match(moonmath.messages[3].tool_calls[0].function.arguments, /"_persisted":true/);
 
-  // Emergency (>140k or force: true): safely invalidates stale read
-  const forced = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max', force: true });
-  assert.ok(forced.savedChars > 4000);
-  assert.match(forced.messages[2].content, /Stale read_file\(src\/app\.js\) superseded/i);
+  // On openrouter.ai (cacheDiscounted: true): keeps user prefix 100% untouched AND strips giant post-anchor uncached write_file + >4.5KB stale read!
+  const openrouter = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max', cacheDiscounted: true });
+  assert.equal(openrouter.messages[0].content, 'Rewrite src/app.js');
+  assert.match(openrouter.messages[3].tool_calls[0].function.arguments, /"_persisted":true/);
+  assert.match(openrouter.messages[2].content, /Stale read_file\(src\/app\.js\) superseded/i);
 });
 
-test('applyPromptCacheBreakpoints keeps cache_control anchored on FIXED user index across Steps 1..N (never invalidates prefix!) & prevents 2x reasoning token double-count', async () => {
+test('applyPromptCacheBreakpoints keeps cache_control anchored on FIXED user index across Steps 1..N & prevents 2x reasoning token double-count', async () => {
   const sys = 'Long stable system prompt '.repeat(80);
   const step1Msgs = [
     { role: 'system', content: sys },
@@ -171,11 +226,9 @@ test('applyPromptCacheBreakpoints keeps cache_control anchored on FIXED user ind
   const w2 = applyPromptCacheBreakpoints(step2Msgs, tools, { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4' });
   const w3 = applyPromptCacheBreakpoints(step3Msgs, tools, { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4' });
 
-  // CRITICAL: Messages 0..3 MUST be 100% byte-for-byte identical across Step 1, Step 2, and Step 3!
   assert.equal(JSON.stringify(w1.messages.slice(0, 4)), JSON.stringify(w2.messages.slice(0, 4)));
   assert.equal(JSON.stringify(w2.messages.slice(0, 4)), JSON.stringify(w3.messages.slice(0, 4)));
 
-  // Verify callModel does NOT double-count reasoning_tokens when total_tokens === prompt_tokens + completion_tokens
   const origFetch = globalThis.fetch;
   try {
     globalThis.fetch = async () =>
@@ -198,19 +251,15 @@ test('applyPromptCacheBreakpoints keeps cache_control anchored on FIXED user ind
       { model: 'anthropic/claude-sonnet-4', messages: step1Msgs, tools }
     );
     assert.equal(res.usage.prompt_tokens, 3000);
-    assert.equal(res.usage.completion_tokens, 400, 'visible completion tokens separated cleanly from reasoning_tokens');
+    assert.equal(res.usage.completion_tokens, 400);
     assert.equal(res.usage.reasoning_tokens, 1800);
-    assert.equal(
-      res.usage.prompt_tokens + res.usage.completion_tokens + res.usage.reasoning_tokens,
-      5200,
-      'Total must equal exact 5200, NEVER 7000!'
-    );
+    assert.equal(res.usage.prompt_tokens + res.usage.completion_tokens + res.usage.reasoning_tokens, 5200);
   } finally {
     globalThis.fetch = origFetch;
   }
 });
 
-test('buildWorkingContext slims completed past-turn giant tool payloads on fresh user turns (saving 95%+ historical tool bloat)', async () => {
+test('buildWorkingContext slims completed past-turn giant tool payloads on fresh user turns', async () => {
   fakeJwks(sharedKeys);
   const env = { ...makeEnv(sharedKeys), _agentConfig: { tokenSaver: 'max' } };
   const authRes = await authApi.onRequestGet(
@@ -246,15 +295,12 @@ test('buildWorkingContext slims completed past-turn giant tool payloads on fresh
   });
 
   const serializedRecent = JSON.stringify(ctxOut.recent);
-  assert.ok(
-    serializedRecent.length < 2500,
-    `Expected completed past turn tool dumps (>34KB) to be compacted below 2.5KB, got ${serializedRecent.length}`
-  );
+  assert.ok(serializedRecent.length < 1800, `Expected slimmed history < 1.8KB, got ${serializedRecent.length}`);
 });
 
-test('End-to-end /api/chat v2: 100% append-only prefix across steps + @mention pre-pin + 1-shot clean patch recovery + exact non-double-counted turnTokens', async () => {
+test('End-to-end /api/chat Hyper-Eco v3 on OpenRouter + zro.moonmath.ai: prefix stability, in-turn write stripping, 1-shot patch recovery & exact turnTokens', async () => {
   fakeJwks(sharedKeys);
-  const env = makeEnv(sharedKeys);
+  const env = makeEnv(sharedKeys, { MODEL_BASE_URL: 'https://openrouter.ai/api/v1' });
   const origFetch = globalThis.fetch;
 
   try {
@@ -265,7 +311,7 @@ test('End-to-end /api/chat v2: 100% append-only prefix across steps + @mention p
 
     const created = await (
       await stateApi.onRequestPost(
-        ctx(req('/api/state', { method: 'POST', body: { action: 'create', title: 'Eco v2' }, headers: { Cookie: cookie } }), env)
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create', title: 'Eco v3' }, headers: { Cookie: cookie } }), env)
       )
     ).json();
 
@@ -346,7 +392,6 @@ test('End-to-end /api/chat v2: 100% append-only prefix across steps + @mention p
       }
 
       if (stepNum === 2) {
-        // Prefix of Step 1 MUST remain 100% identical in Step 2!
         assert.equal(JSON.stringify(wireSnapshots[0]), JSON.stringify(payload.messages.slice(0, wireSnapshots[0].length)));
         return new Response(
           JSON.stringify({
@@ -389,7 +434,6 @@ test('End-to-end /api/chat v2: 100% append-only prefix across steps + @mention p
         );
       }
 
-      // Prefix of Step 2 MUST remain 100% identical in Step 3!
       assert.equal(JSON.stringify(wireSnapshots[1]), JSON.stringify(payload.messages.slice(0, wireSnapshots[1].length)));
       return new Response(
         JSON.stringify({
@@ -430,7 +474,6 @@ test('End-to-end /api/chat v2: 100% append-only prefix across steps + @mention p
     const events = await parseSse(res);
     const doneEvt = events.find((e) => e.event === 'done');
     assert.ok(doneEvt);
-    // Exact upstream total: 1600 + 1650 + 1480 = 4730 (NEVER double-counted as 4730 + 570 = 5300!)
     assert.equal(doneEvt.data.turnTokens.totalTokens, 4730);
     assert.equal(doneEvt.data.turnTokens.cachedTokens, 3550);
     assert.ok(doneEvt.data.turnTokens.effectiveBilledTokens < 1800);

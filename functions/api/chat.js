@@ -82,6 +82,7 @@ import {
   buildPatchFailureContext,
   buildSmartFileRead,
   extractMentionedFileContext,
+  isCacheDiscountedEndpoint,
   pruneInTurnWireMessages,
   resolveAdaptiveStepEffort,
   VALID_TOKEN_SAVER_MODES
@@ -99,12 +100,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'think',
-      description: 'Optional scratchpad before complex multi-file architecture (skip when native reasoning is active).',
+      description: 'Scratchpad before complex architecture (skip if native reasoning active).',
       parameters: {
         type: 'object',
         properties: {
-          thought: { type: 'string', description: 'Concise analysis' },
-          plan: { type: 'string', description: 'Ordered steps (optional)' }
+          thought: { type: 'string' },
+          plan: { type: 'string' }
         },
         required: ['thought'],
         additionalProperties: false
@@ -115,7 +116,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'list_files',
-      description: 'List workspace file paths and character sizes.',
+      description: 'List workspace paths & sizes.',
       parameters: { type: 'object', properties: {}, additionalProperties: false }
     }
   },
@@ -123,13 +124,14 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read a file (or `startLine`–`endLine` slice for large files; large un-ranged calls return a structural map).',
+      description: 'Read file (`startLine`/`endLine` or `query` jump for large files).',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Exact path' },
-          startLine: { type: 'number', description: '1-based start line' },
-          endLine: { type: 'number', description: '1-based inclusive end line' }
+          path: { type: 'string' },
+          startLine: { type: 'number' },
+          endLine: { type: 'number' },
+          query: { type: 'string' }
         },
         required: ['path'],
         additionalProperties: false
@@ -140,14 +142,14 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'search_code',
-      description: 'Search workspace files (literal or `regex: true`); returns path:line hits.',
+      description: 'Search files (`regex: true` optional).',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string' },
           regex: { type: 'boolean' },
           caseSensitive: { type: 'boolean' },
-          pathFilter: { type: 'string', description: 'Path substring filter' }
+          pathFilter: { type: 'string' }
         },
         required: ['query'],
         additionalProperties: false
@@ -158,7 +160,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'list_symbols',
-      description: 'List functions, classes, CSS selectors, or HTML ids/classes.',
+      description: 'List functions, classes, CSS/HTML symbols.',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string' } },
@@ -170,7 +172,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'apply_patch',
-      description: 'Patch an existing file via unique `search`/`replace` blocks (preferred over `write_file` for edits).',
+      description: 'Patch existing file with unique `search`/`replace` blocks.',
       parameters: {
         type: 'object',
         properties: {
@@ -180,8 +182,8 @@ export const TOOLS = [
             items: {
               type: 'object',
               properties: {
-                search: { type: 'string', description: 'Exact existing lines' },
-                replace: { type: 'string', description: 'Replacement lines' },
+                search: { type: 'string' },
+                replace: { type: 'string' },
                 replaceAll: { type: 'boolean' }
               },
               required: ['search', 'replace'],
@@ -198,7 +200,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Create a new file or replace an entire file.',
+      description: 'Create new file or full rewrite.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
@@ -211,7 +213,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'delete_file',
-      description: 'Delete a file (saves a restorable version first).',
+      description: 'Delete file (versioned).',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' } },
@@ -224,12 +226,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'undo_edit',
-      description: 'Restore a file to its previous version (or specific `versionId`).',
+      description: 'Restore previous file version.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
-          versionId: { type: 'string', description: 'Optional version id' }
+          versionId: { type: 'string' }
         },
         required: ['path'],
         additionalProperties: false
@@ -240,12 +242,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'file_history',
-      description: 'List saved versions of a file (newest first).',
+      description: 'List file versions.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
-          limit: { type: 'number', description: 'Max entries (default 10, max 25)' }
+          limit: { type: 'number' }
         },
         required: ['path'],
         additionalProperties: false
@@ -256,7 +258,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'run_command',
-      description: 'Run a Bash/Linux command (bash, node, python3, gcc, go, rustc, sqlite3, grep) with workspace files mounted.',
+      description: 'Run shell command in workspace.',
       parameters: {
         type: 'object',
         properties: { command: { type: 'string' } },
@@ -269,12 +271,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'web_search',
-      description: 'Search the live web for docs, packages, news, or real-time facts.',
+      description: 'Search live web.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Search query' },
-          limit: { type: 'number', description: 'Max hits (default 8, max 15)' }
+          query: { type: 'string' },
+          limit: { type: 'number' }
         },
         required: ['query'],
         additionalProperties: false
@@ -285,15 +287,15 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_url',
-      description: 'Fetch a public web page (as clean text) or call a public REST/JSON API.',
+      description: 'Fetch public URL or REST API.',
       parameters: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'https:// or http:// URL' },
-          method: { type: 'string', description: 'HTTP method (default GET)' },
-          headers: { type: 'object', description: 'Optional headers' },
-          body: { type: 'string', description: 'Optional body' },
-          maxChars: { type: 'number', description: 'Max chars (default 16000, max 40000)' }
+          url: { type: 'string' },
+          method: { type: 'string' },
+          headers: { type: 'object' },
+          body: { type: 'string' },
+          maxChars: { type: 'number' }
         },
         required: ['url'],
         additionalProperties: false
@@ -304,22 +306,15 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'generate_image',
-      description: 'Generate a high-res image (FLUX.1 / Phoenix). Write `prompt` in vivid ENGLISH (50–100 words: subject, lighting, composition, palette).',
+      description: 'Generate image (50–90w English `prompt` + Persian `title`).',
       parameters: {
         type: 'object',
         properties: {
-          prompt: {
-            type: 'string',
-            description: 'Detailed English visual prompt.'
-          },
-          title: {
-            type: 'string',
-            description: 'Short caption (Persian if user speaks Persian).'
-          },
+          prompt: { type: 'string' },
+          title: { type: 'string' },
           aspectRatio: {
             type: 'string',
-            enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
-            description: 'Aspect ratio.'
+            enum: ['1:1', '16:9', '9:16', '4:3', '3:4']
           },
           style: {
             type: 'string',
@@ -333,13 +328,9 @@ export const TOOLS = [
               '3d-render',
               'anime',
               'pixel-art'
-            ],
-            description: 'Art preset.'
+            ]
           },
-          seed: {
-            type: 'number',
-            description: 'Optional seed.'
-          }
+          seed: { type: 'number' }
         },
         required: ['prompt'],
         additionalProperties: false
@@ -492,6 +483,7 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const smart = buildSmartFileRead(path, String(workspace.files[path]), {
         startLine: args.startLine,
         endLine: args.endLine,
+        query: args.query,
         tokenSaver: turn.tokenSaver || 'max'
       });
       if (smart.savedChars > 0) {
@@ -1082,6 +1074,7 @@ export async function onRequestPost(context) {
 
           const history = await listMessages(env, conversation.id);
           const memories = await listMemories(env, identity.owner).catch(() => []);
+          effectiveEnv._agentConfig = agentConfig;
           const working = await buildWorkingContext({
             env: effectiveEnv,
             conversation: { ...conversation, owner: identity.owner },
@@ -1197,11 +1190,22 @@ export async function onRequestPost(context) {
             steps += 1;
             stepStreamedContent = '';
             stepStreamedReasoning = '';
-            // CRITICAL FOR PREFIX KV-CACHE: Keep `messages` 100% append-only during normal loops (< 140k chars)!
-            // Only trigger emergency wire pruning if total text chars approach proxy 413 limits (> 140k chars).
-            const currentWireChars = estimateMessagesTextChars(messages);
-            if (currentWireChars > 140_000) {
-              if (tokenSaver !== 'off') {
+            // Provider-Aware Dual Strategy:
+            // - On Cache-Discounted Gateways (`openrouter.ai`, direct Anthropic/OpenAI/DeepSeek): stay 100% append-only (< 140k chars) for 90% cache-read discount!
+            // - On Raw-Token-Quota Gateways (`tooken.club`, etc.): immediately compact persisted `write_file`/`apply_patch` args & stale/old reads on steps >= 2 so raw tokens aren't re-billed!
+            const cacheDiscounted = isCacheDiscountedEndpoint(effectiveEnv.MODEL_BASE_URL);
+            if (steps >= 2 && tokenSaver !== 'off') {
+              const pruned = pruneInTurnWireMessages(messages.slice(1), {
+                tokenSaver,
+                cacheDiscounted
+              });
+              if (pruned.savedChars > 0) {
+                turn.savedChars += pruned.savedChars;
+                messages.splice(1, messages.length - 1, ...pruned.messages);
+              }
+            }
+            if (estimateMessagesTextChars(messages) > 140_000) {
+              if (tokenSaver !== 'off' && cacheDiscounted) {
                 const pruned = pruneInTurnWireMessages(messages.slice(1), { tokenSaver, force: true });
                 if (pruned.savedChars > 0) {
                   turn.savedChars += pruned.savedChars;
@@ -1225,6 +1229,7 @@ export async function onRequestPost(context) {
             const stepEffort = resolveAdaptiveStepEffort({
               baseEffort: reasoningEffort,
               step: steps,
+              userText,
               lastStepInfo,
               isAutoRepair: autoRepairAttempts > 0,
               tokenSaver,

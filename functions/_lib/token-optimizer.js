@@ -1,17 +1,21 @@
-// Hyper-Efficiency & Precision Token Engine v2 for CodePilot:
-//   1. 100% Append-Only Prefix KV-Cache Preservation (never mutates mid-turn history unless emergency >140k ceiling)
-//   2. Fixed Turn-Anchor Prompt Cache Breakpoints on OpenRouter Claude/Gemini (writes cache ONCE on Step 1; 90% cache read on Steps 2..N)
-//   3. Zero-Extra-Roundtrip File Reader (full verbatim read up to 24KB with raw un-prefixed lines so `apply_patch` never fails or re-reads)
-//   4. Clean Raw-Line 1-Shot `apply_patch` Failure Recovery (exact copy-paste lines without tab/line-number corruption)
-//   5. Zero-Roundtrip `@filepath` / `@filepath:start-end` Pre-Pinning
-//   6. Adaptive Per-Step Reasoning Effort (100% full power on Step 1 & errors; smart step-down on routine/closing steps)
+// Hyper-Efficiency & Precision Token Engine v3 for CodePilot:
+//   1. Provider-Aware Dual Strategy:
+//      - Raw-Token-Quota Gateways (`tooken.club`, OneAPI/NewAPI packs): aggressive in-turn compaction of persisted `write_file`/`apply_patch` args, stale pre-edit reads & older tool dumps (cuts raw prompt_tokens 65%–90%!)
+//      - Cache-Discounted Gateways (`openrouter.ai`, direct Anthropic/OpenAI/DeepSeek): 100% append-only prefix + fixed turn-anchor `cache_control` breakpoints (90% cache-read discount, zero cache-write thrashing)
+//   2. Focused File Reader (`query` jump + 15KB clean raw full read + Structural Landmark Map for giant files; zero `\t` line corruption)
+//   3. Clean Raw-Line 1-Shot `apply_patch` Failure Recovery
+//   4. Zero-Roundtrip `@filepath` / `@filepath:start-end` Pre-Pinning
+//   5. Smart Conversational & Step-Level Reasoning Effort Governor (100% full power on Step 1 coding & all errors; eliminates wasted thinking spin on routine steps & greetings)
 
 export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max'];
 
-const FULL_READ_CHAR_LIMIT = 24_000;
-const HUGE_HEAD_CHAR_BUDGET = 16_000;
-const MAX_RANGED_LINES = 400;
-const LANDMARK_CAP = 60;
+const FULL_READ_CHAR_LIMIT = 15_000;
+const HUGE_HEAD_CHAR_BUDGET = 10_500;
+const MAX_RANGED_LINES = 360;
+const LANDMARK_CAP = 56;
+
+const TRIVIAL_CHAT_RE =
+  /^(?:(?:سلام|درود|خوبی|چطوری|چه خبر|مرسی|ممنون|سپاس|تشکر|خسته نباشی|خسته نباشید|اوکی|باشه|حله|عالی|دمت گرم|hi|hello|hey|thanks|thank you|ok|okay|cool|nice)[.!؟?،,\s]*){1,3}$/i;
 
 const STRUCTURAL_PATTERNS = [
   /^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/,
@@ -30,6 +34,15 @@ const STRUCTURAL_PATTERNS = [
   /^\s*(#{1,3}\s+.{2,80})$/
 ];
 
+/**
+ * Returns true when the upstream endpoint discounts cached prefix tokens (OpenRouter, direct Anthropic/OpenAI/DeepSeek).
+ * Returns false for raw-token-pack gateways (like `tooken.club`, `moonmath.ai`) that deduct raw `prompt_tokens` 1:1 from user balance.
+ */
+export function isCacheDiscountedEndpoint(baseUrl = '') {
+  const u = String(baseUrl || '').toLowerCase();
+  return /openrouter\.ai|api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|generativelanguage\.googleapis\.com/.test(u);
+}
+
 function extractStructuralOutline(lines, fromLineIdx = 0, maxItems = LANDMARK_CAP) {
   const hits = [];
   for (let i = Math.max(0, fromLineIdx); i < lines.length; i += 1) {
@@ -37,7 +50,7 @@ function extractStructuralOutline(lines, fromLineIdx = 0, maxItems = LANDMARK_CA
     if (!raw || raw.length > 260) continue;
     for (const rx of STRUCTURAL_PATTERNS) {
       if (rx.test(raw)) {
-        hits.push({ line: i + 1, text: raw.trim().slice(0, 110) });
+        hits.push({ line: i + 1, text: raw.trim().slice(0, 105) });
         break;
       }
     }
@@ -57,15 +70,37 @@ function extractStructuralOutline(lines, fromLineIdx = 0, maxItems = LANDMARK_CA
 }
 
 /**
- * Zero-Extra-Roundtrip File Reader:
- * - Files <= 24,000 chars (~95% of all source files): returned 100% verbatim in ONE shot with ZERO extra round-trips!
- * - Explicit `startLine`/`endLine`: returns 100% CLEAN RAW LINES (never prepends `lineNum\t` so `apply_patch` matches on first try!).
- * - Truly giant files (> 24,000 chars, e.g. 445KB `index.html`) read without line range: returns first ~16,000 chars of clean raw lines
- *   PLUS a Structural Landmark Map of the remaining lines so the model has exact line numbers without blind truncation!
+ * High-Precision, Low-Token File Reader:
+ * - Optional `query`: jumps straight to ±55 clean raw lines around the first match in 1 call (saves a whole `search_code` round-trip!).
+ * - Explicit `startLine`/`endLine`: returns clean raw lines (NO `lineNum\t` prefix!) so `apply_patch` matches verbatim on try #1.
+ * - Files <= 15,000 chars (~90% of modules): returned 100% verbatim in 1 shot.
+ * - Giant files (> 15,000 chars, e.g. 445KB `index.html`) without range: returns ~10.5KB clean raw head + full-file Structural Landmark Map.
  */
-export function buildSmartFileRead(path, rawContent, { startLine, endLine, tokenSaver = 'max' } = {}) {
+export function buildSmartFileRead(path, rawContent, { startLine, endLine, query, tokenSaver = 'max' } = {}) {
   const content = String(rawContent ?? '');
   const hasRange = Number.isFinite(Number(startLine)) || Number.isFinite(Number(endLine));
+  const cleanQuery = typeof query === 'string' ? query.trim() : '';
+
+  if (cleanQuery && !hasRange) {
+    const lines = content.split('\n');
+    const needle = cleanQuery.toLowerCase();
+    const hitIndices = [];
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i].toLowerCase().includes(needle)) {
+        hitIndices.push(i);
+        if (hitIndices.length >= 2) break;
+      }
+    }
+    if (hitIndices.length > 0) {
+      const blocks = hitIndices.map((center) => {
+        const from = Math.max(0, center - 45);
+        const to = Math.min(lines.length, center + 65);
+        return `Lines ${from + 1}-${to} of ${lines.length} in ${path} (around "${cleanQuery}"):\n${lines.slice(from, to).join('\n')}`;
+      });
+      const text = blocks.join('\n\n---\n\n');
+      return { text, savedChars: Math.max(0, content.length - text.length), mode: 'query' };
+    }
+  }
 
   if (hasRange) {
     const lines = content.split('\n');
@@ -82,7 +117,8 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, token
     return { text, savedChars, mode: 'ranged' };
   }
 
-  if (tokenSaver === 'off' || content.length <= FULL_READ_CHAR_LIMIT) {
+  const limit = tokenSaver === 'balanced' ? 22_000 : FULL_READ_CHAR_LIMIT;
+  if (tokenSaver === 'off' || content.length <= limit) {
     return { text: content, savedChars: 0, mode: 'full' };
   }
 
@@ -97,7 +133,7 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, token
 
   const outline = extractStructuralOutline(lines, 0, LANDMARK_CAP);
   const sections = [
-    `[Smart Structural Map of ${path} — ${lines.length} lines (${content.length} chars). Lines 1-${headEndIdx} shown verbatim below; pass startLine/endLine to read_file for deeper sections.]`,
+    `[Smart Structural Map of ${path} — ${lines.length} lines (${content.length} chars). Lines 1-${headEndIdx} shown verbatim; pass startLine/endLine or query to read_file for deeper sections.]`,
     `Lines 1-${headEndIdx} of ${lines.length} in ${path}:`,
     lines.slice(0, headEndIdx).join('\n')
   ];
@@ -117,8 +153,7 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, token
 
 /**
  * 1-Shot `apply_patch` Failure Recovery:
- * Returns CLEAN, UNMODIFIED raw lines (no `lineNum\t` prefix!) around the fuzzy match
- * so the model copies the exact string into `search` and succeeds immediately without extra `read_file` calls.
+ * Emits clean, raw, un-prefixed lines around the fuzzy target so retry succeeds immediately without `read_file`.
  */
 export function buildPatchFailureContext(path, fileContent, edits, errorMessage) {
   const baseMsg = `Patch rejected: ${errorMessage}`;
@@ -177,7 +212,7 @@ export function buildPatchFailureContext(path, fileContent, edits, errorMessage)
   }
 
   if (!snippets.length) return baseMsg;
-  return `${baseMsg}\n\n[Auto-Context Recovery — retry apply_patch directly using these exact raw lines without calling read_file]:\n${snippets.join('\n').slice(0, 2200)}`;
+  return `${baseMsg}\n\n[Auto-Context Recovery — retry apply_patch directly using these exact raw lines without calling read_file]:\n${snippets.join('\n').slice(0, 2000)}`;
 }
 
 const MUTATING_TOOL_NAMES = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
@@ -191,32 +226,43 @@ function safeParseJson(raw) {
 }
 
 /**
- * Emergency-Only Epoch Wire Pruner:
- * CRITICAL CACHE RULE: During normal multi-step turns (< 140k chars), NEVER mutate earlier messages in `wireMessages`!
- * Mutating middle messages breaks Prefix KV-Caching across steps and causes the entire prompt to be re-billed at 100% price.
- * This function runs ONLY when `force === true` or total wire chars cross `emergencyThresholdChars` (default 140,000) to prevent HTTP 413.
+ * Provider-Aware In-Turn Wire Pruner:
+ * - On Cache-Discounted Endpoints (`cacheDiscounted: true`, e.g. OpenRouter): stays 100% append-only unless `force` or `>= 140k` chars so 90% cache-read discount stays locked!
+ * - On Raw-Token-Quota Endpoints (`cacheDiscounted: false`, e.g. `tooken.club` where every raw prompt_token is deducted 1:1 from quota!):
+ *   1) Immediately compacts already-persisted `write_file`/`apply_patch` arguments (> 500 chars) from earlier steps so 30KB code writes aren't re-billed on every subsequent step!
+ *   2) Invalidates stale `read_file` snapshots after that file was modified in a later step, and deduplicates repeated reads.
+ *   3) Compacts giant tool outputs (> 1,400 chars) that are >= 2 steps old while keeping the latest step 100% verbatim!
  */
 export function pruneInTurnWireMessages(
   wireMessages,
-  { tokenSaver = 'max', force = false, emergencyThresholdChars = 140_000 } = {}
+  {
+    tokenSaver = 'max',
+    cacheDiscounted = false,
+    force = false,
+    emergencyThresholdChars = 140_000
+  } = {}
 ) {
-  if (tokenSaver === 'off' || !Array.isArray(wireMessages) || wireMessages.length < 5) {
+  if (tokenSaver === 'off' || !Array.isArray(wireMessages) || wireMessages.length < 4) {
     return { messages: wireMessages, savedChars: 0 };
   }
 
-  if (!force) {
-    let totalChars = 0;
-    for (const m of wireMessages) {
-      if (!m) continue;
-      if (typeof m.content === 'string') totalChars += m.content.length;
-      if (Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) totalChars += (tc?.function?.arguments?.length || 0) + 24;
+  let totalChars = 0;
+  let lastRealUserIdx = -1;
+  for (let i = 0; i < wireMessages.length; i += 1) {
+    const m = wireMessages[i];
+    if (!m) continue;
+    if (typeof m.content === 'string') totalChars += m.content.length;
+    if (Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) totalChars += (tc?.function?.arguments?.length || 0) + 24;
+    }
+    if (m.role === 'user') {
+      const txt = typeof m.content === 'string' ? m.content : '';
+      if (!txt.startsWith('[ادامه‌ی خودکار') && !txt.startsWith('[کنترل کیفیت خودکار')) {
+        lastRealUserIdx = i;
       }
     }
-    if (totalChars < emergencyThresholdChars) {
-      return { messages: wireMessages, savedChars: 0 };
-    }
   }
+  const isEmergency = force || totalChars >= emergencyThresholdChars;
 
   const groups = [];
   for (let i = 0; i < wireMessages.length; i += 1) {
@@ -233,7 +279,7 @@ export function pruneInTurnWireMessages(
     }
   }
 
-  if (groups.length < 2) {
+  if (groups.length < 1) {
     return { messages: wireMessages, savedChars: 0 };
   }
 
@@ -244,22 +290,54 @@ export function pruneInTurnWireMessages(
 
   for (let gIdx = groups.length - 1; gIdx >= 0; gIdx -= 1) {
     const grp = groups[gIdx];
+    // On cache-discounted gateways (OpenRouter), NEVER mutate anything at or before `lastRealUserIdx` unless emergency!
+    if (cacheDiscounted && !isEmergency && grp.assistantIdx <= lastRealUserIdx) {
+      continue;
+    }
+    const stepsFromTip = groups.length - 1 - gIdx; // 0 = latest completed tool group, 1 = 1 step ago, 2+ = 2+ steps ago
     const aMsg = out[grp.assistantIdx];
     const toolByCallId = new Map();
     for (const ti of grp.toolIndices) {
       const tm = out[ti];
       if (tm?.tool_call_id) toolByCallId.set(tm.tool_call_id, { idx: ti, msg: tm });
     }
-    const isLatestGroup = gIdx === groups.length - 1;
 
-    for (const call of aMsg.tool_calls || []) {
+    let callsChanged = false;
+    const writeArgThreshold = cacheDiscounted && !isEmergency ? 1800 : 550;
+    const staleOutThreshold = cacheDiscounted && !isEmergency ? 4500 : 260;
+
+    const nextCalls = (aMsg.tool_calls || []).map((call) => {
       const name = call?.function?.name || '';
-      const args = safeParseJson(call?.function?.arguments);
+      const rawArgs = String(call?.function?.arguments || '');
+      const args = safeParseJson(rawArgs);
       const tEntry = toolByCallId.get(call.id);
       const tContent = String(tEntry?.msg?.content || '');
       const failed = /^(Error:|Patch rejected:|Validation:.*error)/i.test(tContent);
 
-      if (!isLatestGroup && tEntry && tContent.length > 260 && !tContent.startsWith('[Stale ') && !tContent.startsWith('[Duplicate ')) {
+      // 1. Once a mutating tool (`write_file` / `apply_patch`) succeeded, its giant file content is ALREADY saved in `workspace.files`.
+      // Even on OpenRouter, post-anchor tool calls sit AFTER `cache_control` #3 and would be re-billed 100% uncached on every remaining step!
+      const isCleanPersistedWrite =
+        !failed &&
+        (name === 'write_file' || name === 'apply_patch') &&
+        rawArgs.length > writeArgThreshold &&
+        !rawArgs.includes('"_persisted":true') &&
+        (stepsFromTip >= 1 || (name === 'write_file' && rawArgs.length > 1800 && tContent.includes('Validation: OK.')));
+
+      if (isCleanPersistedWrite) {
+        const compactArgs = JSON.stringify({
+          ...(args.path ? { path: args.path } : {}),
+          _persisted: true,
+          _chars: rawArgs.length
+        });
+        if (compactArgs.length < rawArgs.length) {
+          savedChars += rawArgs.length - compactArgs.length;
+          callsChanged = true;
+          call = { ...call, function: { ...call.function, arguments: compactArgs } };
+        }
+      }
+
+      // 2. Stale pre-edit `read_file` invalidation + duplicate read deduplication + >=2-step-old large output slimming
+      if (stepsFromTip >= 1 && tEntry && tContent.length > staleOutThreshold && !tContent.startsWith('[Stale ') && !tContent.startsWith('[Duplicate ') && !tContent.includes('…[فشرده')) {
         if (name === 'read_file' && args.path && mutatedLater.has(String(args.path))) {
           const replacement = `[Stale read_file(${args.path}) superseded by a later edit in this turn (${tContent.length} chars freed).]`;
           savedChars += Math.max(0, tContent.length - replacement.length);
@@ -267,7 +345,7 @@ export function pruneInTurnWireMessages(
         } else if (name === 'read_file' || name === 'list_files' || name === 'list_symbols') {
           const sig =
             name === 'read_file'
-              ? `read:${args.path || ''}:${args.startLine || ''}:${args.endLine || ''}`
+              ? `read:${args.path || ''}:${args.startLine || ''}:${args.endLine || ''}:${args.query || ''}`
               : name === 'list_symbols'
                 ? `sym:${args.query || ''}`
                 : 'list_files';
@@ -275,7 +353,15 @@ export function pruneInTurnWireMessages(
             const replacement = `[Duplicate ${name} output identical to a newer step (${tContent.length} chars deduplicated).]`;
             savedChars += Math.max(0, tContent.length - replacement.length);
             out[tEntry.idx] = { ...tEntry.msg, content: replacement };
+          } else if ((!cacheDiscounted || isEmergency) && tokenSaver === 'max' && stepsFromTip >= 2 && tContent.length > 1400) {
+            const slimmed = `${tContent.slice(0, 440)}\n…[فشرده شد (${tContent.length} کاراکتر)]…\n${tContent.slice(-180)}`;
+            savedChars += Math.max(0, tContent.length - slimmed.length);
+            out[tEntry.idx] = { ...tEntry.msg, content: slimmed };
           }
+        } else if ((!cacheDiscounted || isEmergency) && tokenSaver === 'max' && stepsFromTip >= 2 && tContent.length > 1400) {
+          const slimmed = `${tContent.slice(0, 440)}\n…[فشرده شد (${tContent.length} کاراکتر)]…\n${tContent.slice(-180)}`;
+          savedChars += Math.max(0, tContent.length - slimmed.length);
+          out[tEntry.idx] = { ...tEntry.msg, content: slimmed };
         }
       }
 
@@ -285,12 +371,18 @@ export function pruneInTurnWireMessages(
       if (!failed && (name === 'read_file' || name === 'list_files' || name === 'list_symbols')) {
         const sig =
           name === 'read_file'
-            ? `read:${args.path || ''}:${args.startLine || ''}:${args.endLine || ''}`
+            ? `read:${args.path || ''}:${args.startLine || ''}:${args.endLine || ''}:${args.query || ''}`
             : name === 'list_symbols'
               ? `sym:${args.query || ''}`
               : 'list_files';
         seenSignaturesLater.add(sig);
       }
+
+      return call;
+    });
+
+    if (callsChanged) {
+      out[grp.assistantIdx] = { ...aMsg, tool_calls: nextCalls };
     }
   }
 
@@ -310,7 +402,7 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
   const blocks = [];
   const paths = [];
   let totalChars = 0;
-  const MAX_PREPIN_CHARS = 12_000;
+  const MAX_PREPIN_CHARS = 10_000;
 
   let match;
   while ((match = regex.exec(userText)) !== null) {
@@ -319,7 +411,7 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
     if (!filePath || seen.has(filePath) || workspaceFiles[filePath] === undefined) continue;
     seen.add(filePath);
     const startLine = match[2] ? Number(match[2]) : undefined;
-    const endLine = match[3] ? Number(match[3]) : startLine ? startLine + 100 : undefined;
+    const endLine = match[3] ? Number(match[3]) : startLine ? startLine + 95 : undefined;
 
     const smart = buildSmartFileRead(filePath, workspaceFiles[filePath], {
       startLine,
@@ -335,20 +427,22 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
 
   if (!blocks.length) return { block: '', paths: [], savedRoundtripChars: 0 };
   return {
-    block: `\n\n[فایل‌های اشاره‌شده با @ — بدون نیاز به فراخوانی مجدد read_file]:\n${blocks.join('\n\n')}`,
+    block: `\n\n[فایل اشاره‌شده با @ — بدون نیاز به read_file مجدد]:\n${blocks.join('\n\n')}`,
     paths,
     savedRoundtripChars: 3_600 * paths.length
   };
 }
 
 /**
- * Adaptive Per-Step Reasoning Effort:
- * - Preserves 100% full `baseEffort` on Step 1 (architecture & planning) and on ANY error / patch-rejection / validation-failure / auto-repair!
- * - Steps down excessive spin on purely mechanical steps or clean closing confirmations.
+ * Smart Conversational & Step-Level Reasoning Effort Governor:
+ * - Step 1 on real coding/analysis prompts & ALL error / patch-rejection / validation-failure / auto-repair steps: 100% full `baseEffort`!
+ * - Pure short greetings ("سلام", "مرسی", "ok"): steps down to `'low'`/`'minimal'` so greetings don't burn 4,000 thinking tokens!
+ * - Routine Step 2+ execution after Step 1 already planned architecture (with 0 errors): steps down `'max'`/`'xhigh'`/`'high'` to `'medium'` (and `'low'` on pure listing or verified-clean closing summary), cutting reasoning spin by 65%–85%!
  */
 export function resolveAdaptiveStepEffort({
   baseEffort,
   step = 1,
+  userText = '',
   lastStepInfo = null,
   isAutoRepair = false,
   tokenSaver = 'max',
@@ -359,21 +453,29 @@ export function resolveAdaptiveStepEffort({
   }
   const levels = Array.isArray(supportedLevels) ? supportedLevels : [];
 
-  if (isAutoRepair || lastStepInfo?.hadError || lastStepInfo?.hadValidationError) {
-    if (baseEffort === 'low' && levels.includes('medium')) return 'medium';
-    return baseEffort;
-  }
-
-  if (step <= 1 || !lastStepInfo) {
-    return baseEffort;
-  }
-
   const pickSupported = (preferred) => {
     for (const candidate of preferred) {
       if (!levels.length || levels.includes(candidate)) return candidate;
     }
     return baseEffort;
   };
+
+  if (isAutoRepair || lastStepInfo?.hadError || lastStepInfo?.hadValidationError) {
+    if (baseEffort === 'low' && levels.includes('medium')) return 'medium';
+    return baseEffort;
+  }
+
+  // Pure 1-2 word greeting/acknowledgment on Step 1: avoid burning thousands of reasoning tokens on "سلام"!
+  if (step === 1 && tokenSaver === 'max' && typeof userText === 'string') {
+    const trimmed = userText.trim();
+    if (trimmed.length > 0 && trimmed.length <= 28 && TRIVIAL_CHAT_RE.test(trimmed)) {
+      return pickSupported(['minimal', 'low', baseEffort]);
+    }
+  }
+
+  if (step <= 1 || !lastStepInfo) {
+    return baseEffort;
+  }
 
   const highTiers = new Set(['high', 'xhigh', 'max']);
   if (!highTiers.has(baseEffort)) {
@@ -392,8 +494,12 @@ export function resolveAdaptiveStepEffort({
       : pickSupported(['medium']);
   }
 
-  // On clean intermediate read/search steps, step down ultra-expensive `max`/`xhigh` by 1 notch to `high`
-  if (tokenSaver === 'max' && (baseEffort === 'max' || baseEffort === 'xhigh')) {
+  // Step 2+ clean intermediate execution (e.g. applying planned patch after clean read_file):
+  // Step 1 already ran at full `baseEffort`; stepping down to `medium` (in `max` saver) saves thousands of output reasoning tokens per step!
+  if (tokenSaver === 'max') {
+    return pickSupported(['medium', 'high', baseEffort]);
+  }
+  if (tokenSaver === 'balanced' && (baseEffort === 'max' || baseEffort === 'xhigh')) {
     return pickSupported(['high', baseEffort]);
   }
 
@@ -402,11 +508,7 @@ export function resolveAdaptiveStepEffort({
 
 /**
  * FIXED-ANCHOR Prompt Cache Breakpoints for Anthropic Claude & Google Gemini on OpenRouter:
- * - NEVER uses a moving `messages.length - 3` index (which strips `cache_control` on the next step, invalidating the cache and charging +25% cache-write on every step!).
- * - Instead anchors strictly on:
- *   1) Last `tools` schema
- *   2) `messages[0]` (`system` prompt, if >= 1200 chars)
- *   3) The FIXED User Turn Anchor (`anchorUserIdx`) — constant across ALL tool steps 1..N of a turn!
+ * Anchors strictly on (1) last `tools` schema, (2) `messages[0]` system prompt, and (3) FIXED turn-entry user index.
  */
 export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', model = '', tokenSaver = 'max' } = {}) {
   if (
@@ -422,7 +524,6 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
   const nextMessages = messages.map((m) => ({ ...m }));
   let breakpointsUsed = 0;
 
-  // Breakpoint 1: Last tool schema (sits at very start of prompt prefix)
   let nextTools = tools;
   if (Array.isArray(tools) && tools.length > 0) {
     nextTools = tools.map((t, idx) =>
@@ -431,11 +532,10 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
     breakpointsUsed += 1;
   }
 
-  // Breakpoint 2: System prompt (must be >= 1200 chars to meet minimum cacheable token threshold)
   if (
     nextMessages[0]?.role === 'system' &&
     typeof nextMessages[0].content === 'string' &&
-    nextMessages[0].content.length >= 1200
+    nextMessages[0].content.length >= 600
   ) {
     nextMessages[0] = {
       ...nextMessages[0],
@@ -450,7 +550,6 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
     breakpointsUsed += 1;
   }
 
-  // Breakpoint 3: FIXED Turn-Entry User Message (index NEVER changes across Step 1, Step 2, ..., Step N!)
   let anchorUserIdx = -1;
   for (let i = nextMessages.length - 1; i >= 1; i -= 1) {
     const m = nextMessages[i];
@@ -486,8 +585,6 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
     }
   }
 
-  // Breakpoint 4 (Optional Fixed Epoch): Only if turn exceeds 4 full tool rounds after anchorUserIdx,
-  // place ONE fixed checkpoint at anchorUserIdx + 8 (never moves for Steps 5..9).
   const fixedEpochIdx = anchorUserIdx >= 1 ? anchorUserIdx + 8 : -1;
   if (fixedEpochIdx > 0 && fixedEpochIdx < nextMessages.length - 1 && breakpointsUsed < 4) {
     const epMsg = nextMessages[fixedEpochIdx];

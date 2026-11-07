@@ -1641,10 +1641,10 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
       </div>
       <div>
-        <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز مصرف توکن</label>
+        <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز مصرف توکن (v3)</label>
         <select class="field" id="cfgTokenSaver" style="direction:rtl;text-align:right">
-          <option value="max">حداکثر صرفه‌جویی هوشمند (تا ۹۰٪+ · پیشنهادی)</option>
-          <option value="balanced">متعادل (صرفه‌جویی ۵۰–۷۰٪)</option>
+          <option value="max">حداکثر صرفه‌جویی واقعی (Hyper-Eco v3 · پیشنهادی)</option>
+          <option value="balanced">متعادل</option>
           <option value="off">خاموش (ارسال خام)</option>
         </select>
       </div>
@@ -4474,7 +4474,7 @@ async function setTokenSaverMode(mode) {
   if ($('cfgTokenSaver')) $('cfgTokenSaver').value = mode;
   renderQuotaModalBody();
   const labels = {
-    max: 'حداکثر صرفه‌جویی هوشمند (۹۰٪+) فعال شد ⚡',
+    max: 'حداکثر صرفه‌جویی واقعی (Hyper-Eco v3) فعال شد ⚡',
     balanced: 'حالت بهینه‌سازی متعادل فعال شد ⚖',
     off: 'بهینه‌ساز توکن خاموش شد'
   };
@@ -4604,16 +4604,16 @@ function renderQuotaModalBody() {
   const ecoBoxHtml = `
     <div class="spec-box" style="margin-top:10px;border-color:rgba(126,226,168,.28)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی هوشمند توکن (Hyper-Eco v2)</span>
-        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'max' ? 'حداکثر صرفه‌جویی واقعی' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
+        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی واقعی توکن (Hyper-Eco v3)</span>
+        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'max' ? 'حداکثر کاهش خام + کش هوشمند' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
       </div>
       <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
-        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر</button>
+        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر (v3)</button>
         <button type="button" onclick="setTokenSaverMode('balanced')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'balanced' ? 'border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)' : ''}">⚖ متعادل</button>
         <button type="button" onclick="setTokenSaverMode('off')" style="min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'off' ? 'border-color:#f5b14c;color:#f5b14c' : ''}">خاموش</button>
       </div>
       <div style="font-size:11px;color:#9fb4d6;margin-top:7px;line-height:1.65">
-        حفظ ۱۰۰٪ کش پیشوند درگاه (Append-Only) + فشرده‌سازی خودکار ابزارهای نوبت‌های قبل + خوانش مستقیم بدون دور اضافی + شمارش دقیق بدون دوبارشماری تفکر
+        تشخیص خودکار نوع درگاه (حذف آنی کدهای تکراری در بسته‌های توکنی + حفظ کش پیشوند در OpenRouter) · ۵۵٪ کاهش اسکیمای ابزارها و پرامپت سیستم · پنجرهٔ سبک ۴.۲K · کنترل هوشمند تفکر
         ${(state.sessionSavedTokens > 0 || state.sessionCachedTokens > 0)
           ? `<br><span style="color:#7ee2a8">✔ ذخیره‌شده در این نشست: <b style="direction:ltr">~${Math.round(state.sessionSavedTokens).toLocaleString('en-US')} tok</b>${state.sessionCachedTokens > 0 ? ` (کش درگاه: <b style="direction:ltr">${Math.round(state.sessionCachedTokens).toLocaleString('en-US')}</b>)` : ''}</span>`
           : ''}
