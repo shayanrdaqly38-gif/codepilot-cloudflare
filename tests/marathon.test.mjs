@@ -81,7 +81,7 @@ test('buildSystemPrompt injects marathon directive when active and suppresses it
       marathon: {
         active: true,
         paused: false,
-        goal: 'بهبود بازی دوز',
+        goal: 'تقویت محیط توسعه CodePilot',
         durationH: 2,
         startedAt: Date.now(),
         cycle: 4,
@@ -90,7 +90,7 @@ test('buildSystemPrompt injects marathon directive when active and suppresses it
     }
   });
   assert.ok(onPrompt.includes('MARATHON MODE IS ACTIVE'));
-  assert.ok(onPrompt.includes('بهبود بازی دوز'));
+  assert.ok(onPrompt.includes('تقویت محیط توسعه CodePilot'));
   assert.ok(onPrompt.includes('2 ساعت'));
   assert.ok(onPrompt.includes('چرخه 4 از سقف 50'));
   assert.ok(onPrompt.includes('[MARATHON_COMPLETE]'));

@@ -95,7 +95,7 @@ t('memory: marathon injection off by default', () => {
 t('memory: marathon injection on with goal + duration', () => {
   const on = buildSystemPrompt({
     ...base,
-    agentConfig: { marathon: { active: true, goal: 'بهبود بازی دوز', durationH: 2, startedAt: 1700000000000 } }
+    agentConfig: { marathon: { active: true, goal: 'تقویت محیط توسعه CodePilot', durationH: 2, startedAt: 1700000000000 } }
   });
   assert.ok(on.includes('MARATHON MODE IS ACTIVE'));
   assert.ok(on.includes('بهبود بازی دوز'));
