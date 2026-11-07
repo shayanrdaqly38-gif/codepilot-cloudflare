@@ -170,27 +170,251 @@ export function parseApiKeyPool(rawInput) {
   return unique.slice(0, 12);
 }
 
+export const MAX_PROVIDER_GATEWAYS = 10;
+const MAX_FALLBACK_GATEWAYS = MAX_PROVIDER_GATEWAYS - 1;
+const gatewayHealthMem = new Map();
+
+export function gatewayHealthId(slot, baseUrl, customId = '') {
+  const cleanId = String(customId || '').trim();
+  const normUrl = String(baseUrl || '').trim().toLowerCase().replace(/\/+$/, '');
+  return `${cleanId || `gw-${slot}`}::${normUrl}`;
+}
+
+async function gatewayHealthMetaKey(owner) {
+  const hash = await sha256Hex(`gw-health:${String(owner || 'anon')}`);
+  return `gwh:${hash.slice(0, 20)}`;
+}
+
+export async function loadGatewayHealthMap(env, owner) {
+  if (!owner) return {};
+  const now = Date.now();
+  const mem = gatewayHealthMem.get(owner);
+  if (mem && now - mem.loadedAt < 30_000) {
+    return mem.entries || {};
+  }
+  if (!env?.DB) return mem?.entries || {};
+  try {
+    await ensureSchema(env);
+    const key = await gatewayHealthMetaKey(owner);
+    const row = await env.DB.prepare('SELECT value FROM meta WHERE key=?').bind(key).first();
+    if (!row?.value) {
+      gatewayHealthMem.set(owner, { loadedAt: now, entries: {} });
+      return {};
+    }
+    const parsed = JSON.parse(row.value);
+    const rawEntries = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    const pruned = {};
+    for (const [k, v] of Object.entries(rawEntries)) {
+      if (!v || typeof v !== 'object') continue;
+      // Keep recent records (within 6 hours)
+      const refTs = Math.max(Number(v.updatedAt) || 0, Number(v.cooldownUntil) || 0, Number(v.lastOkAt) || 0);
+      if (refTs > 0 && now - refTs < 6 * 60 * 60 * 1000) {
+        pruned[k] = v;
+      }
+    }
+    gatewayHealthMem.set(owner, { loadedAt: now, entries: pruned });
+    return pruned;
+  } catch {
+    return mem?.entries || {};
+  }
+}
+
+export async function clearGatewayHealth(env, owner) {
+  if (!owner) return;
+  gatewayHealthMem.set(owner, { loadedAt: Date.now(), entries: {} });
+  if (!env?.DB) return;
+  try {
+    await ensureSchema(env);
+    const key = await gatewayHealthMetaKey(owner);
+    await env.DB.prepare('DELETE FROM meta WHERE key=?').bind(key).run();
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function recordGatewayOutcome(env, owner, gw, outcome = {}) {
+  if (!owner || !gw?.baseUrl) return;
+  const now = Date.now();
+  const current = { ...(await loadGatewayHealthMap(env, owner)) };
+  const hKey = gatewayHealthId(gw.slot || 1, gw.baseUrl, gw.id);
+  const prev = current[hKey] && typeof current[hKey] === 'object' ? current[hKey] : {};
+
+  if (outcome.ok) {
+    current[hKey] = {
+      slot: gw.slot || 1,
+      baseUrl: gw.baseUrl,
+      cooldownUntil: 0,
+      failCount: 0,
+      lastErrorCode: '',
+      lastStatus: 200,
+      lastOkAt: now,
+      updatedAt: now
+    };
+  } else {
+    const status = Number(outcome.status) || 0;
+    const code = String(outcome.code || '');
+    const failCount = (Number(prev.failCount) || 0) + 1;
+    let cooldownMs = 75_000; // Default 75s cooldown for transient 429 / 5xx / timeout
+    if (outcome.isDailyQuota || status === 402 || code === 'model_quota_exhausted') {
+      cooldownMs = 20 * 60 * 1000; // 20 minutes for daily 50-RPD cap / depleted credits
+    } else if (status === 401 || status === 403 || code === 'model_auth') {
+      cooldownMs = 15 * 60 * 1000; // 15 minutes for invalid/revoked key
+    } else if (failCount >= 3) {
+      cooldownMs = Math.min(10 * 60 * 1000, 75_000 * failCount);
+    }
+    current[hKey] = {
+      slot: gw.slot || 1,
+      baseUrl: gw.baseUrl,
+      cooldownUntil: now + cooldownMs,
+      failCount,
+      lastErrorCode: outcome.isDailyQuota ? 'daily_quota' : (code || `http_${status || 'err'}`),
+      lastStatus: status,
+      lastOkAt: Number(prev.lastOkAt) || 0,
+      updatedAt: now
+    };
+  }
+
+  gatewayHealthMem.set(owner, { loadedAt: now, entries: current });
+  if (env && typeof env === 'object') {
+    env._gatewayHealth = current;
+  }
+  if (!env?.DB) return;
+  try {
+    await ensureSchema(env);
+    const key = await gatewayHealthMetaKey(owner);
+    await env.DB.prepare(
+      `INSERT INTO meta(key, value) VALUES(?, ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+    )
+      .bind(key, JSON.stringify(current))
+      .run();
+  } catch {
+    // Non-fatal health persistence
+  }
+}
+
+function normalizeStoredFallbacks(p) {
+  if (!p || typeof p !== 'object') return [];
+  const rawList = Array.isArray(p.fallbacks) ? p.fallbacks : [];
+  const normalized = [];
+  for (let i = 0; i < rawList.length && normalized.length < MAX_FALLBACK_GATEWAYS; i += 1) {
+    const item = rawList[i];
+    if (!item || typeof item !== 'object') continue;
+    const baseUrl = item.baseUrl ? String(item.baseUrl) : '';
+    const apiKeyEnc = item.apiKeyEnc ? String(item.apiKeyEnc) : '';
+    const defaultModel = item.defaultModel ? String(item.defaultModel) : '';
+    if (!baseUrl && !apiKeyEnc && !defaultModel) continue;
+    const slot = normalized.length + 2;
+    normalized.push({
+      id: item.id ? String(item.id).slice(0, 40) : `gw-${slot}`,
+      label: item.label ? String(item.label).slice(0, 60) : '',
+      baseUrl,
+      apiKeyEnc,
+      keyHint: item.keyHint ? String(item.keyHint) : '',
+      keyCount: Number(item.keyCount) || (apiKeyEnc ? 1 : 0),
+      defaultModel,
+      enabled: item.enabled !== false
+    });
+  }
+  if (!normalized.length && (p.fallbackBaseUrl || p.fallbackApiKeyEnc || p.fallbackModel)) {
+    normalized.push({
+      id: 'gw-2',
+      label: '',
+      baseUrl: p.fallbackBaseUrl ? String(p.fallbackBaseUrl) : '',
+      apiKeyEnc: p.fallbackApiKeyEnc ? String(p.fallbackApiKeyEnc) : '',
+      keyHint: p.fallbackKeyHint ? String(p.fallbackKeyHint) : '',
+      keyCount: p.fallbackApiKeyEnc ? 1 : 0,
+      defaultModel: p.fallbackModel ? String(p.fallbackModel) : '',
+      enabled: true
+    });
+  }
+  return normalized;
+}
+
 /**
- * Return safe, non-secret provider metadata for the UI.
+ * Return safe, non-secret provider metadata for the UI (supports up to 10 gateways: درگاه ۱ تا ۱۰).
  */
 export async function getUserProviderSummary(env, owner) {
-  const settings = await readUserSettingsObj(env, owner);
+  const [settings, healthMap] = await Promise.all([
+    readUserSettingsObj(env, owner),
+    loadGatewayHealthMap(env, owner)
+  ]);
+  const now = Date.now();
   const p = settings.provider && typeof settings.provider === 'object' ? settings.provider : null;
   const serverBaseUrl = effectiveBaseUrlFromEnv(env);
   const hasServerKey = Boolean(env?.MODEL_API_KEY);
   const customBaseUrl = p?.baseUrl ? String(p.baseUrl) : '';
   const hasCustomKey = Boolean(p?.apiKeyEnc);
   const customDefaultModel = p?.defaultModel ? String(p.defaultModel) : '';
-  const fallbackBaseUrl = p?.fallbackBaseUrl ? String(p.fallbackBaseUrl) : '';
-  const hasFallbackKey = Boolean(p?.fallbackApiKeyEnc);
-  const fallbackModel = p?.fallbackModel ? String(p.fallbackModel) : '';
-  const customActive = Boolean(customBaseUrl || hasCustomKey || customDefaultModel);
-  const fallbackActive = Boolean(fallbackBaseUrl && hasFallbackKey);
+
+  const storedFallbacks = normalizeStoredFallbacks(p);
+  const fallbackSummaries = storedFallbacks.map((fb, idx) => {
+    const slot = idx + 2;
+    const hasKey = Boolean(fb.apiKeyEnc);
+    const active = Boolean(fb.enabled !== false && fb.baseUrl && hasKey);
+    const hEntry = healthMap[gatewayHealthId(slot, fb.baseUrl, fb.id)] || null;
+    const cooldownUntil = Number(hEntry?.cooldownUntil) || 0;
+    const onCooldown = cooldownUntil > now;
+    return {
+      id: fb.id || `gw-${slot}`,
+      slot,
+      label: fb.label || '',
+      baseUrl: fb.baseUrl,
+      hasKey,
+      keyHint: fb.keyHint || '',
+      keyCount: Number(fb.keyCount) || (hasKey ? 1 : 0),
+      defaultModel: fb.defaultModel || '',
+      enabled: fb.enabled !== false,
+      active,
+      healthy: active && !onCooldown,
+      cooldownRemainingSec: onCooldown ? Math.ceil((cooldownUntil - now) / 1000) : 0,
+      lastErrorCode: onCooldown ? String(hEntry?.lastErrorCode || '') : '',
+      lastOkAt: Number(hEntry?.lastOkAt) || 0
+    };
+  });
+
+  const firstActiveFb = fallbackSummaries.find((f) => f.active) || fallbackSummaries[0] || null;
+  const fallbackBaseUrl = firstActiveFb?.baseUrl || '';
+  const hasFallbackKey = Boolean(firstActiveFb?.hasKey);
+  const fallbackModel = firstActiveFb?.defaultModel || '';
+  const customActive = Boolean(customBaseUrl || hasCustomKey || customDefaultModel || fallbackSummaries.length > 0);
+  const fallbackActive = fallbackSummaries.some((f) => f.active);
 
   const effectiveBase = customBaseUrl || serverBaseUrl;
   const fallbackDefModel = isOpenRouterUrl(effectiveBase)
     ? 'openrouter/auto'
     : String(env?.MODEL_NAME || 'claude-sonnet-5-5');
+
+  const gw1HasKey = Boolean(hasCustomKey || hasServerKey);
+  const gw1Active = Boolean(effectiveBase && gw1HasKey);
+  const gw1Health = healthMap[gatewayHealthId(1, effectiveBase, 'gw-1')] || null;
+  const gw1CooldownUntil = Number(gw1Health?.cooldownUntil) || 0;
+  const gw1OnCooldown = gw1CooldownUntil > now;
+
+  const gateways = [
+    {
+      id: 'gw-1',
+      slot: 1,
+      label: 'درگاه اصلی',
+      baseUrl: customBaseUrl,
+      effectiveBaseUrl: effectiveBase,
+      hasKey: hasCustomKey,
+      hasEffectiveKey: gw1HasKey,
+      keyHint: p?.keyHint ? String(p.keyHint) : '',
+      keyCount: Number(p?.keyCount) || (hasCustomKey ? 1 : 0),
+      defaultModel: customDefaultModel,
+      enabled: true,
+      active: gw1Active,
+      healthy: gw1Active && !gw1OnCooldown,
+      cooldownRemainingSec: gw1OnCooldown ? Math.ceil((gw1CooldownUntil - now) / 1000) : 0,
+      lastErrorCode: gw1OnCooldown ? String(gw1Health?.lastErrorCode || '') : '',
+      lastOkAt: Number(gw1Health?.lastOkAt) || 0
+    },
+    ...fallbackSummaries
+  ];
+
+  const activeGateways = gateways.filter((g) => g.active);
+  const workingGw = activeGateways.find((g) => g.healthy) || activeGateways[0] || gateways[0];
 
   return {
     customActive,
@@ -207,35 +431,67 @@ export async function getUserProviderSummary(env, owner) {
     fallbackActive,
     fallbackBaseUrl,
     hasFallbackKey,
-    fallbackKeyHint: p?.fallbackKeyHint ? String(p.fallbackKeyHint) : '',
-    fallbackModel
+    fallbackKeyHint: firstActiveFb?.keyHint || '',
+    fallbackModel,
+    maxGateways: MAX_PROVIDER_GATEWAYS,
+    activeGatewayCount: activeGateways.length,
+    workingGatewaySlot: workingGw?.slot || 1,
+    workingBaseUrl: workingGw?.effectiveBaseUrl || workingGw?.baseUrl || effectiveBase,
+    fallbacks: fallbackSummaries,
+    gateways
   };
 }
 
 /**
- * Save or reset the user's custom OpenAI-compatible API provider configuration.
+ * Save or reset the user's custom OpenAI-compatible API provider configuration
+ * (supports Primary Gateway #1 + up to 9 Backup Gateways #2..#10 = 10 Gateways total).
  */
 export async function saveUserProviderConfig(env, owner, input = {}) {
   const settings = await readUserSettingsObj(env, owner);
   if (input.reset) {
     delete settings.provider;
     await writeUserSettingsObj(env, owner, settings);
+    await clearGatewayHealth(env, owner);
     return getUserProviderSummary(env, owner);
   }
 
   const prev = settings.provider && typeof settings.provider === 'object' ? settings.provider : {};
+  const prevFallbacks = normalizeStoredFallbacks(prev);
+
+  // Optional unified `input.gateways` (slots 1..10) convenience support:
+  let primaryInput = input;
+  let fallbacksInput = input.fallbacks;
+  if (Array.isArray(input.gateways)) {
+    if (input.gateways.length > MAX_PROVIDER_GATEWAYS) {
+      fail(`حداکثر ${MAX_PROVIDER_GATEWAYS} درگاه قابل ثبت است.`, 400, 'too_many_gateways');
+    }
+    const [gw1, ...restGws] = input.gateways;
+    if (gw1 && typeof gw1 === 'object') {
+      primaryInput = {
+        ...input,
+        baseUrl: gw1.baseUrl !== undefined ? gw1.baseUrl : input.baseUrl,
+        apiKey: gw1.apiKey !== undefined ? gw1.apiKey : input.apiKey,
+        clearKey: gw1.clearKey !== undefined ? gw1.clearKey : input.clearKey,
+        defaultModel: gw1.defaultModel !== undefined ? gw1.defaultModel : input.defaultModel
+      };
+    }
+    if (fallbacksInput === undefined) {
+      fallbacksInput = restGws;
+    }
+  }
+
   const nextBaseUrl =
-    input.baseUrl !== undefined ? normalizeProviderBaseUrl(input.baseUrl) : String(prev.baseUrl || '');
+    primaryInput.baseUrl !== undefined ? normalizeProviderBaseUrl(primaryInput.baseUrl) : String(prev.baseUrl || '');
 
   let apiKeyEnc = prev.apiKeyEnc || '';
   let keyHint = prev.keyHint || '';
   let keyCount = Number(prev.keyCount) || (apiKeyEnc ? 1 : 0);
-  if (input.clearKey) {
+  if (primaryInput.clearKey) {
     apiKeyEnc = '';
     keyHint = '';
     keyCount = 0;
-  } else if (typeof input.apiKey === 'string') {
-    const pool = parseApiKeyPool(input.apiKey);
+  } else if (typeof primaryInput.apiKey === 'string') {
+    const pool = parseApiKeyPool(primaryInput.apiKey);
     if (pool.length) {
       apiKeyEnc = await encryptApiKey(env, pool.join('\n'));
       keyCount = pool.length;
@@ -244,43 +500,143 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
   }
 
   let defaultModel = prev.defaultModel || '';
-  if (input.defaultModel !== undefined) {
-    const candidate = cleanCredentialInput(input.defaultModel);
+  if (primaryInput.defaultModel !== undefined) {
+    const candidate = cleanCredentialInput(primaryInput.defaultModel);
     if (candidate && !MODEL_ID_RE.test(candidate)) {
       fail('شناسه‌ی مدل پیش‌فرض معتبر نیست.', 400, 'bad_model');
     }
     defaultModel = candidate;
   }
 
-  const fallbackBaseUrl =
-    input.fallbackBaseUrl !== undefined
-      ? normalizeProviderBaseUrl(input.fallbackBaseUrl)
-      : String(prev.fallbackBaseUrl || '');
+  let nextFallbacks = [];
+  if (Array.isArray(fallbacksInput)) {
+    if (fallbacksInput.length > MAX_FALLBACK_GATEWAYS) {
+      fail(`حداکثر ${MAX_PROVIDER_GATEWAYS} درگاه (۱ اصلی + ${MAX_FALLBACK_GATEWAYS} پشتیبان) قابل ثبت است.`, 400, 'too_many_gateways');
+    }
+    const prevById = new Map(prevFallbacks.map((item) => [item.id, item]));
+    const usedPrevIds = new Set();
 
-  let fallbackApiKeyEnc = prev.fallbackApiKeyEnc || '';
-  let fallbackKeyHint = prev.fallbackKeyHint || '';
-  if (input.clearFallbackKey || (input.fallbackBaseUrl !== undefined && !fallbackBaseUrl && !input.fallbackApiKey)) {
-    fallbackApiKeyEnc = '';
-    fallbackKeyHint = '';
-  } else if (typeof input.fallbackApiKey === 'string') {
-    const fbPool = parseApiKeyPool(input.fallbackApiKey);
-    if (fbPool.length) {
-      fallbackApiKeyEnc = await encryptApiKey(env, fbPool.join('\n'));
-      fallbackKeyHint =
-        fbPool.length > 1 ? `${maskApiKey(fbPool[0])} (+${fbPool.length - 1} کلید)` : maskApiKey(fbPool[0]);
+    for (let i = 0; i < fallbacksInput.length; i += 1) {
+      const raw = fallbacksInput[i];
+      if (!raw || typeof raw !== 'object') continue;
+      const slotNum = nextFallbacks.length + 2;
+      const normUrl = raw.baseUrl ? normalizeProviderBaseUrl(raw.baseUrl) : '';
+      const normModel = raw.defaultModel !== undefined ? cleanCredentialInput(raw.defaultModel) : '';
+      if (normModel && !MODEL_ID_RE.test(normModel)) {
+        fail(`شناسه‌ی مدل در درگاه ${slotNum} معتبر نیست.`, 400, 'bad_model');
+      }
+      const normLabel = typeof raw.label === 'string' ? cleanCredentialInput(raw.label).slice(0, 60) : '';
+      const rawId = typeof raw.id === 'string' ? cleanCredentialInput(raw.id).slice(0, 40) : '';
+      let matchedPrev = rawId && prevById.has(rawId) && !usedPrevIds.has(rawId) ? prevById.get(rawId) : null;
+      if (!matchedPrev && normUrl) {
+        matchedPrev = prevFallbacks.find((pf) => !usedPrevIds.has(pf.id) && pf.baseUrl === normUrl) || null;
+      }
+      if (matchedPrev) usedPrevIds.add(matchedPrev.id);
+
+      let fbKeyEnc = matchedPrev?.apiKeyEnc || '';
+      let fbKeyHint = matchedPrev?.keyHint || '';
+      let fbKeyCount = Number(matchedPrev?.keyCount) || (fbKeyEnc ? 1 : 0);
+
+      if (raw.clearKey || (!normUrl && !raw.apiKey)) {
+        fbKeyEnc = '';
+        fbKeyHint = '';
+        fbKeyCount = 0;
+      } else if (typeof raw.apiKey === 'string' && raw.apiKey.trim()) {
+        const fbPool = parseApiKeyPool(raw.apiKey);
+        if (fbPool.length) {
+          fbKeyEnc = await encryptApiKey(env, fbPool.join('\n'));
+          fbKeyCount = fbPool.length;
+          fbKeyHint =
+            fbPool.length > 1 ? `${maskApiKey(fbPool[0])} (+${fbPool.length - 1} کلید)` : maskApiKey(fbPool[0]);
+        }
+      }
+
+      if (!normUrl && !fbKeyEnc && !normModel) continue;
+
+      nextFallbacks.push({
+        id: rawId || matchedPrev?.id || `gw-${slotNum}`,
+        label: normLabel || matchedPrev?.label || '',
+        baseUrl: normUrl,
+        apiKeyEnc: fbKeyEnc,
+        keyHint: fbKeyHint,
+        keyCount: fbKeyCount,
+        defaultModel: raw.defaultModel !== undefined ? normModel : (matchedPrev?.defaultModel || ''),
+        enabled: raw.enabled !== false
+      });
+    }
+  } else {
+    // Legacy single-fallback compatibility (`fallbackBaseUrl`, `fallbackApiKey`, `clearFallbackKey`, `fallbackModel`)
+    const touchesLegacyFallback =
+      input.fallbackBaseUrl !== undefined ||
+      input.fallbackApiKey !== undefined ||
+      Boolean(input.clearFallbackKey) ||
+      input.fallbackModel !== undefined;
+
+    if (!touchesLegacyFallback) {
+      nextFallbacks = prevFallbacks;
+    } else {
+      const prevFirst = prevFallbacks[0] || null;
+      const fbUrl =
+        input.fallbackBaseUrl !== undefined
+          ? normalizeProviderBaseUrl(input.fallbackBaseUrl)
+          : String(prevFirst?.baseUrl || '');
+
+      let fbKeyEnc = prevFirst?.apiKeyEnc || '';
+      let fbKeyHint = prevFirst?.keyHint || '';
+      let fbKeyCount = Number(prevFirst?.keyCount) || (fbKeyEnc ? 1 : 0);
+      if (input.clearFallbackKey || (input.fallbackBaseUrl !== undefined && !fbUrl && !input.fallbackApiKey)) {
+        fbKeyEnc = '';
+        fbKeyHint = '';
+        fbKeyCount = 0;
+      } else if (typeof input.fallbackApiKey === 'string') {
+        const fbPool = parseApiKeyPool(input.fallbackApiKey);
+        if (fbPool.length) {
+          fbKeyEnc = await encryptApiKey(env, fbPool.join('\n'));
+          fbKeyCount = fbPool.length;
+          fbKeyHint =
+            fbPool.length > 1 ? `${maskApiKey(fbPool[0])} (+${fbPool.length - 1} کلید)` : maskApiKey(fbPool[0]);
+        }
+      }
+
+      let fbModel = prevFirst?.fallbackModel || prevFirst?.defaultModel || '';
+      if (input.fallbackModel !== undefined) {
+        const cleaned = cleanCredentialInput(input.fallbackModel);
+        if (cleaned && !MODEL_ID_RE.test(cleaned)) {
+          fail('شناسه‌ی مدل درگاه پشتیبان معتبر نیست.', 400, 'bad_model');
+        }
+        fbModel = cleaned;
+      }
+
+      const rest = prevFallbacks.slice(1);
+      if (fbUrl || fbKeyEnc || fbModel) {
+        nextFallbacks = [
+          {
+            id: prevFirst?.id || 'gw-2',
+            label: prevFirst?.label || '',
+            baseUrl: fbUrl,
+            apiKeyEnc: fbKeyEnc,
+            keyHint: fbKeyHint,
+            keyCount: fbKeyCount,
+            defaultModel: fbModel,
+            enabled: true
+          },
+          ...rest
+        ].slice(0, MAX_FALLBACK_GATEWAYS);
+      } else {
+        nextFallbacks = rest;
+      }
     }
   }
 
-  let fallbackModel = prev.fallbackModel || '';
-  if (input.fallbackModel !== undefined) {
-    const fbModel = cleanCredentialInput(input.fallbackModel);
-    if (fbModel && !MODEL_ID_RE.test(fbModel)) {
-      fail('شناسه‌ی مدل درگاه پشتیبان معتبر نیست.', 400, 'bad_model');
-    }
-    fallbackModel = fbModel;
-  }
+  // Re-number sequential fallback IDs cleanly while preserving custom non-gw IDs
+  nextFallbacks = nextFallbacks.slice(0, MAX_FALLBACK_GATEWAYS).map((fb, idx) => ({
+    ...fb,
+    id: fb.id && !/^gw-\d+$/.test(fb.id) ? fb.id : `gw-${idx + 2}`
+  }));
 
-  if (!nextBaseUrl && !apiKeyEnc && !defaultModel && !fallbackBaseUrl && !fallbackApiKeyEnc) {
+  const firstFb = nextFallbacks[0] || null;
+
+  if (!nextBaseUrl && !apiKeyEnc && !defaultModel && nextFallbacks.length === 0) {
     delete settings.provider;
   } else {
     settings.provider = {
@@ -289,15 +645,17 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
       keyHint,
       keyCount,
       defaultModel,
-      fallbackBaseUrl,
-      fallbackApiKeyEnc,
-      fallbackKeyHint,
-      fallbackModel,
+      fallbacks: nextFallbacks,
+      fallbackBaseUrl: firstFb?.baseUrl || '',
+      fallbackApiKeyEnc: firstFb?.apiKeyEnc || '',
+      fallbackKeyHint: firstFb?.keyHint || '',
+      fallbackModel: firstFb?.defaultModel || '',
       updatedAt: Date.now()
     };
   }
 
   await writeUserSettingsObj(env, owner, settings);
+  await clearGatewayHealth(env, owner);
   return getUserProviderSummary(env, owner);
 }
 
@@ -664,7 +1022,10 @@ export async function saveUserAgentConfig(env, owner, patch = {}) {
  */
 export async function resolveEffectiveEnv(env, owner) {
   if (!env?.DB || !owner) return env;
-  const settings = await readUserSettingsObj(env, owner);
+  const [settings, gatewayHealth] = await Promise.all([
+    readUserSettingsObj(env, owner),
+    loadGatewayHealthMap(env, owner)
+  ]);
   const p = settings.provider && typeof settings.provider === 'object' ? settings.provider : null;
   const sbCfg = settings.sandbox && typeof settings.sandbox === 'object' ? settings.sandbox : null;
   const agentConfig = normalizeAgentConfig(settings.agentConfig, DEFAULT_AGENT_CONFIG);
@@ -679,22 +1040,28 @@ export async function resolveEffectiveEnv(env, owner) {
   }
   const customKey = primaryKeyPool[0] || '';
 
-  let fallbackProvider = null;
-  if (p?.fallbackBaseUrl && p?.fallbackApiKeyEnc) {
-    const rawFbDecrypted = await decryptApiKey(env, p.fallbackApiKeyEnc);
+  const storedFallbacks = normalizeStoredFallbacks(p);
+  const decryptedFallbacks = [];
+  for (let i = 0; i < storedFallbacks.length; i += 1) {
+    const fb = storedFallbacks[i];
+    if (fb.enabled === false || !fb.baseUrl || !fb.apiKeyEnc) continue;
+    const rawFbDecrypted = await decryptApiKey(env, fb.apiKeyEnc);
     const fbPool = String(rawFbDecrypted || '')
       .split(/[\r\n,|]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-    if (fbPool.length) {
-      fallbackProvider = {
-        baseUrl: String(p.fallbackBaseUrl),
-        apiKey: fbPool[0],
-        apiKeyPool: fbPool,
-        defaultModel: p?.fallbackModel ? String(p.fallbackModel) : ''
-      };
-    }
+    if (!fbPool.length) continue;
+    decryptedFallbacks.push({
+      id: fb.id || `gw-${i + 2}`,
+      slot: i + 2,
+      label: fb.label || '',
+      baseUrl: String(fb.baseUrl),
+      apiKey: fbPool[0],
+      apiKeyPool: fbPool,
+      defaultModel: fb.defaultModel ? String(fb.defaultModel) : ''
+    });
   }
+  const fallbackProvider = decryptedFallbacks[0] || null;
 
   let customSandboxToken = '';
   if (sbCfg?.tokenEnc) {
@@ -703,9 +1070,10 @@ export async function resolveEffectiveEnv(env, owner) {
   const useCustomCloudSandbox = Boolean(sbCfg?.mode === 'cloud-url' && sbCfg?.cloudUrl);
   const customBaseUrl = p?.baseUrl ? String(p.baseUrl) : '';
   const customDefaultModel = p?.defaultModel ? String(p.defaultModel) : '';
-  const hasCustom = Boolean(customBaseUrl || customKey || customDefaultModel);
+  const hasCustom = Boolean(customBaseUrl || customKey || customDefaultModel || decryptedFallbacks.length > 0);
 
   const effectiveBaseUrl = customBaseUrl || effectiveBaseUrlFromEnv(env);
+  const effectivePrimaryKey = customKey || env.MODEL_API_KEY || '';
   const discoveredMap = await loadDiscoveredSpecs(env, effectiveBaseUrl).catch(() => ({}));
 
   // If the user pointed at a non-tooken custom provider and didn't set a custom default model,
@@ -718,19 +1086,39 @@ export async function resolveEffectiveEnv(env, owner) {
       ? ''
       : env.MODEL_NAME || 'claude-sonnet-5-5';
 
+  const gatewayChain = [];
+  if (effectiveBaseUrl && effectivePrimaryKey) {
+    gatewayChain.push({
+      id: 'gw-1',
+      slot: 1,
+      label: 'درگاه ۱',
+      baseUrl: effectiveBaseUrl,
+      apiKey: effectivePrimaryKey,
+      apiKeyPool: primaryKeyPool.length > 1 ? primaryKeyPool : [effectivePrimaryKey],
+      defaultModel: resolvedModelName
+    });
+  }
+  for (const fb of decryptedFallbacks) {
+    if (gatewayChain.length >= MAX_PROVIDER_GATEWAYS) break;
+    gatewayChain.push(fb);
+  }
+
   return {
     ...env,
     MODEL_BASE_URL: effectiveBaseUrl,
-    MODEL_API_KEY: customKey || env.MODEL_API_KEY || '',
+    MODEL_API_KEY: effectivePrimaryKey,
     MODEL_NAME: resolvedModelName,
     MODEL_FALLBACK: !isTooken && customBaseUrl ? 'off' : env.MODEL_FALLBACK,
     SANDBOX_URL: useCustomCloudSandbox ? String(sbCfg.cloudUrl) : env.SANDBOX_URL,
     SANDBOX_TOKEN: useCustomCloudSandbox ? (customSandboxToken || '') : env.SANDBOX_TOKEN,
     CONTEXT_BUDGET_TOKENS:
       settings.agentConfig?.contextBudget ? String(agentConfig.contextBudget) : env.CONTEXT_BUDGET_TOKENS,
+    _owner: owner,
     _customProvider: hasCustom,
     _apiKeyPool: primaryKeyPool.length > 1 ? primaryKeyPool : null,
     _fallbackProvider: fallbackProvider,
+    _gatewayChain: gatewayChain,
+    _gatewayHealth: gatewayHealth,
     _customSandbox: useCustomCloudSandbox,
     _sandboxMode: VALID_SANDBOX_MODES.includes(sbCfg?.mode) ? sbCfg.mode : 'auto',
     _agentConfig: agentConfig,
