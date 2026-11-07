@@ -1288,6 +1288,12 @@ export async function onRequestPost(context) {
                     send('status', {
                       phase: 'provider_failover',
                       toBaseUrl: chunk.toBaseUrl || '',
+                      fromBaseUrl: chunk.fromBaseUrl || '',
+                      slot: chunk.slot || 2,
+                      fromSlot: chunk.fromSlot || 1,
+                      label: chunk.label || '',
+                      totalGateways: chunk.totalGateways || 2,
+                      reason: chunk.reason || 'failover',
                       step: priorCompletedSteps + steps,
                       maxSteps
                     });
@@ -1820,6 +1826,7 @@ export async function onRequestPost(context) {
             content: displayFinalText,
             marathonCompleted: marathonGoalDone,
             model: usedModel,
+            activeGateway: effectiveEnv._activeGateway || null,
             reasoningEffort: appliedEffort,
             reasoningTokens: totalReasoningTokens,
             turnTokens: {
