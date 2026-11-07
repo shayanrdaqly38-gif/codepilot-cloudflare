@@ -67,7 +67,14 @@ import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
 import { formatSearchHits, formatSymbols, listSymbols, searchWorkspace } from '../_lib/search.js';
 import { validateFile } from '../_lib/validate.js';
-import { linuxRunnerEnabled, runCommand, sandboxEnabled } from '../_lib/sandbox.js';
+import {
+  applyRunnerFileChanges,
+  classifyCommand,
+  formatRealResult,
+  linuxRunnerEnabled,
+  runCommand,
+  sandboxEnabled
+} from '../_lib/sandbox.js';
 import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
 import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
 import { generateAndStoreImage } from '../_lib/image.js';
@@ -681,9 +688,33 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
     }
 
     case 'run_command': {
-      const result = await runCommand(env, { command: String(args.command || ''), workspace, externalSignal: signal });
+      const result = await runCommand(effectiveEnv || env, {
+        command: String(args.command || ''),
+        workspace,
+        externalSignal: signal
+      });
       turn.commands.push({ command: String(args.command || ''), mode: result.mode, ok: result.ok });
       if (result.mode === 'virtual' && result.ok) turn.touched.add('(shell)');
+      if (Array.isArray(result.touchedFiles)) {
+        for (const p of result.touchedFiles) {
+          turn.touched.add(p);
+          turn.workspaceChanged = true;
+          send('live_file', {
+            path: p,
+            deleted: false,
+            content: String(workspace.files[p] || ''),
+            step: 0,
+            editCount: turn.editCount
+          });
+        }
+      }
+      if (Array.isArray(result.deletedFiles)) {
+        for (const p of result.deletedFiles) {
+          turn.deleted.add(p);
+          turn.workspaceChanged = true;
+          send('live_file', { path: p, deleted: true, content: '', step: 0, editCount: turn.editCount });
+        }
+      }
       return { ok: result.ok, text: result.text };
     }
 
@@ -750,7 +781,9 @@ export async function onRequestPost(context) {
         ? await loadTurnCheckpoint(env, identity.owner, conversationId).catch(() => null)
         : null;
       const isWaveContinuation = Boolean(
-        data?.silentAutoResume === true && preloadedWaveCkpt?.active && preloadedWaveCkpt?.reason === 'wave_continue'
+        data?.silentAutoResume === true &&
+          preloadedWaveCkpt?.active &&
+          (preloadedWaveCkpt?.reason === 'wave_continue' || preloadedWaveCkpt?.reason === 'local_exec_continue')
       );
       if (!isWaveContinuation) {
         await enforceChatLimits(env, identity.owner);
@@ -881,7 +914,8 @@ export async function onRequestPost(context) {
         thinkToolLimit: powerPlan.thinkToolLimit
       };
 
-      const linux = linuxRunnerEnabled(env);
+      const useLocalTermuxBridge = Boolean(data?.localRunner && agentConfig.shellAccess);
+      const linux = linuxRunnerEnabled(effectiveEnv) || useLocalTermuxBridge;
       const sb = sandboxEnabled(env);
       const turnReg = registerActiveTurn(identity.owner, conversation.id);
       if (request?.signal) {
@@ -917,6 +951,7 @@ export async function onRequestPost(context) {
       let autoHealCount = 0;
       const MAX_AUTO_HEALS = 3;
       let turnInterruptedReason = '';
+      let pendingLocalExecPayload = null;
       const completedToolsLog = [];
       let existingCheckpoint = existingCheckpointPreload;
       let resumingFromCheckpoint = false;
@@ -929,6 +964,98 @@ export async function onRequestPost(context) {
           if (existingCheckpoint && !resumingFromCheckpoint) {
             await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
             existingCheckpoint = null;
+          }
+
+          // Stitch results returned by the browser's Local Termux Bridge (`127.0.0.1:8787`) right into D1 history before continuing!
+          if (
+            resumingFromCheckpoint &&
+            existingCheckpoint?.pendingLocalExec &&
+            Array.isArray(data?.localExecResults)
+          ) {
+            const ple = existingCheckpoint.pendingLocalExec;
+            const byCallId = new Map(
+              data.localExecResults
+                .filter((r) => r && typeof r.callId === 'string')
+                .map((r) => [r.callId, r])
+            );
+            const secrets = envSecrets(effectiveEnv);
+            const resolvedToolMsgs = Array.isArray(ple.completedToolResults) ? [...ple.completedToolResults] : [];
+
+            for (const item of Array.isArray(ple.pendingCommands) ? ple.pendingCommands : []) {
+              const r = byCallId.get(item.callId) || {
+                ok: false,
+                exitCode: 1,
+                stdout: '',
+                stderr: 'No response returned from local Termux bridge.'
+              };
+              const syncInfo = applyRunnerFileChanges(workspace, r, secrets);
+              for (const p of syncInfo.touchedFiles) {
+                turn.touched.add(p);
+                turn.workspaceChanged = true;
+                send('live_file', {
+                  path: p,
+                  deleted: false,
+                  content: String(workspace.files[p] || ''),
+                  step: existingCheckpoint.completedSteps || 1,
+                  editCount: turn.editCount
+                });
+              }
+              for (const p of syncInfo.deletedFiles) {
+                turn.deleted.add(p);
+                turn.workspaceChanged = true;
+                send('live_file', {
+                  path: p,
+                  deleted: true,
+                  content: '',
+                  step: existingCheckpoint.completedSteps || 1,
+                  editCount: turn.editCount
+                });
+              }
+
+              const label =
+                r.runner === 'fallback-cloud'
+                  ? 'Real Linux container execution (cloud fallback — local Termux offline)'
+                  : 'Real Local Termux execution (127.0.0.1 device bridge)';
+              const formatted = formatRealResult(label, {
+                exitCode: Number.isFinite(Number(r.exitCode)) ? Number(r.exitCode) : r.ok ? 0 : 1,
+                durationMs: Number.isFinite(Number(r.durationMs)) ? Number(r.durationMs) : null,
+                stdout: redactSecrets(String(r.stdout ?? '').slice(0, 24_000), secrets),
+                stderr: redactSecrets(String(r.stderr ?? '').slice(0, 24_000), secrets)
+              });
+              turn.commands.push({ command: item.command, mode: 'local-termux', ok: Boolean(r.ok) });
+              if (r.ok) {
+                completedToolsLog.push(`run_command(${String(item.command || '').slice(0, 40)})`);
+              }
+              const toolMsg = {
+                role: 'tool',
+                tool_call_id: item.callId,
+                content: compactToolResult(stripSecrets(formatted, secrets)),
+                created_at: Date.now()
+              };
+              resolvedToolMsgs.push(toolMsg);
+              send('tool_result', {
+                id: item.callId,
+                name: 'run_command',
+                ok: Boolean(r.ok),
+                step: existingCheckpoint.completedSteps || 1,
+                result: toolMsg.content.slice(0, 4000)
+              });
+            }
+
+            if (ple.assistantMsg) {
+              const repairedLocalGroup = repairToolGroups([ple.assistantMsg, ...resolvedToolMsgs]);
+              if (repairedLocalGroup.length) {
+                await appendMessages(env, conversation, repairedLocalGroup);
+              }
+            }
+            if (turn.workspaceChanged) {
+              await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
+            }
+            existingCheckpoint = {
+              ...existingCheckpoint,
+              pendingLocalExec: null,
+              skipResumeDirective: true
+            };
           }
 
           send('status', {
@@ -1173,8 +1300,7 @@ export async function onRequestPost(context) {
                 tool_calls: assistant.tool_calls,
                 created_at: Date.now()
               };
-              newMessages.push(stored);
-              messages.push(toWire(stored));
+
               send('tool', {
                 step: steps,
                 maxSteps,
@@ -1184,6 +1310,116 @@ export async function onRequestPost(context) {
                   arguments: call.function.arguments
                 }))
               });
+
+              const secretsForStep = envSecrets(effectiveEnv);
+              const localEligibleIds = new Set();
+              if (useLocalTermuxBridge) {
+                for (const call of assistant.tool_calls) {
+                  if (call?.function?.name !== 'run_command') continue;
+                  let parsedArgs = {};
+                  try { parsedArgs = JSON.parse(call.function.arguments || '{}'); } catch { parsedArgs = {}; }
+                  const cmdStr = String(parsedArgs.command || '').trim();
+                  const verdict = classifyCommand(cmdStr);
+                  const leaksSecret = secretsForStep.some((s) => s && cmdStr.includes(s));
+                  if (verdict.allowed && !leaksSecret) {
+                    localEligibleIds.add(call.id);
+                  }
+                }
+              }
+
+              if (localEligibleIds.size > 0) {
+                let stepMutatedWorkspace = false;
+                const stepCompletedToolResults = [];
+                const pendingCommands = [];
+
+                for (const call of assistant.tool_calls) {
+                  let args = {};
+                  try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
+                  if (localEligibleIds.has(call.id)) {
+                    pendingCommands.push({
+                      callId: call.id,
+                      command: String(args.command || '').trim()
+                    });
+                    continue;
+                  }
+                  let outcome;
+                  if (EXTERNAL_FETCH_TOOLS.has(call.function.name)) {
+                    subreqTracker.count += 1;
+                  }
+                  try {
+                    outcome = await executeTool({
+                      env,
+                      effectiveEnv,
+                      owner: identity.owner,
+                      conversation,
+                      name: call.function.name,
+                      args,
+                      workspace,
+                      turn,
+                      send,
+                      signal: turnReg.signal
+                    });
+                  } catch (error) {
+                    outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
+                  }
+                  if (outcome.ok) {
+                    const argHint =
+                      args?.path ||
+                      args?.title?.slice(0, 40) ||
+                      args?.prompt?.slice(0, 40) ||
+                      args?.command?.slice(0, 40) ||
+                      args?.query?.slice(0, 40) ||
+                      '';
+                    completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
+                  }
+                  const toolResult = {
+                    role: 'tool',
+                    tool_call_id: call.id,
+                    content: compactToolResult(stripSecrets(outcome.text, secretsForStep)),
+                    created_at: Date.now()
+                  };
+                  stepCompletedToolResults.push(toolResult);
+                  send('tool_result', {
+                    id: call.id,
+                    name: call.function.name,
+                    ok: outcome.ok,
+                    step: steps,
+                    result: toolResult.content.slice(0, 4000)
+                  });
+                  if (outcome.ok && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
+                    stepMutatedWorkspace = true;
+                    const p = String(args.path);
+                    const deleted = workspace.files[p] === undefined;
+                    send('live_file', {
+                      path: p,
+                      deleted,
+                      content: deleted ? '' : String(workspace.files[p] || ''),
+                      step: steps,
+                      editCount: turn.editCount
+                    });
+                  }
+                }
+
+                if (stepMutatedWorkspace) {
+                  await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
+                }
+
+                pendingLocalExecPayload = {
+                  assistantMsg: stored,
+                  completedToolResults: stepCompletedToolResults,
+                  pendingCommands
+                };
+                turnInterruptedReason = 'local_exec_continue';
+                send('local_exec', {
+                  step: priorCompletedSteps + steps,
+                  maxSteps,
+                  commands: pendingCommands
+                });
+                break;
+              }
+
+              newMessages.push(stored);
+              messages.push(toWire(stored));
 
               let stepMutatedWorkspace = false;
               for (const call of assistant.tool_calls) {
@@ -1336,10 +1572,11 @@ export async function onRequestPost(context) {
           }
 
           let isWaveHandoff = false;
+          const isLocalExecHandoff = Boolean(turnInterruptedReason === 'local_exec_continue' && pendingLocalExecPayload);
           const cumulativeStepsNow = priorCompletedSteps + steps;
           const nextWaveNumber = (Number(existingCheckpoint?.waveNumber) || 0) + 1;
 
-          if (!finalText) {
+          if (!finalText && !isLocalExecHandoff) {
             if ((hitWaveBoundary || (newMessages.length > 0 && steps >= waveMaxSteps)) && cumulativeStepsNow < maxSteps) {
               // Clean Multi-Wave Handoff BEFORE Cloudflare Workers' 50-subrequest limit!
               isWaveHandoff = true;
@@ -1376,7 +1613,9 @@ export async function onRequestPost(context) {
               touchedFiles: touchedList,
               deletedFiles: [...turn.deleted],
               completedTools: completedToolsLog,
-              partialContent: isWaveHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
+              pendingLocalExec: isLocalExecHandoff ? pendingLocalExecPayload : null,
+              partialContent:
+                isWaveHandoff || isLocalExecHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
             }).catch(() => null);
           } else if (resumingFromCheckpoint || existingCheckpoint) {
             await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
@@ -1446,9 +1685,11 @@ export async function onRequestPost(context) {
             maxSteps,
             waveContinue: isWaveHandoff,
             waveNumber: isWaveHandoff ? nextWaveNumber : undefined,
+            localExecContinue: isLocalExecHandoff,
+            pendingLocalCommands: isLocalExecHandoff ? pendingLocalExecPayload.pendingCommands : undefined,
             powerProfile: powerPlan.axes,
-            interrupted: Boolean(turnInterruptedReason && !isWaveHandoff),
-            interruptedReason: isWaveHandoff ? null : turnInterruptedReason || null,
+            interrupted: Boolean(turnInterruptedReason && !isWaveHandoff && !isLocalExecHandoff),
+            interruptedReason: isWaveHandoff || isLocalExecHandoff ? null : turnInterruptedReason || null,
             resumable: Boolean(savedCheckpoint),
             checkpoint: savedCheckpoint,
             resumedFromCheckpoint: resumingFromCheckpoint,

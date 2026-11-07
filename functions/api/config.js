@@ -15,12 +15,14 @@ import {
 import {
   getUserAgentConfig,
   getUserProviderSummary,
+  getUserSandboxSummary,
   isOpenRouterUrl,
   isTookenUrl,
   loadCachedProviderModels,
   resolveEffectiveEnv,
   saveUserAgentConfig,
-  saveUserProviderConfig
+  saveUserProviderConfig,
+  saveUserSandboxConfig
 } from '../_lib/provider.js';
 
 async function buildModelsPayload(effectiveEnv, { force = false, skipRemote = false } = {}) {
@@ -73,13 +75,14 @@ async function buildModelsPayload(effectiveEnv, { force = false, skipRemote = fa
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
-    const linux = linuxRunnerEnabled(env);
     const sb = sandboxEnabled(env);
-    const [effectiveEnv, provider, agentConfig] = await Promise.all([
+    const [effectiveEnv, provider, agentConfig, sandboxConfig] = await Promise.all([
       resolveEffectiveEnv(env, identity.owner),
       getUserProviderSummary(env, identity.owner),
-      getUserAgentConfig(env, identity.owner)
+      getUserAgentConfig(env, identity.owner),
+      getUserSandboxSummary(env, identity.owner)
     ]);
+    const linux = linuxRunnerEnabled(effectiveEnv);
     // Avoid downloading multi-MB aggregator `/models` lists synchronously during cold boot on OpenRouter;
     // serve D1-cached or curated OpenRouter models immediately (<1ms CPU) and hydrate live models via `/api/models`.
     const skipBootRemote = isOpenRouterUrl(effectiveEnv.MODEL_BASE_URL);
@@ -95,6 +98,7 @@ export async function onRequestGet({ request, env }) {
       user: { email: identity.email, name: identity.name },
       provider,
       agentConfig,
+      sandboxConfig,
       model: defaultModel,
       modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
       modelsSource,
@@ -103,7 +107,7 @@ export async function onRequestGet({ request, env }) {
       sandbox: sb,
       linuxRunner: linux,
       workersAi: Boolean(env?.AI && typeof env.AI.run === 'function'),
-      executionMode: realExecutionMode(env),
+      executionMode: sandboxConfig.mode === 'local-termux' ? 'local-termux' : realExecutionMode(effectiveEnv),
       features: {
         memory: true,
         sync: true,
@@ -141,6 +145,10 @@ export async function onRequestPost({ request, env }) {
       if (data?.agentConfig && typeof data.agentConfig === 'object') {
         agentConfig = await saveUserAgentConfig(env, identity.owner, data.agentConfig);
       }
+      let sandboxConfig;
+      if (data?.sandboxConfig && typeof data.sandboxConfig === 'object') {
+        sandboxConfig = await saveUserSandboxConfig(env, identity.owner, data.sandboxConfig);
+      }
       const touchesProvider =
         data?.reset !== undefined ||
         data?.baseUrl !== undefined ||
@@ -148,13 +156,21 @@ export async function onRequestPost({ request, env }) {
         data?.clearKey !== undefined ||
         data?.defaultModel !== undefined;
 
-      if (!touchesProvider && agentConfig) {
-        const provider = await getUserProviderSummary(env, identity.owner);
+      if (!touchesProvider && (agentConfig || sandboxConfig)) {
+        const [provider, effEnv, finalAgentCfg, finalSandboxCfg] = await Promise.all([
+          getUserProviderSummary(env, identity.owner),
+          resolveEffectiveEnv(env, identity.owner),
+          agentConfig ? Promise.resolve(agentConfig) : getUserAgentConfig(env, identity.owner),
+          sandboxConfig ? Promise.resolve(sandboxConfig) : getUserSandboxSummary(env, identity.owner)
+        ]);
         return {
           ok: true,
           provider,
-          agentConfig,
-          contextBudgetTokens: agentConfig.contextBudget
+          agentConfig: finalAgentCfg,
+          sandboxConfig: finalSandboxCfg,
+          executionMode:
+            finalSandboxCfg.mode === 'local-termux' ? 'local-termux' : realExecutionMode(effEnv),
+          contextBudgetTokens: finalAgentCfg.contextBudget
         };
       }
 
@@ -168,6 +184,9 @@ export async function onRequestPost({ request, env }) {
       if (!agentConfig) {
         agentConfig = await getUserAgentConfig(env, identity.owner);
       }
+      if (!sandboxConfig) {
+        sandboxConfig = await getUserSandboxSummary(env, identity.owner);
+      }
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
       const skipModels = Boolean(data?.skipModels);
       const { defaultModel, modelsSource, models } = await buildModelsPayload(effectiveEnv, {
@@ -179,6 +198,9 @@ export async function onRequestPost({ request, env }) {
         ok: true,
         provider,
         agentConfig,
+        sandboxConfig,
+        executionMode:
+          sandboxConfig.mode === 'local-termux' ? 'local-termux' : realExecutionMode(effectiveEnv),
         model: defaultModel,
         modelReasoning: getModelReasoningSpec(defaultModel, effectiveEnv),
         modelsSource,

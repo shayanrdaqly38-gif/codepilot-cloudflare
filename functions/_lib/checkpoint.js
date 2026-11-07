@@ -166,6 +166,7 @@ export async function saveTurnCheckpoint(env, owner, conversationId, data = {}) 
     deletedFiles: mergedDeleted,
     completedTools: mergedTools,
     interruptedToolCall: data.interruptedToolCall || null,
+    pendingLocalExec: data.pendingLocalExec || null,
     partialTextTail: partialRaw ? partialRaw.slice(-1_400) : '',
     partialTextChars: partialRaw ? partialRaw.length : 0
   };
@@ -192,7 +193,7 @@ export async function clearTurnCheckpoint(env, owner, conversationId) {
  * writes «ادامه» after an interruption or API token swap.
  */
 export function buildCheckpointResumeDirective(ckpt, workspace) {
-  if (!ckpt || typeof ckpt !== 'object') return '';
+  if (!ckpt || typeof ckpt !== 'object' || ckpt.skipResumeDirective) return '';
   const files = workspace?.files || {};
   const savedFilesSummary = (ckpt.touchedFiles || [])
     .map((p) => (files[p] !== undefined ? `${p} (${String(files[p]).length} chars — saved)` : `${p}`))
