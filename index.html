@@ -1523,18 +1523,35 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
     <section aria-label="اتصال API" style="margin-top:16px">
       <strong>اتصال API و سرویس مدل (OpenAI-Compatible)</strong>
       <p id="apiConnectionStatus" class="tiny" style="margin:6px 0 10px">می‌توانید از پیش‌فرض سرور استفاده کنید یا هر آدرس و کلید API سازگار با OpenAI را وارد کنید؛ مدل‌ها و سطوح استدلال هر مدل به‌صورت خودکار شناسایی می‌شوند.</p>
-      <label class="field-label" for="providerBaseUrlInput">آدرس سرویس (Base URL)</label>
-      <input class="field" id="providerBaseUrlInput" style="direction:ltr;text-align:left" placeholder="https://tooken.club/v1 یا https://openrouter.ai/api/v1">
+      <label class="field-label" for="providerBaseUrlInput">آدرس سرویس اصلی (Base URL)</label>
+      <input class="field" id="providerBaseUrlInput" style="direction:ltr;text-align:left" placeholder="https://openrouter.ai/api/v1 یا https://zro.moonmath.ai/v1">
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
         <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://openrouter.ai/api/v1')">⚡ OpenRouter</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://zro.moonmath.ai/v1')">🌙 Zro (MoonMath)</button>
         <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://tooken.club/v1')">Tooken</button>
         <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://api.openai.com/v1')">OpenAI</button>
         <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://api.deepseek.com/v1')">DeepSeek</button>
       </div>
-      <label class="field-label" for="providerApiKeyInput">کلید API اختصاصی (رمزنگاری AES-GCM در D1 — اختیاری اگر روی سرور تنظیم شده)</label>
-      <input class="field" id="providerApiKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="sk-or-v1-... / sk-... / tc_live_...">
+      <label class="field-label" for="providerApiKeyInput">کلید(های) API اختصاصی (برای ۲ یا ۳ برابر شدن سقف ۵۰ درخواست، چند کلید را با کاما <code>,</code> جدا کنید)</label>
+      <input class="field" id="providerApiKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="sk-or-v1-key1, sk-or-v1-key2 ...">
       <label class="field-label" for="providerDefaultModelInput">مدل پیش‌فرض (اختیاری — در صورت خالی بودن خودکار از لیست مدل‌ها انتخاب می‌شود)</label>
       <input class="field" id="providerDefaultModelInput" style="direction:ltr;text-align:left" placeholder="claude-sonnet-5-5">
+
+      <details id="providerFallbackDetails" style="margin-top:10px;border:1px solid rgba(126,226,168,.24);border-radius:10px;padding:8px 10px;background:rgba(126,226,168,.04)">
+        <summary style="cursor:pointer;font-size:12px;font-weight:700;color:#7ee2a8">🔄 درگاه پشتیبان خودکار (Auto-Failover هنگام اتمام ۵۰ درخواست روزانه OpenRouter یا خطای 429)</summary>
+        <p class="tiny" style="margin:6px 0 8px">وقتی سقف ۵۰ درخواست روزانه درگاه اصلی پر شود، سیستم <b>وسط همان پیام و بدون قطع کار</b> خودکار به درگاه دوم (مثلاً Zro) سوییچ می‌کند.</p>
+        <label class="field-label" for="providerFallbackUrlInput" style="margin-top:4px">آدرس درگاه پشتیبان (Backup Base URL)</label>
+        <input class="field" id="providerFallbackUrlInput" style="direction:ltr;text-align:left" placeholder="https://zro.moonmath.ai/v1">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
+          <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="document.getElementById('providerFallbackUrlInput').value='https://zro.moonmath.ai/v1'">🌙 تنظیم Zro به عنوان پشتیبان</button>
+          <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="document.getElementById('providerFallbackUrlInput').value='https://openrouter.ai/api/v1'">⚡ تنظیم OpenRouter به عنوان پشتیبان</button>
+          <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px;color:#ff9d92" onclick="clearFallbackProviderInputs()">حذف پشتیبان</button>
+        </div>
+        <label class="field-label" for="providerFallbackKeyInput">کلید(های) API درگاه پشتیبان (رمزنگاری AES-GCM)</label>
+        <input class="field" id="providerFallbackKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="کلید API سرویس پشتیبان (مثلاً Zro)">
+        <label class="field-label" for="providerFallbackModelInput">مدل درگاه پشتیبان (اختیاری — خالی بگذارید تا خودکار بهترین مدل انتخاب شود)</label>
+        <input class="field" id="providerFallbackModelInput" style="direction:ltr;text-align:left" placeholder="اختیاری (تشخیص خودکار مدل)">
+      </details>
       <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px;margin-top:8px">
         <button class="primary" onclick="saveProviderConfig()" id="saveProviderBtn">ذخیره و شناسایی خودکار مدل‌ها</button>
         <button onclick="resetProviderConfig()">بازگشت به API پیش‌فرض سرور</button>
@@ -1641,9 +1658,10 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
       </div>
       <div>
-        <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز مصرف توکن (v3)</label>
+        <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز توکن و سقف درخواست (v3)</label>
         <select class="field" id="cfgTokenSaver" style="direction:rtl;text-align:right">
           <option value="max">حداکثر صرفه‌جویی واقعی (Hyper-Eco v3 · پیشنهادی)</option>
+          <option value="rpd">🎯 ویژهٔ سقف ۵۰ درخواست روزانه (۱-شات · حداقل درخواست)</option>
           <option value="balanced">متعادل</option>
           <option value="off">خاموش (ارسال خام)</option>
         </select>
@@ -2588,7 +2606,13 @@ async function discoverModelReasoning(modelId, force = false) {
   if (discoveringModels.has(clean)) return null;
 
   const currentSpec = inferClientReasoningSpec(clean);
-  if (!force && !currentSpec.needsDiscovery) return currentSpec;
+  if (!force) {
+    if (!currentSpec.needsDiscovery) return currentSpec;
+    const effBase = String(state.provider?.effectiveBaseUrl || '').toLowerCase();
+    if (effBase.includes('openrouter.ai') || clean.toLowerCase().endsWith(':free')) {
+      return currentSpec;
+    }
+  }
 
   discoveringModels.add(clean);
   renderFeaturedSheet();
@@ -4469,12 +4493,13 @@ function renderTopTokenBadge() {
 }
 
 async function setTokenSaverMode(mode) {
-  if (!['off', 'balanced', 'max'].includes(mode)) return;
+  if (!['off', 'balanced', 'max', 'rpd'].includes(mode)) return;
   await persistAgentConfigPatch({ tokenSaver: mode }, false);
   if ($('cfgTokenSaver')) $('cfgTokenSaver').value = mode;
   renderQuotaModalBody();
   const labels = {
     max: 'حداکثر صرفه‌جویی واقعی (Hyper-Eco v3) فعال شد ⚡',
+    rpd: 'حالت ۱-شات ویژهٔ سقف ۵۰ درخواست روزانه (OpenRouter) فعال شد 🎯',
     balanced: 'حالت بهینه‌سازی متعادل فعال شد ⚖',
     off: 'بهینه‌ساز توکن خاموش شد'
   };
@@ -4601,21 +4626,33 @@ function renderQuotaModalBody() {
     ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${(turnCached > 0 ? turnEffective : turn.totalTokens).toLocaleString('en-US')}</b> توکن مؤثر (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''}${turnCached > 0 ? ` · کش ۹۰٪ تخفیف: <b style="color:#7ee2a8">${turnCached.toLocaleString('en-US')}</b>` : ''}${turnSaved > 0 ? ` · صرفه‌جویی: <b style="color:#7ee2a8">~${turnSaved.toLocaleString('en-US')} (${turnSavePct}%)</b>` : ''})</div>`
     : '';
 
+  const rpdBannerHtml = q?.isFreeTier || saverMode === 'rpd'
+    ? `<div style="margin-top:8px;padding:7px 9px;border-radius:8px;background:rgba(245,177,76,.1);border:1px solid rgba(245,177,76,.3);font-size:11px;color:#ffd58c;line-height:1.65">
+        🎯 <b>سقف روزانه OpenRouter Free (${q?.dailyRequestLimit || 50} درخواست/روز):</b>
+        ${saverMode === 'rpd'
+          ? 'حالت <b>۱-شات (حداقل درخواست)</b> فعال است — فایل‌های پروژه از قبل بارگذاری می‌شوند و ویرایش‌ها فقط با <b>۱ درخواست</b> انجام می‌شوند!'
+          : 'برای اینکه ۵۰ درخواست روزانه معادل ~۲۵۰ گام عادی کار کند، دکمهٔ <b>«🎯 ۵۰ درخواست (۱-شات)»</b> را در پایین بزنید یا در <code>⌁ API</code> درگاه پشتیبان Zro تنظیم کنید.'}
+        ${state.provider?.fallbackActive ? `<br><span style="color:#7ee2a8">✔ درگاه پشتیبان خودکار فعال: <code style="direction:ltr">${esc(state.provider.fallbackBaseUrl)}</code></span>` : ''}
+      </div>`
+    : '';
+
   const ecoBoxHtml = `
     <div class="spec-box" style="margin-top:10px;border-color:rgba(126,226,168,.28)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی واقعی توکن (Hyper-Eco v3)</span>
-        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'max' ? 'حداکثر کاهش خام + کش هوشمند' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
+        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی توکن و درخواست (Hyper-Eco v3)</span>
+        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'rpd' ? '۱-شات (حداقل درخواست روزانه)' : saverMode === 'max' ? 'حداکثر کاهش خام + کش هوشمند' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
       </div>
       <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
-        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر (v3)</button>
-        <button type="button" onclick="setTokenSaverMode('balanced')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'balanced' ? 'border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)' : ''}">⚖ متعادل</button>
+        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر توکن</button>
+        <button type="button" onclick="setTokenSaverMode('rpd')" style="flex:1.25;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'rpd' ? 'border-color:#ffd58c;color:#ffd58c;background:rgba(245,177,76,.15)' : ''}">🎯 ۵۰ درخواست (۱-شات)</button>
+        <button type="button" onclick="setTokenSaverMode('balanced')" style="min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'balanced' ? 'border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)' : ''}">⚖ متعادل</button>
         <button type="button" onclick="setTokenSaverMode('off')" style="min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'off' ? 'border-color:#f5b14c;color:#f5b14c' : ''}">خاموش</button>
       </div>
+      ${rpdBannerHtml}
       <div style="font-size:11px;color:#9fb4d6;margin-top:7px;line-height:1.65">
-        تشخیص خودکار نوع درگاه (حذف آنی کدهای تکراری در بسته‌های توکنی + حفظ کش پیشوند در OpenRouter) · ۵۵٪ کاهش اسکیمای ابزارها و پرامپت سیستم · پنجرهٔ سبک ۴.۲K · کنترل هوشمند تفکر
+        حالت ۱-شات برای OpenRouter Free (انجام کل ویرایش در ۱ درخواست به‌جای ۵–۷ درخواست + ۰ درخواست تست پس‌زمینه) · حذف آنی کدهای تکراری در Zro · سوئیچ خودکار به درگاه پشتیبان هنگام ۴۲۹
         ${(state.sessionSavedTokens > 0 || state.sessionCachedTokens > 0)
-          ? `<br><span style="color:#7ee2a8">✔ ذخیره‌شده در این نشست: <b style="direction:ltr">~${Math.round(state.sessionSavedTokens).toLocaleString('en-US')} tok</b>${state.sessionCachedTokens > 0 ? ` (کش درگاه: <b style="direction:ltr">${Math.round(state.sessionCachedTokens).toLocaleString('en-US')}</b>)` : ''}</span>`
+          ? `<br><span style="color:#7ee2a8">✔ ذخیره‌شده در این نشست: <b style="direction:ltr">~${Math.round(state.sessionSavedTokens).toLocaleString('en-US')} tok</b>${state.sessionCachedTokens > 0 ? ` (کش درگاه: <b style="direction:ltr">${Math.round(state.sessionCachedTokens).toLocaleString('en-US')}</b>)` : ''}${turn?.requestsUsed ? ` · درخواست‌های این پیام: <b>${turn.requestsUsed}</b>` : ''}</span>`
           : ''}
       </div>
     </div>`;
@@ -6632,6 +6669,9 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
+      } else if (data.phase === 'provider_failover') {
+        setSync('busy', 'سوییچ خودکار به درگاه پشتیبان…');
+        if (vEl) vEl.textContent = `${stepPrefix()}🔄 سقف درگاه اصلی پر شد — انتقال خودکار به درگاه پشتیبان (${data.toBaseUrl || 'Backup'})…`;
       } else if (data.phase === 'rate_limit_wait') {
         const waitSec = Math.max(1, Math.ceil((Number(data.waitMs) || 2500) / 1000));
         setSync('busy', `مکث خودکار ${faNum(waitSec)} ثانیه برای شارژ سهمیه لحظه‌ای…`);
@@ -7263,13 +7303,27 @@ async function removeMemory(key, scope) {
 
 /* -------------------------------- settings ------------------------------- */
 
+let clearFallbackRequested = false;
+
+function clearFallbackProviderInputs() {
+  if ($('providerFallbackUrlInput')) $('providerFallbackUrlInput').value = '';
+  if ($('providerFallbackKeyInput')) {
+    $('providerFallbackKeyInput').value = '';
+    $('providerFallbackKeyInput').placeholder = 'کلید API سرویس پشتیبان حذف می‌شود (ذخیره را بزنید)';
+  }
+  if ($('providerFallbackModelInput')) $('providerFallbackModelInput').value = '';
+  clearFallbackRequested = true;
+}
+
 function syncProviderSettingsForm() {
   const p = state.provider || {};
+  clearFallbackRequested = false;
   const statusEl = $('apiConnectionStatus');
   if (statusEl) {
+    const fbNote = p.fallbackActive ? ` · 🔄 پشتیبان خودکار: ${p.fallbackBaseUrl}` : '';
     statusEl.textContent = p.customActive
-      ? `✔ سرویس اختصاصی فعال: ${p.effectiveBaseUrl}${p.hasCustomKey ? ` (کلید ذخیره شده: ${p.keyHint})` : ' (با کلید سرور)'}`
-      : `در حال استفاده از API پیش‌فرض سرور: ${p.effectiveBaseUrl || 'https://tooken.club/v1'}`;
+      ? `✔ سرویس اختصاصی فعال: ${p.effectiveBaseUrl}${p.hasCustomKey ? ` (کلید: ${p.keyHint})` : ' (با کلید سرور)'}${fbNote}`
+      : `در حال استفاده از API پیش‌فرض سرور: ${p.effectiveBaseUrl || 'https://tooken.club/v1'}${fbNote}`;
   }
   const baseInput = $('providerBaseUrlInput');
   if (baseInput) baseInput.value = p.baseUrl || '';
@@ -7277,18 +7331,50 @@ function syncProviderSettingsForm() {
   if (keyInput) {
     keyInput.value = '';
     keyInput.placeholder = p.hasCustomKey
-      ? `کلید ذخیره شده (${p.keyHint}) — برای تغییر، کلید جدید وارد کنید`
-      : 'sk-... / tc_live_...';
+      ? `کلید ذخیره شده (${p.keyHint}) — برای تغییر یا افزودن کلیدهای چرخشی وارد کنید`
+      : 'sk-or-v1-key1, sk-or-v1-key2 ...';
   }
   const defModelInput = $('providerDefaultModelInput');
   if (defModelInput) defModelInput.value = p.defaultModel || '';
+
+  const fbUrlInput = $('providerFallbackUrlInput');
+  if (fbUrlInput) fbUrlInput.value = p.fallbackBaseUrl || '';
+  const fbKeyInput = $('providerFallbackKeyInput');
+  if (fbKeyInput) {
+    fbKeyInput.value = '';
+    fbKeyInput.placeholder = p.hasFallbackKey
+      ? `کلید پشتیبان ذخیره شده (${p.fallbackKeyHint}) — برای تغییر وارد کنید`
+      : 'کلید API سرویس پشتیبان (مثلاً Zro)';
+  }
+  const fbModelInput = $('providerFallbackModelInput');
+  if (fbModelInput) fbModelInput.value = p.fallbackModel || '';
+  const fbDetails = $('providerFallbackDetails');
+  if (fbDetails && p.fallbackActive) fbDetails.open = true;
 }
 
 async function saveProviderConfig() {
   const btn = $('saveProviderBtn');
   const baseUrl = cleanClientCredential($('providerBaseUrlInput')?.value || '');
-  const apiKey = cleanClientCredential($('providerApiKeyInput')?.value || '').replace(/^bearer\s+/i, '').trim();
+  const rawKeyField = String($('providerApiKeyInput')?.value || '').trim();
+  const apiKey = rawKeyField
+    ? rawKeyField
+        .split(/[\r\n,|]+/)
+        .map((k) => cleanClientCredential(k).replace(/^bearer\s+/i, '').trim())
+        .filter(Boolean)
+        .join(',')
+    : '';
   const defaultModel = cleanClientCredential($('providerDefaultModelInput')?.value || '');
+  const fallbackBaseUrl = cleanClientCredential($('providerFallbackUrlInput')?.value || '');
+  const rawFbKeyField = String($('providerFallbackKeyInput')?.value || '').trim();
+  const fallbackApiKey = rawFbKeyField
+    ? rawFbKeyField
+        .split(/[\r\n,|]+/)
+        .map((k) => cleanClientCredential(k).replace(/^bearer\s+/i, '').trim())
+        .filter(Boolean)
+        .join(',')
+    : '';
+  const fallbackModel = cleanClientCredential($('providerFallbackModelInput')?.value || '');
+  const clearFallbackKey = Boolean(clearFallbackRequested || (!fallbackBaseUrl && !fallbackApiKey));
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'در حال ذخیره امن کلید در D1…';
@@ -7297,7 +7383,16 @@ async function saveProviderConfig() {
     // Phase 1: Fast atomic D1 save (`skipModels: true`) — immune to multi-MB `/models` 503 CPU spikes!
     const res = await api(API.config, {
       method: 'POST',
-      body: JSON.stringify({ baseUrl, apiKey, defaultModel, skipModels: true })
+      body: JSON.stringify({
+        baseUrl,
+        apiKey,
+        defaultModel,
+        fallbackBaseUrl,
+        fallbackApiKey,
+        clearFallbackKey,
+        fallbackModel,
+        skipModels: true
+      })
     });
     state.provider = res.provider || null;
     state.defaultModel = res.model || state.defaultModel;

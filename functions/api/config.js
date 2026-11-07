@@ -154,7 +154,11 @@ export async function onRequestPost({ request, env }) {
         data?.baseUrl !== undefined ||
         data?.apiKey !== undefined ||
         data?.clearKey !== undefined ||
-        data?.defaultModel !== undefined;
+        data?.defaultModel !== undefined ||
+        data?.fallbackBaseUrl !== undefined ||
+        data?.fallbackApiKey !== undefined ||
+        data?.clearFallbackKey !== undefined ||
+        data?.fallbackModel !== undefined;
 
       if (!touchesProvider && (agentConfig || sandboxConfig)) {
         const [provider, effEnv, finalAgentCfg, finalSandboxCfg] = await Promise.all([
@@ -179,7 +183,11 @@ export async function onRequestPost({ request, env }) {
         baseUrl: data?.baseUrl,
         apiKey: data?.apiKey,
         clearKey: Boolean(data?.clearKey),
-        defaultModel: data?.defaultModel
+        defaultModel: data?.defaultModel,
+        fallbackBaseUrl: data?.fallbackBaseUrl,
+        fallbackApiKey: data?.fallbackApiKey,
+        clearFallbackKey: Boolean(data?.clearFallbackKey),
+        fallbackModel: data?.fallbackModel
       });
       if (!agentConfig) {
         agentConfig = await getUserAgentConfig(env, identity.owner);

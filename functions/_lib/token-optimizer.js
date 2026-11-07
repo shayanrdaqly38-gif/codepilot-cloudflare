@@ -7,7 +7,7 @@
 //   4. Zero-Roundtrip `@filepath` / `@filepath:start-end` Pre-Pinning
 //   5. Smart Conversational & Step-Level Reasoning Effort Governor (100% full power on Step 1 coding & all errors; eliminates wasted thinking spin on routine steps & greetings)
 
-export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max'];
+export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max', 'rpd'];
 
 const FULL_READ_CHAR_LIMIT = 15_000;
 const HUGE_HEAD_CHAR_BUDGET = 10_500;
@@ -605,3 +605,87 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
 
   return { messages: nextMessages, tools: nextTools, injected: breakpointsUsed > 0 };
 }
+
+/**
+ * Detects whether the current turn should optimize primarily for **minimum HTTP API requests**
+ * (OpenRouter 50 requests/day `:free` cap or explicit `'rpd'` Request-Saver mode).
+ */
+export function isRpdLimitedTurn({ tokenSaver = 'max', baseUrl = '', model = '' } = {}) {
+  if (tokenSaver === 'rpd') return true;
+  if (tokenSaver === 'off') return false;
+  const m = String(model || '').trim().toLowerCase();
+  if (!m) return false;
+  if (m.endsWith(':free') || m === 'openrouter/free') return true;
+  return false;
+}
+
+/**
+ * Preloads the active & relevant workspace files directly into Step 1 when RPD Request-Saver
+ * is active (and not a pure greeting), eliminating `list_files` + `read_file` tool round-trips
+ * so coding tasks finish in **1 single API request** instead of 4–7 requests!
+ */
+export function buildRequestSaverWorkspacePack(
+  workspaceFiles,
+  activeFile = '',
+  userText = '',
+  { excludePaths = [], maxTotalChars = 26_000, maxPerFileChars = 13_000 } = {}
+) {
+  const trimmedUser = String(userText || '').trim();
+  if (trimmedUser && trimmedUser.length <= 36 && TRIVIAL_CHAT_RE.test(trimmedUser)) {
+    return { injectedText: '', preloadedPaths: [] };
+  }
+
+  const filesObj = workspaceFiles && typeof workspaceFiles === 'object' ? workspaceFiles : {};
+  const excluded = new Set(Array.isArray(excludePaths) ? excludePaths : []);
+  const allPaths = Object.keys(filesObj).filter((p) => !excluded.has(p) && typeof filesObj[p] === 'string');
+
+  const lowerPrompt = trimmedUser.toLowerCase();
+  const scored = allPaths.map((p) => {
+    let score = 0;
+    const baseName = p.split('/').pop()?.toLowerCase() || '';
+    if (p === activeFile) score += 100;
+    if (baseName && lowerPrompt.includes(baseName)) score += 80;
+    if (p.length <= 24 && lowerPrompt.includes(p.toLowerCase())) score += 90;
+    if (/\.(html|js|mjs|ts|tsx|jsx|css|py|json)$/i.test(p)) score += 15;
+    score -= Math.min(12, Math.floor(filesObj[p].length / 5000));
+    return { path: p, score, len: filesObj[p].length };
+  });
+  scored.sort((a, b) => b.score - a.score || a.len - b.len);
+
+  let usedChars = 0;
+  const preloadedPaths = [];
+  const blocks = [];
+
+  for (const item of scored) {
+    if (blocks.length >= 6 || usedChars >= maxTotalChars) break;
+    const raw = String(filesObj[item.path] || '');
+    if (!raw.trim()) continue;
+    const remain = maxTotalChars - usedChars;
+    if (remain < 500) break;
+    const cap = Math.min(maxPerFileChars, remain);
+    if (raw.length <= cap) {
+      blocks.push(`[Preloaded: ${item.path} (${raw.length} chars — complete raw file)]\n${raw}`);
+      usedChars += raw.length;
+      preloadedPaths.push(item.path);
+    } else if (item.score >= 80 && cap >= 2500) {
+      const smart = buildSmartFileRead(item.path, raw, { tokenSaver: 'max' });
+      const clipped = smart.text.slice(0, cap);
+      blocks.push(`[Preloaded: ${item.path} (head + landmark map of ${raw.length} chars)]\n${clipped}`);
+      usedChars += clipped.length;
+      preloadedPaths.push(item.path);
+    }
+  }
+
+  const directive =
+    '[⚡ 50-REQ/DAY ULTRA-BATCH MODE: Minimize API round-trips! ' +
+    (preloadedPaths.length
+      ? `Files (${preloadedPaths.join(', ')}) are ALREADY preloaded below — DO NOT call list_files or read_file on them. `
+      : 'Do NOT call think. ') +
+    'Execute ALL write_file/apply_patch edits together in ONE single parallel batch AND include your brief Persian explanation in `content` in the SAME response!]';
+
+  return {
+    injectedText: blocks.length ? `${directive}\n\n${blocks.join('\n\n')}` : directive,
+    preloadedPaths
+  };
+}
+
