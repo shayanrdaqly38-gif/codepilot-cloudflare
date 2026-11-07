@@ -1521,36 +1521,38 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="kv" id="accountInfo"></div>
     <section aria-label="اتصال API" style="margin-top:16px">
-      <strong>اتصال API و سرویس مدل (OpenAI-Compatible)</strong>
-      <p id="apiConnectionStatus" class="tiny" style="margin:6px 0 10px">می‌توانید از پیش‌فرض سرور استفاده کنید یا هر آدرس و کلید API سازگار با OpenAI را وارد کنید؛ مدل‌ها و سطوح استدلال هر مدل به‌صورت خودکار شناسایی می‌شوند.</p>
-      <label class="field-label" for="providerBaseUrlInput">آدرس سرویس اصلی (Base URL)</label>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <strong>اتصال API و مدیریت تا ۱۰ درگاه هوشمند (OpenAI-Compatible)</strong>
+        <span id="gatewayCountBadge" style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;background:rgba(126,226,168,.14);color:#7ee2a8;border:1px solid rgba(126,226,168,.3)">۱ از ۱۰ درگاه</span>
+      </div>
+      <p id="apiConnectionStatus" class="tiny" style="margin:6px 0 10px">می‌توانید تا ۱۰ درگاه مجزا تعریف کنید؛ به محض اتمام سهمیه، پر شدن سقف درخواست یا محدودیت هر درگاه، سیستم خودکار درگاهی که کار می‌کند را انتخاب می‌کند.</p>
+      <label class="field-label" for="providerBaseUrlInput">درگاه ۱ (اصلی) — آدرس سرویس (Base URL)</label>
       <input class="field" id="providerBaseUrlInput" style="direction:ltr;text-align:left" placeholder="https://openrouter.ai/api/v1 یا https://zro.moonmath.ai/v1">
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
-        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://openrouter.ai/api/v1')">⚡ OpenRouter</button>
-        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://zro.moonmath.ai/v1')">🌙 Zro (MoonMath)</button>
-        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://tooken.club/v1')">Tooken</button>
-        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://api.openai.com/v1')">OpenAI</button>
-        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('https://api.deepseek.com/v1')">DeepSeek</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('openrouter')">⚡ OpenRouter</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('zro')">🌙 Zro (MoonMath)</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('tooken')">Tooken</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('deepseek')">DeepSeek</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('groq')">Groq</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('openai')">OpenAI</button>
+        <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="fillProviderPreset('gemini')">Gemini</button>
       </div>
-      <label class="field-label" for="providerApiKeyInput">کلید(های) API اختصاصی (برای ۲ یا ۳ برابر شدن سقف ۵۰ درخواست، چند کلید را با کاما <code>,</code> جدا کنید)</label>
+      <label class="field-label" for="providerApiKeyInput">کلید(های) API درگاه ۱ (چند کلید روی همین درگاه را هم می‌توانید با کاما <code>,</code> جدا کنید)</label>
       <input class="field" id="providerApiKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="sk-or-v1-key1, sk-or-v1-key2 ...">
-      <label class="field-label" for="providerDefaultModelInput">مدل پیش‌فرض (اختیاری — در صورت خالی بودن خودکار از لیست مدل‌ها انتخاب می‌شود)</label>
+      <label class="field-label" for="providerDefaultModelInput">مدل پیش‌فرض درگاه ۱ (اختیاری — در صورت خالی بودن خودکار از لیست مدل‌ها انتخاب می‌شود)</label>
       <input class="field" id="providerDefaultModelInput" style="direction:ltr;text-align:left" placeholder="claude-sonnet-5-5">
 
-      <details id="providerFallbackDetails" style="margin-top:10px;border:1px solid rgba(126,226,168,.24);border-radius:10px;padding:8px 10px;background:rgba(126,226,168,.04)">
-        <summary style="cursor:pointer;font-size:12px;font-weight:700;color:#7ee2a8">🔄 درگاه پشتیبان خودکار (Auto-Failover هنگام اتمام ۵۰ درخواست روزانه OpenRouter یا خطای 429)</summary>
-        <p class="tiny" style="margin:6px 0 8px">وقتی سقف ۵۰ درخواست روزانه درگاه اصلی پر شود، سیستم <b>وسط همان پیام و بدون قطع کار</b> خودکار به درگاه دوم (مثلاً Zro) سوییچ می‌کند.</p>
-        <label class="field-label" for="providerFallbackUrlInput" style="margin-top:4px">آدرس درگاه پشتیبان (Backup Base URL)</label>
-        <input class="field" id="providerFallbackUrlInput" style="direction:ltr;text-align:left" placeholder="https://zro.moonmath.ai/v1">
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
-          <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="document.getElementById('providerFallbackUrlInput').value='https://zro.moonmath.ai/v1'">🌙 تنظیم Zro به عنوان پشتیبان</button>
-          <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px" onclick="document.getElementById('providerFallbackUrlInput').value='https://openrouter.ai/api/v1'">⚡ تنظیم OpenRouter به عنوان پشتیبان</button>
-          <button type="button" class="icon-btn" style="font-size:11px;padding:3px 9px;color:#ff9d92" onclick="clearFallbackProviderInputs()">حذف پشتیبان</button>
+      <details id="providerFallbackDetails" open style="margin-top:10px;border:1px solid rgba(126,226,168,.24);border-radius:10px;padding:9px 11px;background:rgba(126,226,168,.04)">
+        <summary style="cursor:pointer;font-size:12px;font-weight:700;color:#7ee2a8">🔄 درگاه‌های ۲ تا ۱۰ — جایگزینی خودکار درگاه سالم هنگام اتمام سهمیه یا محدودیت</summary>
+        <p class="tiny" style="margin:6px 0 8px;line-height:1.65">تا <b>۱۰ درگاه</b> (درگاه ۱ + تا ۹ درگاه پشتیبان به ترتیب اولویت) اضافه کنید. اگر هر درگاه سهمیه/درخواستش تمام شود یا خطا بدهد، سیستم <b>وسط همان پیام و بدون قطع کار</b> خودکار سراغ اولین درگاهی می‌رود که کار می‌کند و درگاه‌های تمام‌شده را موقتاً دور می‌زند.</p>
+        <div id="providerGatewaysList" style="display:flex;flex-direction:column;gap:10px;margin-top:6px"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center">
+          <button type="button" class="primary" id="addProviderGatewayBtn" style="font-size:11.5px;padding:5px 12px" onclick="addBackupGatewaySlot()">➕ افزودن درگاه جدید (تا ۱۰ درگاه)</button>
+          <button type="button" class="icon-btn" style="font-size:11px;padding:4px 9px" onclick="addBackupGatewaySlot('https://zro.moonmath.ai/v1', 'Zro')">+ درگاه Zro</button>
+          <button type="button" class="icon-btn" style="font-size:11px;padding:4px 9px" onclick="addBackupGatewaySlot('https://openrouter.ai/api/v1', 'OpenRouter')">+ درگاه OpenRouter</button>
+          <button type="button" class="icon-btn" style="font-size:11px;padding:4px 9px" onclick="addBackupGatewaySlot('https://api.deepseek.com/v1', 'DeepSeek')">+ درگاه DeepSeek</button>
+          <button type="button" class="icon-btn" style="font-size:11px;padding:4px 9px;color:#ff9d92" onclick="clearFallbackProviderInputs()">پاک کردن پشتیبان‌ها</button>
         </div>
-        <label class="field-label" for="providerFallbackKeyInput">کلید(های) API درگاه پشتیبان (رمزنگاری AES-GCM)</label>
-        <input class="field" id="providerFallbackKeyInput" type="password" autocomplete="off" style="direction:ltr;text-align:left" placeholder="کلید API سرویس پشتیبان (مثلاً Zro)">
-        <label class="field-label" for="providerFallbackModelInput">مدل درگاه پشتیبان (اختیاری — خالی بگذارید تا خودکار بهترین مدل انتخاب شود)</label>
-        <input class="field" id="providerFallbackModelInput" style="direction:ltr;text-align:left" placeholder="اختیاری (تشخیص خودکار مدل)">
       </details>
       <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px;margin-top:8px">
         <button class="primary" onclick="saveProviderConfig()" id="saveProviderBtn">ذخیره و شناسایی خودکار مدل‌ها</button>
@@ -2438,9 +2440,12 @@ function cleanClientCredential(val, isKey = false) {
 
 const PROVIDER_PRESETS = {
   openrouter: { url: 'https://openrouter.ai/api/v1', modelPlaceholder: 'anthropic/claude-sonnet-4' },
+  zro: { url: 'https://zro.moonmath.ai/v1', modelPlaceholder: 'تشخیص خودکار مدل از Zro' },
   tooken: { url: 'https://tooken.club/v1', modelPlaceholder: 'claude-sonnet-5-5' },
   openai: { url: 'https://api.openai.com/v1', modelPlaceholder: 'gpt-5' },
-  deepseek: { url: 'https://api.deepseek.com/v1', modelPlaceholder: 'deepseek-reasoner' }
+  deepseek: { url: 'https://api.deepseek.com/v1', modelPlaceholder: 'deepseek-reasoner' },
+  groq: { url: 'https://api.groq.com/openai/v1', modelPlaceholder: 'llama-3.3-70b-versatile' },
+  gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai', modelPlaceholder: 'gemini-2.5-flash' }
 };
 
 function fillProviderPreset(presetOrUrl) {
@@ -4626,15 +4631,22 @@ function renderQuotaModalBody() {
     ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${(turnCached > 0 ? turnEffective : turn.totalTokens).toLocaleString('en-US')}</b> توکن مؤثر (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''}${turnCached > 0 ? ` · کش ۹۰٪ تخفیف: <b style="color:#7ee2a8">${turnCached.toLocaleString('en-US')}</b>` : ''}${turnSaved > 0 ? ` · صرفه‌جویی: <b style="color:#7ee2a8">~${turnSaved.toLocaleString('en-US')} (${turnSavePct}%)</b>` : ''})</div>`
     : '';
 
-  const rpdBannerHtml = q?.isFreeTier || saverMode === 'rpd'
+  const activeGwCount = Number(state.provider?.activeGatewayCount) || 1;
+  const gatewayPoolBannerHtml = activeGwCount > 1
+    ? `<div style="margin-top:8px;padding:7px 9px;border-radius:8px;background:rgba(126,226,168,.09);border:1px solid rgba(126,226,168,.28);font-size:11px;color:#b8f3cf;line-height:1.65">
+        🔄 <b>استخر هوشمند درگاه‌ها (${faNum(activeGwCount)} از ۱۰ درگاه فعال):</b>
+        درگاه سالم فعلی: <b>درگاه ${faNum(state.lastActiveGateway?.slot || state.provider?.workingGatewaySlot || 1)}</b> (<code style="direction:ltr">${esc(state.lastActiveGateway?.baseUrl || state.provider?.workingBaseUrl || activeHost)}</code>) — در صورت اتمام سهمیه یا محدودیت هر درگاه، خودکار به درگاه سالم بعدی منتقل می‌شود.
+      </div>`
+    : '';
+
+  const rpdBannerHtml = (q?.isFreeTier || saverMode === 'rpd'
     ? `<div style="margin-top:8px;padding:7px 9px;border-radius:8px;background:rgba(245,177,76,.1);border:1px solid rgba(245,177,76,.3);font-size:11px;color:#ffd58c;line-height:1.65">
         🎯 <b>سقف روزانه OpenRouter Free (${q?.dailyRequestLimit || 50} درخواست/روز):</b>
         ${saverMode === 'rpd'
           ? 'حالت <b>۱-شات (حداقل درخواست)</b> فعال است — فایل‌های پروژه از قبل بارگذاری می‌شوند و ویرایش‌ها فقط با <b>۱ درخواست</b> انجام می‌شوند!'
-          : 'برای اینکه ۵۰ درخواست روزانه معادل ~۲۵۰ گام عادی کار کند، دکمهٔ <b>«🎯 ۵۰ درخواست (۱-شات)»</b> را در پایین بزنید یا در <code>⌁ API</code> درگاه پشتیبان Zro تنظیم کنید.'}
-        ${state.provider?.fallbackActive ? `<br><span style="color:#7ee2a8">✔ درگاه پشتیبان خودکار فعال: <code style="direction:ltr">${esc(state.provider.fallbackBaseUrl)}</code></span>` : ''}
+          : 'برای اینکه ۵۰ درخواست روزانه معادل ~۲۵۰ گام عادی کار کند، دکمهٔ <b>«🎯 ۵۰ درخواست (۱-شات)»</b> را در پایین بزنید یا در <code>⌁ API</code> تا ۱۰ درگاه پشتیبان تنظیم کنید.'}
       </div>`
-    : '';
+    : '') + gatewayPoolBannerHtml;
 
   const ecoBoxHtml = `
     <div class="spec-box" style="margin-top:10px;border-color:rgba(126,226,168,.28)">
@@ -6670,8 +6682,18 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
       } else if (data.phase === 'provider_failover') {
-        setSync('busy', 'سوییچ خودکار به درگاه پشتیبان…');
-        if (vEl) vEl.textContent = `${stepPrefix()}🔄 سقف درگاه اصلی پر شد — انتقال خودکار به درگاه پشتیبان (${data.toBaseUrl || 'Backup'})…`;
+        const slotNum = Number(data.slot) || 2;
+        const hostName = (() => {
+          try { return new URL(data.toBaseUrl || '').hostname; } catch { return data.toBaseUrl || 'Backup'; }
+        })();
+        state.lastActiveGateway = { slot: slotNum, baseUrl: data.toBaseUrl || '' };
+        setSync('busy', `سوییچ خودکار به درگاه ${faNum(slotNum)} (${hostName})…`);
+        if (vEl) {
+          vEl.textContent =
+            data.reason === 'cooldown_skip'
+              ? `${stepPrefix()}🔄 انتخاب خودکار درگاه سالم شماره ${faNum(slotNum)} (${hostName})…`
+              : `${stepPrefix()}🔄 سهمیه/محدودیت درگاه ${faNum(data.fromSlot || 1)} پر شد — انتقال خودکار به درگاه ${faNum(slotNum)} (${hostName})…`;
+        }
       } else if (data.phase === 'rate_limit_wait') {
         const waitSec = Math.max(1, Math.ceil((Number(data.waitMs) || 2500) / 1000));
         setSync('busy', `مکث خودکار ${faNum(waitSec)} ثانیه برای شارژ سهمیه لحظه‌ای…`);
@@ -6828,6 +6850,9 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
       if (data.sandbox !== undefined) state.sandbox = Boolean(data.sandbox);
       if (data.linuxRunner !== undefined) state.linuxRunner = Boolean(data.linuxRunner);
+      if (data.activeGateway && typeof data.activeGateway === 'object') {
+        state.lastActiveGateway = data.activeGateway;
+      }
       if (data.modelReasoning && Array.isArray(data.modelReasoning.levels)) {
         applyDiscoveredReasoningToState(activeModelId(), data.modelReasoning);
       }
@@ -7303,27 +7328,245 @@ async function removeMemory(key, scope) {
 
 /* -------------------------------- settings ------------------------------- */
 
-let clearFallbackRequested = false;
+const MAX_UI_GATEWAYS = 10;
+const MAX_UI_FALLBACK_SLOTS = MAX_UI_GATEWAYS - 1;
+let backupGatewayDrafts = [];
+let nextDraftGatewaySeq = 100;
+
+function makeEmptyBackupDraft(presetUrl = '', presetLabel = '') {
+  nextDraftGatewaySeq += 1;
+  return {
+    id: `draft-${nextDraftGatewaySeq}`,
+    label: presetLabel || '',
+    baseUrl: presetUrl || '',
+    apiKey: '',
+    defaultModel: '',
+    hasSavedKey: false,
+    keyHint: '',
+    clearKey: false,
+    healthy: true,
+    cooldownRemainingSec: 0
+  };
+}
+
+function captureBackupGatewayInputsFromDom() {
+  const container = $('providerGatewaysList');
+  if (!container) return backupGatewayDrafts;
+  const cards = container.querySelectorAll('[data-gw-idx]');
+  cards.forEach((card) => {
+    const idx = Number(card.getAttribute('data-gw-idx'));
+    if (!Number.isInteger(idx) || !backupGatewayDrafts[idx]) return;
+    const urlEl = card.querySelector('[data-gw-field="baseUrl"]');
+    const keyEl = card.querySelector('[data-gw-field="apiKey"]');
+    const modelEl = card.querySelector('[data-gw-field="defaultModel"]');
+    const labelEl = card.querySelector('[data-gw-field="label"]');
+    if (urlEl) backupGatewayDrafts[idx].baseUrl = cleanClientCredential(urlEl.value || '');
+    if (keyEl) backupGatewayDrafts[idx].apiKey = String(keyEl.value || '').trim();
+    if (modelEl) backupGatewayDrafts[idx].defaultModel = cleanClientCredential(modelEl.value || '');
+    if (labelEl) backupGatewayDrafts[idx].label = String(labelEl.value || '').trim().slice(0, 60);
+  });
+  return backupGatewayDrafts;
+}
+
+function updateGatewayCountBadge() {
+  const badge = $('gatewayCountBadge');
+  const addBtn = $('addProviderGatewayBtn');
+  const totalSlots = 1 + backupGatewayDrafts.length;
+  if (badge) {
+    badge.textContent = `${faNum(totalSlots)} از ${faNum(MAX_UI_GATEWAYS)} درگاه`;
+  }
+  if (addBtn) {
+    const full = backupGatewayDrafts.length >= MAX_UI_FALLBACK_SLOTS;
+    addBtn.disabled = full;
+    addBtn.textContent = full
+      ? `✔ سقف ${faNum(MAX_UI_GATEWAYS)} درگاه تکمیل است`
+      : `➕ افزودن درگاه ${faNum(totalSlots + 1)} (تا ۱۰ درگاه)`;
+  }
+}
+
+function renderBackupGatewaysList() {
+  const listEl = $('providerGatewaysList');
+  if (!listEl) return;
+
+  if (!backupGatewayDrafts.length) {
+    listEl.innerHTML = `<div class="tiny" style="padding:8px 10px;border:1px dashed rgba(126,226,168,.26);border-radius:8px;color:var(--muted)">
+      هنوز درگاه پشتیبانی (درگاه ۲ تا ۱۰) اضافه نشده است. روی <b>«➕ افزودن درگاه ۲»</b> بزنید تا تا ۱۰ درگاه زنجیره‌ای تنظیم کنید.
+    </div>`;
+    updateGatewayCountBadge();
+    return;
+  }
+
+  listEl.innerHTML = backupGatewayDrafts
+    .map((gw, idx) => {
+      const slot = idx + 2;
+      const urlIdAttr = slot === 2 ? ' id="providerFallbackUrlInput"' : '';
+      const keyIdAttr = slot === 2 ? ' id="providerFallbackKeyInput"' : '';
+      const modelIdAttr = slot === 2 ? ' id="providerFallbackModelInput"' : '';
+
+      let statusPill = '';
+      if (gw.cooldownRemainingSec > 0) {
+        statusPill = `<span style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:rgba(245,177,76,.15);color:#ffd58c">⏳ محدودیت موقت (${faNum(gw.cooldownRemainingSec)}s)</span>`;
+      } else if ((gw.hasSavedKey && !gw.clearKey) || gw.apiKey) {
+        statusPill = `<span style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:rgba(126,226,168,.16);color:#7ee2a8">🟢 آماده جایگزینی خودکار</span>`;
+      } else {
+        statusPill = `<span style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:rgba(255,255,255,.07);color:var(--muted)">کلید وارد نشده</span>`;
+      }
+
+      const keyPlaceholder =
+        gw.hasSavedKey && !gw.clearKey
+          ? `کلید ذخیره شده (${gw.keyHint}) — خالی بماند حفظ می‌شود یا کلید جدید وارد کنید`
+          : gw.clearKey
+            ? 'کلید قبلی حذف می‌شود (ذخیره را بزنید یا کلید جدید وارد کنید)'
+            : `کلید(های) API درگاه ${faNum(slot)} (با کاما برای چند کلید)`;
+
+      return `<div data-gw-idx="${idx}" style="border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:9px 10px;background:rgba(0,0,0,.18)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <strong style="font-size:12px;color:#e7ecf5">درگاه ${faNum(slot)}</strong>
+            ${statusPill}
+            <input class="field" data-gw-field="label" value="${esc(gw.label || '')}" placeholder="نام دلخواه (مثلاً اکانت ۲)" style="width:130px;padding:2px 7px;font-size:11px;height:24px">
+          </div>
+          <div style="display:flex;align-items:center;gap:4px">
+            ${idx > 0 ? `<button type="button" class="icon-btn" title="اولویت بالاتر" style="font-size:11px;padding:2px 7px" onclick="moveBackupGatewaySlot(${idx}, -1)">↑</button>` : ''}
+            ${idx + 1 < backupGatewayDrafts.length ? `<button type="button" class="icon-btn" title="اولویت پایین‌تر" style="font-size:11px;padding:2px 7px" onclick="moveBackupGatewaySlot(${idx}, 1)">↓</button>` : ''}
+            ${gw.hasSavedKey && !gw.clearKey ? `<button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 7px;color:#ffd58c" onclick="toggleClearBackupGatewayKey(${idx})">پاک‌کردن کلید</button>` : ''}
+            <button type="button" class="icon-btn" style="font-size:11px;padding:2px 8px;color:#ff9d92" onclick="removeBackupGatewaySlot(${idx})">✕ حذف</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px">
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'openrouter')">⚡ OpenRouter</button>
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'zro')">🌙 Zro</button>
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'tooken')">Tooken</button>
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'deepseek')">DeepSeek</button>
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'groq')">Groq</button>
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'openai')">OpenAI</button>
+          <button type="button" class="icon-btn" style="font-size:10.5px;padding:2px 8px" onclick="fillBackupGatewayPreset(${idx}, 'gemini')">Gemini</button>
+        </div>
+        <label class="field-label" style="margin-top:2px">آدرس درگاه ${faNum(slot)} (Base URL)</label>
+        <input class="field"${urlIdAttr} data-gw-field="baseUrl" value="${esc(gw.baseUrl || '')}" style="direction:ltr;text-align:left" placeholder="https://zro.moonmath.ai/v1 یا https://openrouter.ai/api/v1">
+        <label class="field-label" style="margin-top:5px">کلید(های) API درگاه ${faNum(slot)} (رمزنگاری AES-GCM)</label>
+        <input class="field"${keyIdAttr} data-gw-field="apiKey" type="password" autocomplete="off" value="${esc(gw.apiKey || '')}" style="direction:ltr;text-align:left" placeholder="${esc(keyPlaceholder)}">
+        <label class="field-label" style="margin-top:5px">مدل پیش‌فرض درگاه ${faNum(slot)} (اختیاری — خالی بگذارید تا خودکار تشخیص داده شود)</label>
+        <input class="field"${modelIdAttr} data-gw-field="defaultModel" value="${esc(gw.defaultModel || '')}" style="direction:ltr;text-align:left" placeholder="اختیاری (انتخاب خودکار مدل سالم درگاه)">
+      </div>`;
+    })
+    .join('');
+
+  updateGatewayCountBadge();
+}
+
+function addBackupGatewaySlot(presetUrl = '', presetLabel = '') {
+  captureBackupGatewayInputsFromDom();
+  if (backupGatewayDrafts.length >= MAX_UI_FALLBACK_SLOTS) {
+    toast(`حداکثر ${faNum(MAX_UI_GATEWAYS)} درگاه (درگاه ۱ تا ۱۰) قابل افزودن است.`);
+    return;
+  }
+  // If slot #2 exists and is completely blank, fill it directly instead of creating an extra blank row!
+  if (
+    presetUrl &&
+    backupGatewayDrafts.length === 1 &&
+    !backupGatewayDrafts[0].baseUrl &&
+    !backupGatewayDrafts[0].apiKey &&
+    !backupGatewayDrafts[0].hasSavedKey
+  ) {
+    backupGatewayDrafts[0].baseUrl = presetUrl;
+    if (presetLabel && !backupGatewayDrafts[0].label) backupGatewayDrafts[0].label = presetLabel;
+  } else {
+    backupGatewayDrafts.push(makeEmptyBackupDraft(presetUrl, presetLabel));
+  }
+  const fbDetails = $('providerFallbackDetails');
+  if (fbDetails) fbDetails.open = true;
+  renderBackupGatewaysList();
+}
+
+function removeBackupGatewaySlot(idx) {
+  captureBackupGatewayInputsFromDom();
+  if (idx < 0 || idx >= backupGatewayDrafts.length) return;
+  backupGatewayDrafts.splice(idx, 1);
+  renderBackupGatewaysList();
+}
+
+function moveBackupGatewaySlot(idx, delta) {
+  captureBackupGatewayInputsFromDom();
+  const target = idx + delta;
+  if (idx < 0 || idx >= backupGatewayDrafts.length || target < 0 || target >= backupGatewayDrafts.length) return;
+  const [moved] = backupGatewayDrafts.splice(idx, 1);
+  backupGatewayDrafts.splice(target, 0, moved);
+  renderBackupGatewaysList();
+}
+
+function fillBackupGatewayPreset(idx, presetKey) {
+  captureBackupGatewayInputsFromDom();
+  if (!backupGatewayDrafts[idx]) return;
+  const p = PROVIDER_PRESETS[String(presetKey || '').toLowerCase()];
+  const url = p ? p.url : String(presetKey || '').trim();
+  backupGatewayDrafts[idx].baseUrl = url;
+  if (!backupGatewayDrafts[idx].label && p) {
+    backupGatewayDrafts[idx].label = presetKey.toUpperCase();
+  }
+  renderBackupGatewaysList();
+}
+
+function toggleClearBackupGatewayKey(idx) {
+  captureBackupGatewayInputsFromDom();
+  if (!backupGatewayDrafts[idx]) return;
+  backupGatewayDrafts[idx].clearKey = true;
+  backupGatewayDrafts[idx].apiKey = '';
+  renderBackupGatewaysList();
+}
 
 function clearFallbackProviderInputs() {
-  if ($('providerFallbackUrlInput')) $('providerFallbackUrlInput').value = '';
-  if ($('providerFallbackKeyInput')) {
-    $('providerFallbackKeyInput').value = '';
-    $('providerFallbackKeyInput').placeholder = 'کلید API سرویس پشتیبان حذف می‌شود (ذخیره را بزنید)';
-  }
-  if ($('providerFallbackModelInput')) $('providerFallbackModelInput').value = '';
-  clearFallbackRequested = true;
+  backupGatewayDrafts = [];
+  renderBackupGatewaysList();
+  toast('درگاه‌های پشتیبان پاک شدند — دکمهٔ «ذخیره» را بزنید تا ثبت شود.');
 }
 
 function syncProviderSettingsForm() {
   const p = state.provider || {};
-  clearFallbackRequested = false;
+  const savedFallbacks = Array.isArray(p.fallbacks) ? p.fallbacks : [];
+  if (savedFallbacks.length > 0) {
+    backupGatewayDrafts = savedFallbacks.slice(0, MAX_UI_FALLBACK_SLOTS).map((fb, idx) => ({
+      id: fb.id || `gw-${idx + 2}`,
+      label: fb.label || '',
+      baseUrl: fb.baseUrl || '',
+      apiKey: '',
+      defaultModel: fb.defaultModel || '',
+      hasSavedKey: Boolean(fb.hasKey),
+      keyHint: fb.keyHint || '',
+      clearKey: false,
+      healthy: fb.healthy !== false,
+      cooldownRemainingSec: Number(fb.cooldownRemainingSec) || 0
+    }));
+  } else if (p.fallbackBaseUrl || p.hasFallbackKey) {
+    backupGatewayDrafts = [
+      {
+        id: 'gw-2',
+        label: '',
+        baseUrl: p.fallbackBaseUrl || '',
+        apiKey: '',
+        defaultModel: p.fallbackModel || '',
+        hasSavedKey: Boolean(p.hasFallbackKey),
+        keyHint: p.fallbackKeyHint || '',
+        clearKey: false,
+        healthy: true,
+        cooldownRemainingSec: 0
+      }
+    ];
+  } else {
+    // Render Gateway #2 ready-to-fill out of the box so Gateway 1 & 2 are visible immediately and + adds 3..10!
+    backupGatewayDrafts = [makeEmptyBackupDraft()];
+  }
+
+  const activeTotal = Number(p.activeGatewayCount) || 1;
   const statusEl = $('apiConnectionStatus');
   if (statusEl) {
-    const fbNote = p.fallbackActive ? ` · 🔄 پشتیبان خودکار: ${p.fallbackBaseUrl}` : '';
+    const poolNote =
+      activeTotal > 1
+        ? ` · 🔄 ${faNum(activeTotal)} درگاه فعال (انتخاب خودکار درگاه سالم: درگاه ${faNum(p.workingGatewaySlot || 1)})`
+        : '';
     statusEl.textContent = p.customActive
-      ? `✔ سرویس اختصاصی فعال: ${p.effectiveBaseUrl}${p.hasCustomKey ? ` (کلید: ${p.keyHint})` : ' (با کلید سرور)'}${fbNote}`
-      : `در حال استفاده از API پیش‌فرض سرور: ${p.effectiveBaseUrl || 'https://tooken.club/v1'}${fbNote}`;
+      ? `✔ درگاه ۱: ${p.effectiveBaseUrl}${p.hasCustomKey ? ` (کلید: ${p.keyHint})` : ' (با کلید سرور)'}${poolNote}`
+      : `در حال استفاده از API پیش‌فرض سرور: ${p.effectiveBaseUrl || 'https://tooken.club/v1'}${poolNote}`;
   }
   const baseInput = $('providerBaseUrlInput');
   if (baseInput) baseInput.value = p.baseUrl || '';
@@ -7337,19 +7580,7 @@ function syncProviderSettingsForm() {
   const defModelInput = $('providerDefaultModelInput');
   if (defModelInput) defModelInput.value = p.defaultModel || '';
 
-  const fbUrlInput = $('providerFallbackUrlInput');
-  if (fbUrlInput) fbUrlInput.value = p.fallbackBaseUrl || '';
-  const fbKeyInput = $('providerFallbackKeyInput');
-  if (fbKeyInput) {
-    fbKeyInput.value = '';
-    fbKeyInput.placeholder = p.hasFallbackKey
-      ? `کلید پشتیبان ذخیره شده (${p.fallbackKeyHint}) — برای تغییر وارد کنید`
-      : 'کلید API سرویس پشتیبان (مثلاً Zro)';
-  }
-  const fbModelInput = $('providerFallbackModelInput');
-  if (fbModelInput) fbModelInput.value = p.fallbackModel || '';
-  const fbDetails = $('providerFallbackDetails');
-  if (fbDetails && p.fallbackActive) fbDetails.open = true;
+  renderBackupGatewaysList();
 }
 
 async function saveProviderConfig() {
@@ -7364,20 +7595,33 @@ async function saveProviderConfig() {
         .join(',')
     : '';
   const defaultModel = cleanClientCredential($('providerDefaultModelInput')?.value || '');
-  const fallbackBaseUrl = cleanClientCredential($('providerFallbackUrlInput')?.value || '');
-  const rawFbKeyField = String($('providerFallbackKeyInput')?.value || '').trim();
-  const fallbackApiKey = rawFbKeyField
-    ? rawFbKeyField
-        .split(/[\r\n,|]+/)
-        .map((k) => cleanClientCredential(k).replace(/^bearer\s+/i, '').trim())
-        .filter(Boolean)
-        .join(',')
-    : '';
-  const fallbackModel = cleanClientCredential($('providerFallbackModelInput')?.value || '');
-  const clearFallbackKey = Boolean(clearFallbackRequested || (!fallbackBaseUrl && !fallbackApiKey));
+
+  captureBackupGatewayInputsFromDom();
+  const fallbacks = backupGatewayDrafts
+    .slice(0, MAX_UI_FALLBACK_SLOTS)
+    .map((gw) => {
+      const cleanedKeys = gw.apiKey
+        ? gw.apiKey
+            .split(/[\r\n,|]+/)
+            .map((k) => cleanClientCredential(k).replace(/^bearer\s+/i, '').trim())
+            .filter(Boolean)
+            .join(',')
+        : '';
+      return {
+        id: gw.id,
+        label: gw.label || '',
+        baseUrl: gw.baseUrl || '',
+        apiKey: cleanedKeys,
+        clearKey: Boolean(gw.clearKey),
+        defaultModel: gw.defaultModel || '',
+        enabled: true
+      };
+    })
+    .filter((gw) => gw.baseUrl || gw.apiKey || (!gw.clearKey && backupGatewayDrafts.find((d) => d.id === gw.id)?.hasSavedKey));
+
   if (btn) {
     btn.disabled = true;
-    btn.textContent = 'در حال ذخیره امن کلید در D1…';
+    btn.textContent = 'در حال ذخیره امن درگاه‌ها در D1…';
   }
   try {
     // Phase 1: Fast atomic D1 save (`skipModels: true`) — immune to multi-MB `/models` 503 CPU spikes!
@@ -7387,10 +7631,7 @@ async function saveProviderConfig() {
         baseUrl,
         apiKey,
         defaultModel,
-        fallbackBaseUrl,
-        fallbackApiKey,
-        clearFallbackKey,
-        fallbackModel,
+        fallbacks,
         skipModels: true
       })
     });

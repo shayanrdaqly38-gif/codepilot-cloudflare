@@ -7,10 +7,13 @@
 
 import { fail, sleep, stripSecrets, envSecrets } from './util.js';
 import {
+  MAX_PROVIDER_GATEWAYS,
+  gatewayHealthId,
   isOpenRouterUrl,
   isTookenUrl,
   loadCachedProviderModels,
   loadDiscoveredSpecs,
+  recordGatewayOutcome,
   saveCachedProviderModels,
   saveDiscoveredSpec
 } from './provider.js';
@@ -2896,50 +2899,250 @@ function computeRateLimitWaitMs(headers, attemptIdx, env) {
   return schedule[Math.min(attemptIdx, schedule.length - 1)];
 }
 
+function extractGatewayHost(urlStr) {
+  try {
+    return new URL(String(urlStr || '')).hostname.toLowerCase();
+  } catch {
+    return String(urlStr || '').toLowerCase();
+  }
+}
+
+const FAILOVER_ELIGIBLE_CODES = new Set([
+  'model_rate_limited',
+  'model_quota_exhausted',
+  'model_upstream',
+  'model_auth',
+  'model_not_found',
+  'model_timeout',
+  'model_bad_response',
+  'model_unreachable',
+  'context_too_large',
+  'model_rejected'
+]);
+
+const FAILOVER_ELIGIBLE_STATUSES = new Set([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504]);
+
+function isFailoverEligibleError(err) {
+  if (!err) return false;
+  if (err.code === 'turn_stopped' || err.code === 'subrequest_limit') return false;
+  if (err.partialContent) return false;
+  return FAILOVER_ELIGIBLE_CODES.has(err.code) || FAILOVER_ELIGIBLE_STATUSES.has(Number(err.status));
+}
+
+function buildOrderedGatewayChain(env) {
+  let rawChain = [];
+  if (Array.isArray(env?._gatewayChain) && env._gatewayChain.length > 0) {
+    rawChain = env._gatewayChain.filter((g) => g && g.baseUrl && g.apiKey).slice(0, MAX_PROVIDER_GATEWAYS);
+  } else {
+    const primaryUrl = modelEndpoint(env).replace(/\/chat\/completions$/, '');
+    const primaryKey = String(env?.MODEL_API_KEY || '').trim();
+    if (primaryUrl && primaryKey) {
+      rawChain.push({
+        id: 'gw-1',
+        slot: 1,
+        label: 'درگاه ۱',
+        baseUrl: primaryUrl,
+        apiKey: primaryKey,
+        apiKeyPool: Array.isArray(env?._apiKeyPool) && env._apiKeyPool.length > 1 ? env._apiKeyPool : [primaryKey],
+        defaultModel: String(env?.MODEL_NAME || '')
+      });
+    }
+    const fb = env?._fallbackProvider;
+    if (fb && fb.baseUrl && fb.apiKey) {
+      rawChain.push({
+        id: fb.id || 'gw-2',
+        slot: fb.slot || 2,
+        label: fb.label || 'درگاه ۲',
+        baseUrl: String(fb.baseUrl),
+        apiKey: String(fb.apiKey),
+        apiKeyPool: Array.isArray(fb.apiKeyPool) && fb.apiKeyPool.length > 1 ? fb.apiKeyPool : [String(fb.apiKey)],
+        defaultModel: String(fb.defaultModel || '')
+      });
+    }
+  }
+
+  if (rawChain.length <= 1) {
+    return { rawChain, ordered: rawChain };
+  }
+
+  const now = Date.now();
+  const healthMap = env?._gatewayHealth && typeof env._gatewayHealth === 'object' ? env._gatewayHealth : {};
+  const stickyId = env?._stickyGatewayId ? String(env._stickyGatewayId) : '';
+
+  const stickyList = [];
+  const healthyList = [];
+  const cooledList = [];
+
+  for (const gw of rawChain) {
+    const hKey = gatewayHealthId(gw.slot || 1, gw.baseUrl, gw.id);
+    const hEntry = healthMap[hKey] || null;
+    const cooldownUntil = Number(hEntry?.cooldownUntil) || 0;
+    const onCooldown = cooldownUntil > now;
+    if (!onCooldown && stickyId && gw.id === stickyId) {
+      stickyList.push(gw);
+    } else if (!onCooldown) {
+      healthyList.push(gw);
+    } else {
+      cooledList.push({ gw, cooldownUntil });
+    }
+  }
+
+  // Sort cooled-down gateways by soonest expiry so if EVERY healthy gateway fails,
+  // we still try the most-likely-recovered gateway as a final rescue!
+  cooledList.sort((a, b) => a.cooldownUntil - b.cooldownUntil);
+
+  const ordered = [
+    ...stickyList,
+    ...healthyList,
+    ...cooledList.map((entry) => entry.gw)
+  ];
+
+  return { rawChain, ordered };
+}
+
 /**
  * POST a Chat Completions request using the model's genuine `reasoning_effort`,
  * with automatic runtime self-learning if a new/external model reports different
- * allowed `reasoning_effort` values, and upstream SSE streaming in production so
- * large edits never hit non-streaming proxy timeouts.
+ * allowed `reasoning_effort` values, upstream SSE streaming in production so
+ * large edits never hit non-streaming proxy timeouts, AND smart 10-gateway
+ * automatic failover + health-aware gateway selection.
  */
 export async function callModel(env, payload) {
-  try {
-    return await callModelOnProvider(env, payload);
-  } catch (err) {
-    const fb = env?._fallbackProvider;
-    const failoverCodes = new Set(['model_rate_limited', 'model_quota_exhausted', 'model_upstream', 'model_auth']);
-    const failoverStatuses = new Set([402, 429, 502, 503, 504]);
-    if (
-      fb &&
-      fb.baseUrl &&
-      fb.apiKey &&
-      !env?._isFallbackAttempt &&
-      err?.code !== 'turn_stopped' &&
-      err?.code !== 'subrequest_limit' &&
-      (failoverCodes.has(err?.code) || failoverStatuses.has(err?.status))
-    ) {
-      const fbDiscovered = await loadDiscoveredSpecs(env, fb.baseUrl).catch(() => ({}));
-      const fallbackEnv = {
-        ...env,
-        MODEL_BASE_URL: fb.baseUrl,
-        MODEL_API_KEY: fb.apiKey,
-        MODEL_NAME: fb.defaultModel || '',
-        MODEL_FALLBACK: 'off',
-        _apiKeyPool: Array.isArray(fb.apiKeyPool) && fb.apiKeyPool.length > 1 ? fb.apiKeyPool : null,
-        _fallbackProvider: null,
-        _isFallbackAttempt: true,
-        _discoveredSpecs: fbDiscovered
-      };
-      try {
-        payload?.onDelta?.({ type: 'provider_failover', toBaseUrl: fb.baseUrl });
-      } catch { /* ignore */ }
-      return await callModelOnProvider(fallbackEnv, {
-        ...payload,
-        model: fb.defaultModel || ''
-      });
+  const { rawChain, ordered } = buildOrderedGatewayChain(env);
+
+  // Single-gateway fast path (100% zero-overhead backward compatibility)
+  if (ordered.length <= 1) {
+    const singleGw = ordered[0] || null;
+    try {
+      const res = await callModelOnProvider(env, payload);
+      if (singleGw && env?._owner) {
+        await recordGatewayOutcome(env, env._owner, singleGw, { ok: true });
+      }
+      if (singleGw && env && typeof env === 'object') {
+        env._activeGateway = { id: singleGw.id, slot: singleGw.slot, label: singleGw.label || '', baseUrl: singleGw.baseUrl };
+      }
+      return res;
+    } catch (err) {
+      if (singleGw && env?._owner && isFailoverEligibleError(err)) {
+        await recordGatewayOutcome(env, env._owner, singleGw, {
+          ok: false,
+          status: err?.status,
+          code: err?.code,
+          isDailyQuota: Boolean(err?.isDailyQuota)
+        });
+      }
+      throw err;
     }
-    throw err;
   }
+
+  // Multi-Gateway Smart Selection & Failover (درگاه ۱ تا ۱۰)
+  const primaryHost = extractGatewayHost(rawChain[0]?.baseUrl || env?.MODEL_BASE_URL);
+  let lastErr = null;
+
+  // If Gateway #1 was already on quota/rate-limit cooldown and we jumped straight to a healthy working gateway:
+  if (ordered[0].slot > 1 && !env?._notifiedAutoHealthySwitch) {
+    if (env && typeof env === 'object') env._notifiedAutoHealthySwitch = true;
+    try {
+      payload?.onDelta?.({
+        type: 'provider_failover',
+        fromBaseUrl: rawChain[0]?.baseUrl || '',
+        fromSlot: 1,
+        toBaseUrl: ordered[0].baseUrl,
+        slot: ordered[0].slot,
+        label: ordered[0].label || '',
+        totalGateways: rawChain.length,
+        reason: 'cooldown_skip'
+      });
+    } catch { /* ignore */ }
+  }
+
+  for (let gIdx = 0; gIdx < ordered.length; gIdx += 1) {
+    const gw = ordered[gIdx];
+    const hasNextGateway = gIdx + 1 < ordered.length;
+    const gwDiscovered =
+      gw.slot === 1 && env?._discoveredSpecs
+        ? env._discoveredSpecs
+        : await loadDiscoveredSpecs(env, gw.baseUrl).catch(() => ({}));
+    const isTooken = isTookenUrl(gw.baseUrl);
+    const gwEnv = {
+      ...env,
+      MODEL_BASE_URL: gw.baseUrl,
+      MODEL_API_KEY: gw.apiKey,
+      MODEL_NAME: gw.defaultModel || '',
+      MODEL_FALLBACK: gw.slot === 1 && isTooken ? env.MODEL_FALLBACK : 'off',
+      _apiKeyPool: Array.isArray(gw.apiKeyPool) && gw.apiKeyPool.length > 1 ? gw.apiKeyPool : null,
+      _fallbackProvider: null,
+      _hasNextGateway: hasNextGateway,
+      _isFallbackAttempt: gw.slot > 1,
+      _discoveredSpecs: gwDiscovered
+    };
+
+    let gwModel;
+    if (gw.slot === 1) {
+      gwModel = payload?.model;
+    } else if (gw.defaultModel) {
+      gwModel = gw.defaultModel;
+    } else if (extractGatewayHost(gw.baseUrl) === primaryHost) {
+      gwModel = payload?.model;
+    } else {
+      gwModel = '';
+    }
+
+    try {
+      const out = await callModelOnProvider(gwEnv, {
+        ...payload,
+        model: gwModel
+      });
+      if (env?._owner) {
+        await recordGatewayOutcome(env, env._owner, gw, { ok: true });
+      }
+      if (env && typeof env === 'object') {
+        env._stickyGatewayId = gw.id;
+        env._activeGateway = {
+          id: gw.id,
+          slot: gw.slot,
+          label: gw.label || `درگاه ${gw.slot}`,
+          baseUrl: gw.baseUrl
+        };
+      }
+      return out;
+    } catch (err) {
+      lastErr = err;
+      if (err?.code === 'turn_stopped' || err?.code === 'subrequest_limit' || err?.partialContent) {
+        throw err;
+      }
+      if (env && typeof env === 'object' && env._stickyGatewayId === gw.id) {
+        env._stickyGatewayId = '';
+      }
+      if (env?._owner && isFailoverEligibleError(err)) {
+        await recordGatewayOutcome(env, env._owner, gw, {
+          ok: false,
+          status: err?.status,
+          code: err?.code,
+          isDailyQuota: Boolean(err?.isDailyQuota)
+        });
+      }
+      if (hasNextGateway && isFailoverEligibleError(err)) {
+        const nextGw = ordered[gIdx + 1];
+        try {
+          payload?.onDelta?.({
+            type: 'provider_failover',
+            fromBaseUrl: gw.baseUrl,
+            fromSlot: gw.slot,
+            toBaseUrl: nextGw.baseUrl,
+            slot: nextGw.slot,
+            label: nextGw.label || '',
+            totalGateways: rawChain.length,
+            reason: err?.code || String(err?.status || 'failover')
+          });
+        } catch { /* ignore */ }
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastErr || new Error('هیچ‌کدام از درگاه‌های تعریف‌شده پاسخگو نبودند.');
 }
 
 async function callModelOnProvider(env, payload) {
@@ -3103,7 +3306,7 @@ async function callModelOnProvider(env, payload) {
             'subrequest_limit'
           );
         }
-        if (netRetries === 0 && cIndex === 0) {
+        if (netRetries === 0 && cIndex === 0 && !env?._hasNextGateway) {
           netRetries += 1;
           await sleep(400);
           continue;
@@ -3396,8 +3599,8 @@ async function callModelOnProvider(env, payload) {
         );
 
       // Smart multi-step 429 Rate-Limit backoff during live `/api/chat` streaming (`onDelta` active):
-      // Skip pointless sleep retries when `isDailyQuota429` is true (50 req/day exhausted until tomorrow; fail over immediately if backup gateway exists!).
-      if (status === 429 && !isDailyQuota429 && typeof payload.onDelta === 'function' && rateLimitRetries < 3 && cIndex === 0) {
+      // Skip backoff sleeps when `isDailyQuota429` OR when another backup gateway (`env._hasNextGateway`) is ready to take over immediately!
+      if (status === 429 && !isDailyQuota429 && !env?._hasNextGateway && typeof payload.onDelta === 'function' && rateLimitRetries < 3 && cIndex === 0) {
         const waitMs = computeRateLimitWaitMs(response.headers, rateLimitRetries, env);
         rateLimitRetries += 1;
         try {
@@ -3409,6 +3612,7 @@ async function callModelOnProvider(env, payload) {
 
       if (
         !isDailyQuota429 &&
+        !env?._hasNextGateway &&
         (status === 408 || status === 429 || status === 499 || status === 500 || status === 502 || status === 503 || status === 504) &&
         statusRetries === 0 &&
         rateLimitRetries === 0 &&
@@ -3419,7 +3623,18 @@ async function callModelOnProvider(env, payload) {
         continue;
       }
 
-      if ((status === 404 || (status === 429 && !isDailyQuota429) || status >= 500) && cIndex + 1 < candidates.length) {
+      // If a backup gateway rejected a user-selected model ID as unknown/unavailable, fall back to that gateway's own defaultModel:
+      if (
+        (status === 404 || (status === 400 && /model.*(?:not[_\s-]*found|does not exist|invalid|unavailable|unknown)/i.test(errText))) &&
+        defaultModel &&
+        defaultModel !== model &&
+        !candidates.includes(defaultModel)
+      ) {
+        candidates.push(defaultModel);
+        break;
+      }
+
+      if ((status === 404 || (status === 429 && !isDailyQuota429 && !env?._hasNextGateway) || status >= 500) && cIndex + 1 < candidates.length) {
         break;
       }
 
@@ -3447,13 +3662,15 @@ async function callModelOnProvider(env, payload) {
         fail('حجم پیام ارسالی بیش از سقف مدل است؛ از دستور /compact یا گفتگوی جدید استفاده کنید.', 413, 'context_too_large');
       }
       if (status === 429) {
-        fail(
+        const rateErr = new Error(
           isDailyQuota429
-            ? 'سقف ۵۰ درخواست روزانه این کلید در OpenRouter پر شده است. از بخش ⌁ API درگاه پشتیبان خودکار (مثل Zro) یا چند کلید چرخشی اضافه کنید.'
-            : 'سهمیه‌ی لحظه‌ای سرویس مدل پر شده است. چند ثانیه صبر کنید.',
-          429,
-          'model_rate_limited'
+            ? 'سقف ۵۰ درخواست روزانه این کلید در OpenRouter پر شده است. از بخش ⌁ API درگاه‌های پشتیبان (تا ۱۰ درگاه) یا چند کلید چرخشی اضافه کنید.'
+            : 'سهمیه‌ی لحظه‌ای سرویس مدل پر شده است. چند ثانیه صبر کنید.'
         );
+        rateErr.status = 429;
+        rateErr.code = 'model_rate_limited';
+        rateErr.isDailyQuota = isDailyQuota429;
+        throw rateErr;
       }
       if (status >= 400 && status < 500) {
         fail(
