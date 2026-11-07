@@ -2781,13 +2781,15 @@ export function compactMessagesForRetry(messages, level = 1) {
 
   if (level === 1) {
     // Level 1: Keep last 2 atomic units untouched; slim all earlier tool_calls/tool outputs/long prose,
-    // and cap total middle units to ~90k chars.
+    // and cap total middle units tightly so even pre-slimmed histories shrink deterministically on retry.
     const tailKeep = Math.min(2, units.length);
-    const headUnits = units.slice(0, units.length - tailKeep).map((u) =>
-      u.map((m) => slimSingleMessage(m, { argCap: 600, toolOutCap: 1200, proseCap: 4000, stripBinary: true }))
+    const rawHeadUnits = units.slice(0, units.length - tailKeep);
+    const cappedHeadSlice = rawHeadUnits.length > 4 ? rawHeadUnits.slice(-4) : rawHeadUnits;
+    const headUnits = cappedHeadSlice.map((u) =>
+      u.map((m) => slimSingleMessage(m, { argCap: 160, toolOutCap: 220, proseCap: 1400, stripBinary: true }))
     );
     const tailUnits = units.slice(units.length - tailKeep).map((u, idx, arr) =>
-      idx === arr.length - 1 ? u : u.map((m) => slimSingleMessage(m, { argCap: 1800, toolOutCap: 3500, proseCap: 12_000 }))
+      idx === arr.length - 1 ? u : u.map((m) => slimSingleMessage(m, { argCap: 900, toolOutCap: 1800, proseCap: 8_000 }))
     );
     let budget = 85_000;
     const keptHead = [];
