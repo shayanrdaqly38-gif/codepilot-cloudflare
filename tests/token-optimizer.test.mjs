@@ -4,17 +4,20 @@ import assert from 'node:assert/strict';
 import {
   VALID_TOKEN_SAVER_MODES,
   isCacheDiscountedEndpoint,
+  isRpdLimitedTurn,
+  buildRequestSaverWorkspacePack,
   buildSmartFileRead,
   buildPatchFailureContext,
   pruneInTurnWireMessages,
   resolveAdaptiveStepEffort,
   applyPromptCacheBreakpoints
 } from '../functions/_lib/token-optimizer.js';
-import { normalizeAgentConfig } from '../functions/_lib/provider.js';
+import { normalizeAgentConfig, saveUserProviderConfig, resolveEffectiveEnv } from '../functions/_lib/provider.js';
 import { buildWorkingContext, buildSystemPrompt } from '../functions/_lib/memory.js';
-import { callModel } from '../functions/_lib/model.js';
+import { callModel, parseProviderModelItem } from '../functions/_lib/model.js';
 import { accessToken, fakeJwks, makeEnv, req, ctx, rsaKeys } from './harness.mjs';
 import * as authApi from '../functions/api/auth.js';
+import * as configApi from '../functions/api/config.js';
 import * as stateApi from '../functions/api/state/index.js';
 import * as chatApi from '../functions/api/chat.js';
 
@@ -47,10 +50,11 @@ function generateSyntheticSourceFile(lineCount = 700) {
 }
 
 test('normalizeAgentConfig & isCacheDiscountedEndpoint classify openrouter.ai vs zro.moonmath.ai & tooken.club', () => {
-  assert.deepEqual(VALID_TOKEN_SAVER_MODES, ['off', 'balanced', 'max']);
+  assert.deepEqual(VALID_TOKEN_SAVER_MODES, ['off', 'balanced', 'max', 'rpd']);
   assert.equal(normalizeAgentConfig({}).tokenSaver, 'max');
   assert.equal(normalizeAgentConfig({ tokenSaver: 'invalid' }).tokenSaver, 'max');
   assert.equal(normalizeAgentConfig({ tokenSaver: 'balanced' }).tokenSaver, 'balanced');
+  assert.equal(normalizeAgentConfig({ tokenSaver: 'rpd' }).tokenSaver, 'rpd');
   assert.equal(normalizeAgentConfig({ tokenSaver: 'off' }).tokenSaver, 'off');
 
   assert.equal(isCacheDiscountedEndpoint('https://openrouter.ai/api/v1'), true);
@@ -477,6 +481,206 @@ test('End-to-end /api/chat Hyper-Eco v3 on OpenRouter + zro.moonmath.ai: prefix 
     assert.equal(doneEvt.data.turnTokens.totalTokens, 4730);
     assert.equal(doneEvt.data.turnTokens.cachedTokens, 3550);
     assert.ok(doneEvt.data.turnTokens.effectiveBilledTokens < 1800);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenRouter 50-Req/Day Suite: 0-probe metadata, 1-shot fast-finish edit, multi-key pool rotation, and seamless failover to zro.moonmath.ai', async () => {
+  fakeJwks(sharedKeys);
+  const env = makeEnv(sharedKeys);
+  const origFetch = globalThis.fetch;
+
+  // 1. OpenRouter models with `supported_parameters` or `:free` NEVER set `needsDiscovery: true` (0 wasted background requests!)
+  const orFree = parseProviderModelItem(
+    { id: 'deepseek/deepseek-r1:free', supported_parameters: ['tools', 'reasoning'] },
+    { isTooken: false }
+  );
+  assert.equal(orFree.reasoning.needsDiscovery, false);
+  assert.equal(isRpdLimitedTurn({ tokenSaver: 'max', baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-coder:free' }), true);
+  assert.equal(isRpdLimitedTurn({ tokenSaver: 'rpd', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto' }), true);
+
+  const pack = buildRequestSaverWorkspacePack(
+    { 'index.html': '<h1>Old</h1>\n', 'app.js': 'console.log(1);\n' },
+    'index.html',
+    'تگ h1 را در index.html تغییر بده'
+  );
+  assert.ok(pack.preloadedPaths.includes('index.html'));
+  assert.match(pack.injectedText, /50-REQ\/DAY ULTRA-BATCH MODE/);
+
+  try {
+    const authRes = await authApi.onRequestGet(
+      ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(sharedKeys) } }), env)
+    );
+    const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
+
+    // Configure Primary = OpenRouter (2 rotating keys!) + Backup Auto-Failover = Zro (`https://zro.moonmath.ai/v1`) via real `/api/config`
+    const cfgRes = await (
+      await configApi.onRequestPost(
+        ctx(
+          req('/api/config', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: {
+              baseUrl: 'https://openrouter.ai/api/v1',
+              apiKey: 'sk-or-v1-keyA11111111, sk-or-v1-keyB22222222',
+              defaultModel: 'qwen/qwen3-coder:free',
+              fallbackBaseUrl: 'https://zro.moonmath.ai/v1',
+              fallbackApiKey: 'zro_backup_key_99999999',
+              fallbackModel: 'deepseek-v4.1-flash',
+              skipModels: true
+            }
+          }),
+          env
+        )
+      )
+    ).json();
+    const summary = cfgRes.provider;
+    assert.equal(summary.keyCount, 2);
+    assert.equal(summary.fallbackActive, true);
+    assert.equal(summary.fallbackBaseUrl, 'https://zro.moonmath.ai/v1');
+
+    const created = await (
+      await stateApi.onRequestPost(
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create', title: '50 RPD' }, headers: { Cookie: cookie } }), env)
+      )
+    ).json();
+
+    await stateApi.onRequestPost(
+      ctx(
+        req('/api/state', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            action: 'workspace',
+            id: created.id,
+            workspace: {
+              files: { 'index.html': '<!doctype html><html><body><h1>سلام</h1></body></html>' },
+              active: 'index.html'
+            }
+          }
+        }),
+        env
+      )
+    );
+
+    const jwksFetch = globalThis.fetch;
+    const seenCalls = [];
+    let scenario = 'one_shot_key_rotate';
+
+    globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      if (u.includes('/cdn-cgi/access/certs')) return jwksFetch(url, init);
+      const authHeader = init?.headers?.Authorization || '';
+      const bodyObj = init?.body ? JSON.parse(init.body) : {};
+      seenCalls.push({ url: u, auth: authHeader, model: bodyObj.model, toolsCount: bodyObj.tools?.length || 0 });
+
+      if (scenario === 'one_shot_key_rotate') {
+        // Key A exhausted its 50/day cap -> instant rotation to Key B!
+        if (authHeader === 'Bearer sk-or-v1-keyA11111111') {
+          return new Response(
+            JSON.stringify({ error: { message: 'Rate limit exceeded: free-models-per-day.' } }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        assert.equal(authHeader, 'Bearer sk-or-v1-keyB22222222');
+        // Verify `think` tool was stripped & `index.html` was preloaded in Request #1!
+        assert.equal(bodyObj.tools.some((t) => t.function.name === 'think'), false);
+        assert.match(JSON.stringify(bodyObj.messages), /Preloaded: index\.html/);
+
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'عنوان صفحه به خوش آمدید تغییر یافت.',
+                  tool_calls: [
+                    {
+                      id: 'tc_patch_h1',
+                      type: 'function',
+                      function: {
+                        name: 'apply_patch',
+                        arguments: JSON.stringify({
+                          path: 'index.html',
+                          edits: [{ search: '<h1>سلام</h1>', replace: '<h1>خوش آمدید</h1>' }]
+                        })
+                      }
+                    }
+                  ]
+                },
+                finish_reason: 'tool_calls'
+              }
+            ],
+            usage: { prompt_tokens: 450, completion_tokens: 60, total_tokens: 510 }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Scenario 2: BOTH OpenRouter keys exhausted 50/day -> Seamless auto-failover to Zro (`zro.moonmath.ai/v1`)!
+      if (u.includes('openrouter.ai')) {
+        return new Response(
+          JSON.stringify({ error: { message: 'Rate limit exceeded: free-models-per-day.' } }),
+          { status: 429, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      assert.equal(u, 'https://zro.moonmath.ai/v1/chat/completions');
+      assert.equal(authHeader, 'Bearer zro_backup_key_99999999');
+      assert.equal(bodyObj.model, 'deepseek-v4.1-flash');
+      const sse = [
+        'data: ' + JSON.stringify({ model: 'deepseek-v4.1-flash', choices: [{ delta: { content: 'پاسخ بدون وقفه از درگاه پشتیبان Zro!' }, finish_reason: 'stop' }], usage: { prompt_tokens: 200, completion_tokens: 25, total_tokens: 225 } }),
+        'data: [DONE]',
+        ''
+      ].join('\n\n');
+      return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+
+    // Run Scenario 1: Key A 429 -> instant Key B rotation + 1-Shot Fast-Finish (NO 2nd post-edit request!)
+    const res1 = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            conversationId: created.id,
+            message: 'متن h1 را به خوش آمدید تغییر بده',
+            model: 'qwen/qwen3-coder:free'
+          }
+        }),
+        env
+      )
+    );
+    const evts1 = await parseSse(res1);
+    const done1 = evts1.find((e) => e.event === 'done');
+    assert.ok(done1);
+    assert.equal(done1.data.turnTokens.requestsUsed, 1, 'Must complete entire file patch in 1 single step (no 2nd post-edit request)!');
+    assert.equal(seenCalls.filter((c) => c.auth.includes('keyB')).length, 1, 'Key B called only ONCE total!');
+
+    // Run Scenario 2: Both OpenRouter keys 429 -> Seamless auto-failover to Zro!
+    seenCalls.length = 0;
+    scenario = 'failover_to_zro';
+    const res2 = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: {
+            conversationId: created.id,
+            message: 'وضیعت پروژه چطور است؟',
+            model: 'qwen/qwen3-coder:free'
+          }
+        }),
+        env
+      )
+    );
+    const evts2 = await parseSse(res2);
+    const failoverStatus = evts2.find((e) => e.event === 'status' && e.data.phase === 'provider_failover');
+    const done2 = evts2.find((e) => e.event === 'done');
+    assert.ok(failoverStatus, 'Must emit provider_failover status event');
+    assert.equal(failoverStatus.data.toBaseUrl, 'https://zro.moonmath.ai/v1');
+    assert.ok(done2);
+    assert.match(done2.data.content, /درگاه پشتیبان Zro/);
   } finally {
     globalThis.fetch = origFetch;
   }

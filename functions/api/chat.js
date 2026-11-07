@@ -80,9 +80,11 @@ import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
 import { generateAndStoreImage } from '../_lib/image.js';
 import {
   buildPatchFailureContext,
+  buildRequestSaverWorkspacePack,
   buildSmartFileRead,
   extractMentionedFileContext,
   isCacheDiscountedEndpoint,
+  isRpdLimitedTurn,
   pruneInTurnWireMessages,
   resolveAdaptiveStepEffort,
   VALID_TOKEN_SAVER_MODES
@@ -851,11 +853,21 @@ export async function onRequestPost(context) {
         effectiveEnv.CONTEXT_BUDGET_TOKENS = String(cappedPowerContextBudget);
       }
 
+      const rpdSaverActive = isRpdLimitedTurn({
+        tokenSaver: agentConfig.tokenSaver || 'max',
+        baseUrl: effectiveEnv.MODEL_BASE_URL,
+        model: effectiveModelId
+      });
+      effectiveEnv._rpdSaverActive = rpdSaverActive;
+
       const MUTATING_TOOL_NAMES = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
       const NET_TOOL_NAMES = new Set(['web_search', 'fetch_url']);
       const baseTools = data.tools === undefined ? TOOLS : sanitizeTools(data.tools);
       const tools = baseTools.filter((t) => {
         const fnName = t?.function?.name;
+        if (rpdSaverActive && fnName === 'think') {
+          return false;
+        }
         if ((agentConfig.mode === 'plan' || agentConfig.mode === 'suggest') && MUTATING_TOOL_NAMES.has(fnName)) {
           return false;
         }
@@ -1120,19 +1132,35 @@ export async function onRequestPost(context) {
           messages.push(...working.recent);
           await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
 
-          // Zero-roundtrip `@filepath` / `@filepath:start-end` pre-pinning on fresh user turns:
+          // Zero-roundtrip `@filepath` / `@filepath:start-end` pre-pinning + 50-RPD 1-Shot Workspace Preloading on fresh user turns:
           if (!resumingFromCheckpoint && tokenSaver !== 'off') {
             const pinned = extractMentionedFileContext(userText, workspace.files, { tokenSaver });
-            if (pinned.block) {
+            let extraTurnContext = pinned.block || '';
+            if (pinned.savedRoundtripChars > 0) {
               turn.savedChars += pinned.savedRoundtripChars;
+            }
+            if (rpdSaverActive) {
+              const rpdPack = buildRequestSaverWorkspacePack(workspace.files, workspace.active, userText, {
+                excludePaths: pinned.pinnedPaths || []
+              });
+              if (rpdPack.injectedText) {
+                extraTurnContext = extraTurnContext
+                  ? `${extraTurnContext}\n\n${rpdPack.injectedText}`
+                  : `\n\n${rpdPack.injectedText}`;
+                if (rpdPack.preloadedPaths.length) {
+                  turn.savedRequests = (turn.savedRequests || 0) + 1;
+                }
+              }
+            }
+            if (extraTurnContext) {
               for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
                 if (messages[mi]?.role === 'user') {
                   if (typeof messages[mi].content === 'string') {
-                    messages[mi] = { ...messages[mi], content: `${messages[mi].content}${pinned.block}` };
+                    messages[mi] = { ...messages[mi], content: `${messages[mi].content}${extraTurnContext}` };
                   } else if (Array.isArray(messages[mi].content)) {
                     messages[mi] = {
                       ...messages[mi],
-                      content: [...messages[mi].content, { type: 'text', text: pinned.block }]
+                      content: [...messages[mi].content, { type: 'text', text: extraTurnContext }]
                     };
                   }
                   break;
@@ -1256,6 +1284,15 @@ export async function onRequestPost(context) {
                 messages,
                 tools,
                 onDelta: (chunk) => {
+                  if (chunk?.type === 'provider_failover') {
+                    send('status', {
+                      phase: 'provider_failover',
+                      toBaseUrl: chunk.toBaseUrl || '',
+                      step: priorCompletedSteps + steps,
+                      maxSteps
+                    });
+                    return;
+                  }
                   if (chunk?.type === 'rate_limit_wait') {
                     send('status', {
                       phase: 'rate_limit_wait',
@@ -1575,6 +1612,44 @@ export async function onRequestPost(context) {
                 onlyListing: !stepHadError && stepOnlyListing,
                 justVerifiedClean: !stepHadError && !hasAnyValidationError && stepDidMutateOrTest
               };
+
+              // 50-Req/Day 1-Shot Fast-Finish: when RPD Request-Saver is active and all tool calls in this step
+              // were clean file mutations (`Validation: OK.`, zero errors, no pending read/search/shell calls),
+              // finish immediately without burning a 2nd upstream API request just to say "Done!"
+              const stepOnlyMutatingEdits =
+                assistant.tool_calls.length > 0 &&
+                assistant.tool_calls.every((c) => MUTATING_LIVE_SET.has(c?.function?.name));
+              if (
+                rpdSaverActive &&
+                stepOnlyMutatingEdits &&
+                stepMutatedWorkspace &&
+                !stepHadError &&
+                !hasAnyValidationError &&
+                !agentConfig?.marathon?.active
+              ) {
+                healedTextCarry = '';
+                const existingProse = combinedToolProse.trim();
+                if (existingProse) {
+                  finalText = existingProse;
+                } else {
+                  const summaryLines = [...turn.touched]
+                    .filter((p) => !p.startsWith('('))
+                    .map((p) => (turn.deleted.has(p) ? `• حذف \`${p}\`` : `• بروزرسانی و اعتبارسنجی \`${p}\``));
+                  const autoSummary = `✔ تغییرات در ۱ درخواست اعمال شد (صرفه‌جویی در سقف ۵۰ درخواست روزانه):\n${summaryLines.join('\n')}`;
+                  send('delta', { text: autoSummary, step: priorCompletedSteps + steps });
+                  finalText = autoSummary;
+                }
+                stepStreamedContent = '';
+                turn.savedRequests = (turn.savedRequests || 0) + 1;
+                newMessages.push({
+                  role: 'assistant',
+                  content: finalText,
+                  created_at: Date.now()
+                });
+                messages.push({ role: 'assistant', content: finalText });
+                send('assistant', { content: finalText, interrupted: false });
+                break;
+              }
               continue;
             }
 
@@ -1762,6 +1837,9 @@ export async function onRequestPost(context) {
               cachedTokens: totalCachedTokens,
               effectiveBilledTokens,
               savedTokensEstimate,
+              requestsUsed: steps,
+              savedRequests: turn.savedRequests || 0,
+              rpdSaverActive,
               totalTokens: totalUsedTokens
             },
             ...(latestRateLimit ? { rateLimit: latestRateLimit } : {}),

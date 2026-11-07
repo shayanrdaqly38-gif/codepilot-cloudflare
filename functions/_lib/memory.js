@@ -668,7 +668,8 @@ export async function buildWorkingContext({
         }
       }
 
-      if (!summarizedOk) {
+      const skipPaidSummaryCall = Boolean(env?._rpdSaverActive || cfgSaver === 'rpd');
+      if (!summarizedOk && !skipPaidSummaryCall) {
         try {
           const result = await callModel({
             temperature: 0.1,
