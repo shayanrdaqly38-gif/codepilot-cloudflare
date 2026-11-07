@@ -863,6 +863,45 @@ assert.equal(
 await window.resetProviderConfig();
 window.closeModal('settingsModal');
 
+// Free vs Paid Model Picker Badges (`#modelPricingFilterBar` + `setModelPricingFilter`) & Server-Verified Real Model Pill
+window.eval(`
+  state.provider.effectiveBaseUrl = 'https://openrouter.ai/api/v1';
+  state.availableModels = [
+    { id: 'qwen/qwen3-coder:free', title: 'Qwen3 Coder (free)', pricingTier: 'free' },
+    { id: 'anthropic/claude-opus-4', title: 'Claude Opus 4', pricingTier: 'paid' }
+  ];
+  if (state.conversation) state.conversation.model = 'qwen/qwen3-coder:free';
+  state.defaultModel = 'qwen/qwen3-coder:free';
+`);
+window.openModelModal();
+assert.ok($('modelPricingFilterBar'), '#modelPricingFilterBar exists in #modelModal');
+assert.ok($('featuredModelList').innerHTML.includes('🆓 رایگان'), 'Free model displays 🆓 رایگان badge');
+assert.ok($('featuredModelList').innerHTML.includes('💳 پولی'), 'Paid model displays 💳 پولی badge');
+window.setModelPricingFilter('free');
+assert.equal($('featuredModelList').querySelectorAll('.sheet-item[data-model-id]').length, 1, 'Free filter shows only free models');
+assert.equal($('featuredModelList').querySelector('.sheet-item[data-model-id]').dataset.modelId, 'qwen/qwen3-coder:free');
+window.setModelPricingFilter('paid');
+assert.equal($('featuredModelList').querySelectorAll('.sheet-item[data-model-id]').length, 1, 'Paid filter shows only paid models');
+assert.equal($('featuredModelList').querySelector('.sheet-item[data-model-id]').dataset.modelId, 'anthropic/claude-opus-4');
+window.setModelPricingFilter('all');
+window.closeModal('modelModal');
+
+const matchedBadge = window.renderVerifiedModelBadgeHtml({
+  actualModel: 'qwen/qwen3-coder:free',
+  requestedModel: 'qwen/qwen3-coder:free',
+  gateway: { slot: 1, baseUrl: 'https://openrouter.ai/api/v1' }
+});
+assert.ok(matchedBadge.includes('🤖 مدل واقعی سرور:'), 'Matched model renders verified server badge');
+assert.ok(matchedBadge.includes('qwen/qwen3-coder:free'));
+
+const mismatchBadge = window.renderVerifiedModelBadgeHtml({
+  actualModel: 'qwen/qwen3-coder:free',
+  requestedModel: 'claude-opus-5-5',
+  gateway: { slot: 1, baseUrl: 'https://openrouter.ai/api/v1' }
+});
+assert.ok(mismatchBadge.includes('mismatch'), 'Mismatched model renders amber mismatch alert class');
+assert.ok(mismatchBadge.includes('⚠️ مدل واقعی اجراشده در سرور:'), 'Warns user clearly when server ran a different model than selected');
+
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
 process.exit(0);

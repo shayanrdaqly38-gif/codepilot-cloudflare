@@ -18,6 +18,7 @@ import { callModel, parseProviderModelItem } from '../functions/_lib/model.js';
 import { accessToken, fakeJwks, makeEnv, req, ctx, rsaKeys } from './harness.mjs';
 import * as authApi from '../functions/api/auth.js';
 import * as configApi from '../functions/api/config.js';
+import * as modelsApi from '../functions/api/models.js';
 import * as stateApi from '../functions/api/state/index.js';
 import * as chatApi from '../functions/api/chat.js';
 
@@ -881,4 +882,259 @@ test('10-Gateway Smart Pool (درگاه ۱ تا ۱۰): saves up to 10 encrypted 
     globalThis.fetch = origFetch;
   }
 });
+
+test('True Runtime Model Identity + Honest Verified actualModel + Paid/Unavailable Guard (Zero Pointless Gateway Switch)', async () => {
+  const origFetch = globalThis.fetch;
+  fakeJwks(sharedKeys);
+  const jwksFetch = globalThis.fetch;
+  const env = makeEnv(sharedKeys);
+
+  const authRes = await authApi.onRequestGet(
+    ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(sharedKeys) } }), env)
+  );
+  const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
+
+  // Configure Gateway 1 (OpenRouter Free Account) + Gateway 2 (Zro Backup)
+  const cfgRes = await configApi.onRequestPost(
+    ctx(
+      req('/api/config', {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'sk-or-free-account-11112222',
+          defaultModel: 'qwen/qwen3-coder:free',
+          fallbacks: [
+            {
+              label: 'Zro Backup',
+              baseUrl: 'https://zro.moonmath.ai/v1',
+              apiKey: 'zro_backup_key_99990000',
+              defaultModel: 'deepseek-v4.1-flash'
+            }
+          ],
+          skipModels: true
+        }
+      }),
+      env
+    )
+  );
+  assert.equal(cfgRes.status, 200);
+
+  const created = await (
+    await stateApi.onRequestPost(
+      ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+    )
+  ).json();
+
+  const upstreamCalls = [];
+  let proxyFakeFreeSubstitution = false;
+  let simulateOpenRouter429 = false;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes('cdn-cgi/access/certs')) return jwksFetch(url, init);
+
+    if (u.includes('openrouter.ai/api/v1/models')) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)', pricing: { prompt: '0', completion: '0' } },
+            { id: 'anthropic/claude-opus-4', name: 'Claude Opus 4', pricing: { prompt: '0.000015', completion: '0.000075' } }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (u.includes('/chat/completions')) {
+      const body = JSON.parse(String(init.body || '{}'));
+      const sysText = typeof body.messages?.[0]?.content === 'string'
+        ? body.messages[0].content
+        : JSON.stringify(body.messages?.[0]?.content || '');
+      upstreamCalls.push({ url: u, model: body.model, sysText });
+
+      if (u.includes('openrouter.ai')) {
+        if (simulateOpenRouter429) {
+          return new Response(
+            JSON.stringify({ error: { message: 'Rate limit exceeded: free-models-per-day.', code: 429 } }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        // Paid model selected on free OpenRouter -> 402 Insufficient credits
+        if (body.model === 'anthropic/claude-opus-4') {
+          return new Response(
+            JSON.stringify({ error: { message: 'This request requires more credits, or fewer max_tokens.', code: 402 } }),
+            { status: 402, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        // Non-existent / unavailable model -> 404 No endpoints found
+        if (body.model === 'claude-opus-5-5') {
+          return new Response(
+            JSON.stringify({ error: { message: 'No endpoints found for claude-opus-5-5.', code: 404 } }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        // Upstream router returns a DIFFERENT model than requested (e.g. openrouter/auto -> meta-llama/llama-3.3-70b-instruct:free)
+        const returnedModel = proxyFakeFreeSubstitution ? 'meta-llama/llama-3.3-70b-instruct:free' : body.model;
+        const sse =
+          `data: ${JSON.stringify({
+            id: 'id-check-1',
+            model: returnedModel,
+            choices: [{ index: 0, delta: { content: `من مدل واقعی ${returnedModel} در درگاه ۱ هستم.` }, finish_reason: null }]
+          })}\n\n` +
+          `data: ${JSON.stringify({
+            id: 'id-check-1',
+            model: returnedModel,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 }
+          })}\n\n` +
+          `data: [DONE]\n\n`;
+        return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+
+      if (u.includes('zro.moonmath.ai')) {
+        const sse =
+          `data: ${JSON.stringify({
+            id: 'id-zro-1',
+            model: body.model,
+            choices: [{ index: 0, delta: { content: `پاسخ از درگاه ۲ با مدل ${body.model}` }, finish_reason: null }]
+          })}\n\n` +
+          `data: ${JSON.stringify({
+            id: 'id-zro-1',
+            model: body.model,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 90, completion_tokens: 18, total_tokens: 108 }
+          })}\n\n` +
+          `data: [DONE]\n\n`;
+        return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+    }
+    return new Response('unexpected fetch: ' + u, { status: 500 });
+  };
+
+  try {
+    // 1. Catalog tags Free vs Paid models (`pricingTier: 'free' | 'paid'`)
+    const modelsRes = await modelsApi.onRequestGet(ctx(req('/api/models?refresh=1', { headers: { Cookie: cookie } }), env));
+    const modelsJson = await modelsRes.json();
+    const freeItem = modelsJson.models.find((m) => m.id === 'qwen/qwen3-coder:free');
+    const paidItem = modelsJson.models.find((m) => m.id === 'anthropic/claude-opus-4');
+    assert.equal(freeItem?.pricingTier, 'free', 'Free OpenRouter model must have pricingTier="free"');
+    assert.equal(paidItem?.pricingTier, 'paid', 'Paid OpenRouter model must have pricingTier="paid"');
+
+    // 2. Selecting PAID model (`anthropic/claude-opus-4`) on free OpenRouter:
+    //    MUST report `model_paid_required` AND MUST NOT switch to Gateway 2 (`zro.moonmath.ai`) or cooldown Gateway 1!
+    upstreamCalls.length = 0;
+    const paidRes = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'سلام', model: 'anthropic/claude-opus-4' }
+        }),
+        env
+      )
+    );
+    const paidEvts = await parseSse(paidRes);
+    const paidErr = paidEvts.find((e) => e.event === 'error');
+    assert.ok(paidErr, 'Paid model without credits must emit an explicit SSE error');
+    assert.equal(paidErr.data.code, 'model_paid_required');
+    assert.match(paidErr.data.error, /پولی است/);
+    assert.match(paidErr.data.error, /درگاه تغییر نکرد/);
+    assert.equal(upstreamCalls.length, 1, 'Must NOT switch to Gateway 2 or retry pointlessly when model is paid!');
+    assert.match(upstreamCalls[0].url, /openrouter\.ai/);
+
+    // 3. Selecting UNAVAILABLE / NON-EXISTENT model (`claude-opus-5-5` on OpenRouter -> 404):
+    //    MUST NOT silently substitute `qwen/qwen3-coder:free` AND MUST NOT switch to Gateway 2!
+    upstreamCalls.length = 0;
+    const missingRes = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'کدوم هوش مصنوعی هستی؟', model: 'claude-opus-5-5' }
+        }),
+        env
+      )
+    );
+    const missingEvts = await parseSse(missingRes);
+    const missingErr = missingEvts.find((e) => e.event === 'error');
+    assert.ok(missingErr, 'Unavailable model must emit an explicit SSE error instead of silently running a free model!');
+    assert.equal(missingErr.data.code, 'model_not_found');
+    assert.match(missingErr.data.error, /وجود ندارد یا در دسترس نیست/);
+    assert.match(missingErr.data.error, /درگاه تغییر نکرد/);
+    assert.equal(upstreamCalls.length, 1, 'Must NOT silently retry defaultModel or switch to Gateway 2 on 404!');
+
+    // 4. Gateway 1 is STILL healthy (not put on cooldown by paid/unavailable errors!) and injects exact Runtime AI Identity:
+    upstreamCalls.length = 0;
+    const freeRes = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'الان واقعاً کدوم مدل هوش مصنوعی هستی؟', model: 'qwen/qwen3-coder:free' }
+        }),
+        env
+      )
+    );
+    const freeEvts = await parseSse(freeRes);
+    const freeDone = freeEvts.find((e) => e.event === 'done');
+    assert.ok(freeDone, 'Free model on Gateway 1 succeeds immediately because Gateway 1 was never cooled down');
+    assert.equal(upstreamCalls.length, 1);
+    assert.match(upstreamCalls[0].url, /openrouter\.ai/, 'Gateway 1 remained active and healthy');
+    assert.match(upstreamCalls[0].sysText, /## Verified Runtime AI Identity/);
+    assert.match(upstreamCalls[0].sysText, /qwen\/qwen3-coder:free/, 'System prompt tells AI its exact active model ID');
+    assert.match(upstreamCalls[0].sysText, /درگاه 1 \(`openrouter\.ai`\)/, 'System prompt tells AI its exact active gateway');
+    assert.equal(freeDone.data.actualModel, 'qwen/qwen3-coder:free');
+    assert.equal(freeDone.data.requestedModel, 'qwen/qwen3-coder:free');
+    assert.equal(freeDone.data.modelMismatch, false);
+
+    // 5. Honest Server-Verified Model Mismatch Detection: if upstream proxy/router runs a different free model than requested,
+    //    `done` SSE and persisted D1 history expose `actualModel`, `requestedModel`, and `modelMismatch: true`!
+    proxyFakeFreeSubstitution = true;
+    upstreamCalls.length = 0;
+    const mismatchRes = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'تست تطبیق مدل واقعی سرور', model: 'openrouter/auto' }
+        }),
+        env
+      )
+    );
+    const mismatchEvts = await parseSse(mismatchRes);
+    const mismatchDone = mismatchEvts.find((e) => e.event === 'done');
+    assert.ok(mismatchDone);
+    assert.equal(mismatchDone.data.requestedModel, 'openrouter/auto');
+    assert.equal(mismatchDone.data.actualModel, 'meta-llama/llama-3.3-70b-instruct:free');
+    assert.equal(mismatchDone.data.modelMismatch, true, 'Flags mismatch whenever upstream executes a different model than selected');
+
+    // 6. Real 429 Daily Quota on Gateway 1 STILL fails over seamlessly to Gateway 2 AND updates Runtime AI Identity to Gateway 2's model!
+    proxyFakeFreeSubstitution = false;
+    simulateOpenRouter429 = true;
+    upstreamCalls.length = 0;
+    const failoverRes = await chatApi.onRequestPost(
+      ctx(
+        req('/api/chat', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+          body: { conversationId: created.id, message: 'کدوم مدل هستی؟', model: 'qwen/qwen3-coder:free' }
+        }),
+        env
+      )
+    );
+    const failoverEvts = await parseSse(failoverRes);
+    const failoverDone = failoverEvts.find((e) => e.event === 'done');
+    assert.ok(failoverDone, 'Genuine 429 daily quota still fails over automatically to Gateway 2');
+    assert.equal(upstreamCalls.length, 2);
+    assert.match(upstreamCalls[1].url, /zro\.moonmath\.ai/);
+    assert.match(upstreamCalls[1].sysText, /deepseek-v4\.1-flash/, 'After failover, AI runtime identity updates to Gateway 2 model!');
+    assert.match(upstreamCalls[1].sysText, /درگاه 2 \(`zro\.moonmath\.ai`\)/);
+    assert.equal(failoverDone.data.actualModel, 'deepseek-v4.1-flash');
+    assert.equal(failoverDone.data.modelMismatch, true, 'Alerts user that Gateway 2 answered with deepseek-v4.1-flash instead of qwen');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 
