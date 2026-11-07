@@ -4596,23 +4596,24 @@ function renderQuotaModalBody() {
   const turnSaved = Number(turn?.savedTokensEstimate || 0);
   const turnCached = Number(turn?.cachedTokens || 0);
   const turnSavePct = Number(turn?.savingsPercent || 0);
+  const turnEffective = Number(turn?.effectiveBilledTokens ?? turn?.totalTokens ?? 0);
   const turnHtml = turn && turn.totalTokens > 0
-    ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${turn.totalTokens.toLocaleString('en-US')}</b> توکن (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر مجزا: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''}${turnCached > 0 ? ` · کش: <b style="color:#7ee2a8">${turnCached.toLocaleString('en-US')}</b>` : ''}${turnSaved > 0 ? ` · صرفه‌جویی: <b style="color:#7ee2a8">~${turnSaved.toLocaleString('en-US')} (${turnSavePct}%)</b>` : ''})</div>`
+    ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${(turnCached > 0 ? turnEffective : turn.totalTokens).toLocaleString('en-US')}</b> توکن مؤثر (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''}${turnCached > 0 ? ` · کش ۹۰٪ تخفیف: <b style="color:#7ee2a8">${turnCached.toLocaleString('en-US')}</b>` : ''}${turnSaved > 0 ? ` · صرفه‌جویی: <b style="color:#7ee2a8">~${turnSaved.toLocaleString('en-US')} (${turnSavePct}%)</b>` : ''})</div>`
     : '';
 
   const ecoBoxHtml = `
     <div class="spec-box" style="margin-top:10px;border-color:rgba(126,226,168,.28)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی هوشمند توکن (Hyper-Eco)</span>
-        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'max' ? 'حداکثر صرفه‌جویی (۹۰٪+)' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
+        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی هوشمند توکن (Hyper-Eco v2)</span>
+        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'max' ? 'حداکثر صرفه‌جویی واقعی' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
       </div>
       <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
-        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر (۹۰٪+)</button>
+        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر</button>
         <button type="button" onclick="setTokenSaverMode('balanced')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'balanced' ? 'border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)' : ''}">⚖ متعادل</button>
         <button type="button" onclick="setTokenSaverMode('off')" style="min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'off' ? 'border-color:#f5b14c;color:#f5b14c' : ''}">خاموش</button>
       </div>
       <div style="font-size:11px;color:#9fb4d6;margin-top:7px;line-height:1.65">
-        کش پیشوند خودکار + نقشه ساختاری فایل‌های بزرگ + حذف اسنپ‌شات کهنه + Effort تطبیقی (۱۰۰٪ قدرت در تحلیل و رفع خطا)
+        حفظ ۱۰۰٪ کش پیشوند درگاه (Append-Only) + فشرده‌سازی خودکار ابزارهای نوبت‌های قبل + خوانش مستقیم بدون دور اضافی + شمارش دقیق بدون دوبارشماری تفکر
         ${(state.sessionSavedTokens > 0 || state.sessionCachedTokens > 0)
           ? `<br><span style="color:#7ee2a8">✔ ذخیره‌شده در این نشست: <b style="direction:ltr">~${Math.round(state.sessionSavedTokens).toLocaleString('en-US')} tok</b>${state.sessionCachedTokens > 0 ? ` (کش درگاه: <b style="direction:ltr">${Math.round(state.sessionCachedTokens).toLocaleString('en-US')}</b>)` : ''}</span>`
           : ''}
@@ -6810,7 +6811,8 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
           state.usageTotals.reasoningTokens = (state.usageTotals.reasoningTokens || 0) + (data.turnTokens.reasoningTokens || 0);
           state.usageTotals.totalTokens = (state.usageTotals.totalTokens || 0) + turnTotal;
           if (state.providerQuota && Number.isFinite(state.providerQuota.remainingTokens)) {
-            state.providerQuota.remainingTokens = Math.max(0, state.providerQuota.remainingTokens - turnTotal);
+            const billedDeduction = Number(data.turnTokens.effectiveBilledTokens ?? turnTotal);
+            state.providerQuota.remainingTokens = Math.max(0, state.providerQuota.remainingTokens - billedDeduction);
           }
         }
       }

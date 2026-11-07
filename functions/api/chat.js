@@ -99,12 +99,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'think',
-      description: 'Record structured reasoning, architecture, and edge-case plan before complex edits.',
+      description: 'Optional scratchpad before complex multi-file architecture (skip when native reasoning is active).',
       parameters: {
         type: 'object',
         properties: {
-          thought: { type: 'string', description: 'Problem & edge-case analysis' },
-          plan: { type: 'string', description: 'Ordered execution steps (optional)' }
+          thought: { type: 'string', description: 'Concise analysis' },
+          plan: { type: 'string', description: 'Ordered steps (optional)' }
         },
         required: ['thought'],
         additionalProperties: false
@@ -1197,19 +1197,23 @@ export async function onRequestPost(context) {
             steps += 1;
             stepStreamedContent = '';
             stepStreamedReasoning = '';
-            // In-turn Stale-Snapshot Invalidation + Prefix-Cache-Friendly Epoch Compaction:
-            if (steps > 2 && tokenSaver !== 'off') {
-              const pruned = pruneInTurnWireMessages(messages.slice(1), { tokenSaver });
-              if (pruned.savedChars > 0) {
-                turn.savedChars += pruned.savedChars;
-                messages.splice(1, messages.length - 1, ...pruned.messages);
+            // CRITICAL FOR PREFIX KV-CACHE: Keep `messages` 100% append-only during normal loops (< 140k chars)!
+            // Only trigger emergency wire pruning if total text chars approach proxy 413 limits (> 140k chars).
+            const currentWireChars = estimateMessagesTextChars(messages);
+            if (currentWireChars > 140_000) {
+              if (tokenSaver !== 'off') {
+                const pruned = pruneInTurnWireMessages(messages.slice(1), { tokenSaver, force: true });
+                if (pruned.savedChars > 0) {
+                  turn.savedChars += pruned.savedChars;
+                  messages.splice(1, messages.length - 1, ...pruned.messages);
+                }
               }
-            }
-            if (estimateMessagesTextChars(messages) > 140_000) {
-              const beforeChars = estimateMessagesTextChars(messages);
-              const slimmedInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 4 });
-              messages.splice(1, messages.length - 1, ...slimmedInFlight);
-              turn.savedChars += Math.max(0, beforeChars - estimateMessagesTextChars(messages));
+              if (estimateMessagesTextChars(messages) > 140_000) {
+                const beforeChars = estimateMessagesTextChars(messages);
+                const slimmedInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 4 });
+                messages.splice(1, messages.length - 1, ...slimmedInFlight);
+                turn.savedChars += Math.max(0, beforeChars - estimateMessagesTextChars(messages));
+              }
             }
             if (estimateMessagesTextChars(messages) > Math.min(powerPlan.maxTurnInputChars, 210_000)) {
               const beforeChars = estimateMessagesTextChars(messages);
@@ -1721,11 +1725,13 @@ export async function onRequestPost(context) {
           const latest = await getConversation(env, identity.owner, conversation.id);
           const validation = turn.validation.filter((entry) => !entry.ok || entry.warnings.length);
           const effectiveContextTokens = lastPromptTokens > 0 ? lastPromptTokens : Math.ceil(totalInputChars / 2);
-          const structuralSavedTokens = Math.round((turn.savedChars || 0) / 3.4) + steps * 480;
+          const structuralSavedTokens =
+            tokenSaver === 'off' ? 0 : Math.round((turn.savedChars || 0) / 3.4);
           const cacheDiscountTokens = Math.round(totalCachedTokens * 0.85);
           const savedTokensEstimate = structuralSavedTokens + cacheDiscountTokens;
           const totalUsedTokens = totalPromptTokens + totalCompletionTokens + totalReasoningTokens;
-          const baselineTokens = Math.max(1, totalUsedTokens + savedTokensEstimate);
+          const effectiveBilledTokens = Math.max(0, totalUsedTokens - cacheDiscountTokens);
+          const baselineTokens = Math.max(1, effectiveBilledTokens + savedTokensEstimate);
           const savingsPercent =
             savedTokensEstimate > 0
               ? Math.min(96, Math.round((savedTokensEstimate / baselineTokens) * 100))
@@ -1741,6 +1747,7 @@ export async function onRequestPost(context) {
               completion: totalCompletionTokens,
               reasoning: totalReasoningTokens,
               cached: totalCachedTokens,
+              effectiveBilled: effectiveBilledTokens,
               savedEstimate: savedTokensEstimate,
               savingsPercent,
               total: totalUsedTokens,
@@ -1748,6 +1755,7 @@ export async function onRequestPost(context) {
               completionTokens: totalCompletionTokens,
               reasoningTokens: totalReasoningTokens,
               cachedTokens: totalCachedTokens,
+              effectiveBilledTokens,
               savedTokensEstimate,
               totalTokens: totalUsedTokens
             },

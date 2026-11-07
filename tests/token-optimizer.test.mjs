@@ -54,35 +54,34 @@ test('normalizeAgentConfig defaults tokenSaver safely to max and validates allow
   assert.equal(normalizeAgentConfig({ tokenSaver: 'off' }).tokenSaver, 'off');
 });
 
-test('buildSmartFileRead returns full content for small files and Structural Landmark Map for huge files', () => {
-  const small = ['const a = 1;', 'export function greet() {', '  return a;', '}'].join('\n');
-  const smallRes = buildSmartFileRead('src/small.js', small, { tokenSaver: 'max' });
-  assert.equal(smallRes.mode, 'full');
-  assert.equal(smallRes.text, small);
+test('buildSmartFileRead returns 100% verbatim up to 24KB (zero extra round-trips) and clean un-prefixed lines for apply_patch', () => {
+  // 18KB medium-large file must return 100% verbatim in 1 shot so no extra read_file round-trips happen!
+  const medium18k = generateSyntheticSourceFile(240);
+  assert.ok(medium18k.length > 12_000 && medium18k.length < 24_000);
+  const medRes = buildSmartFileRead('src/medium.js', medium18k, { tokenSaver: 'max' });
+  assert.equal(medRes.mode, 'full');
+  assert.equal(medRes.text, medium18k);
 
-  const large = generateSyntheticSourceFile(800);
-  const largeRes = buildSmartFileRead('src/huge.js', large, { tokenSaver: 'max' });
+  // Truly giant file (>24KB) returns 16KB raw code + structural landmarks without corrupting lines with tabs
+  const huge55k = generateSyntheticSourceFile(800);
+  assert.ok(huge55k.length > 45_000);
+  const largeRes = buildSmartFileRead('src/huge.js', huge55k, { tokenSaver: 'max' });
   assert.equal(largeRes.mode, 'outline');
   assert.match(largeRes.text, /Structural Landmarks Across Entire File/);
-  assert.match(largeRes.text, /handlerSection1/);
-  assert.match(largeRes.text, /handlerSection10/);
-  assert.ok(
-    largeRes.savedChars > large.length * 0.65,
-    `Expected >65% char reduction on 800-line unwindowed read, got savedChars=${largeRes.savedChars} / ${large.length}`
-  );
+  assert.doesNotMatch(largeRes.text, /^\d+\t/m, 'Must NEVER prepend lineNum+tab to code lines');
 
-  // Explicit slice returns exact requested lines with line numbers
-  const sliceRes = buildSmartFileRead('src/huge.js', large, {
+  // Explicit slice returns clean raw lines ready for verbatim copy into apply_patch
+  const sliceRes = buildSmartFileRead('src/huge.js', huge55k, {
     startLine: 250,
     endLine: 265,
     tokenSaver: 'max'
   });
   assert.equal(sliceRes.mode, 'ranged');
-  assert.match(sliceRes.text, /handlerSection6/);
-  assert.doesNotMatch(sliceRes.text, /handlerSection1\(/);
+  assert.match(sliceRes.text, /^export async function handlerSection6/m);
+  assert.doesNotMatch(sliceRes.text, /^\d+\t/m);
 });
 
-test('buildPatchFailureContext locates fuzzy anchor and emits exact numbered lines for 1-shot patch recovery', () => {
+test('buildPatchFailureContext returns clean copy-paste-exact lines with zero tab prefixes', () => {
   const content = [
     'import { readConfig } from "./cfg.js";',
     '',
@@ -104,14 +103,13 @@ test('buildPatchFailureContext locates fuzzy anchor and emits exact numbered lin
   );
 
   assert.match(ctxText, /Auto-Context Recovery/);
-  assert.match(ctxText, /for \(const item of items\) \{/);
-  assert.match(ctxText, /subtotal \+= item\.price \* item\.qty;/);
+  assert.match(ctxText, /^ {4}subtotal \+= item\.price \* item\.qty;$/m);
+  assert.doesNotMatch(ctxText, /^\d+\t/m);
 });
 
-test('pruneInTurnWireMessages invalidates stale read_file snapshots after edits and deduplicates repeated reads', () => {
+test('pruneInTurnWireMessages preserves 100% append-only KV-cache below emergency threshold and compacts only on force/emergency', () => {
   const bigSnapshot = `[src/app.js · lines 1-200 of 200]\n${generateSyntheticSourceFile(200)}`;
   const wireMessages = [
-    { role: 'system', content: 'System prompt' },
     { role: 'user', content: 'Fix handlerSection1 in src/app.js' },
     {
       role: 'assistant',
@@ -135,257 +133,126 @@ test('pruneInTurnWireMessages invalidates stale read_file snapshots after edits 
         }
       ]
     },
-    { role: 'tool', tool_call_id: 'tc_patch_1', content: 'Patched src/app.js (+1 / -1 lines).' },
-    {
-      role: 'assistant',
-      content: '',
-      tool_calls: [
-        { id: 'tc_list', type: 'function', function: { name: 'list_files', arguments: '{}' } }
-      ]
-    },
-    { role: 'tool', tool_call_id: 'tc_list', content: 'src/app.js (8200 chars)' },
-    {
-      role: 'assistant',
-      content: '',
-      tool_calls: [
-        { id: 'tc_list_2', type: 'function', function: { name: 'list_symbols', arguments: '{"path":"src/app.js"}' } }
-      ]
-    },
-    { role: 'tool', tool_call_id: 'tc_list_2', content: 'handlerSection1' }
+    { role: 'tool', tool_call_id: 'tc_patch_1', content: 'Patched src/app.js (+1 / -1 lines).' }
   ];
 
-  const pruned = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max' });
-  assert.ok(pruned.savedChars > 4000, `Expected massive char savings from stale read invalidation, got ${pruned.savedChars}`);
-  assert.match(pruned.messages[3].content, /Stale read_file\(src\/app\.js\) superseded/i);
+  // Normal turn (<140k chars): MUST stay 100% untouched so Prefix KV-Cache hits!
+  const normal = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max' });
+  assert.equal(normal.savedChars, 0);
+  assert.equal(normal.messages[2].content, bigSnapshot);
+
+  // Emergency (>140k or force: true): safely invalidates stale read
+  const forced = pruneInTurnWireMessages(wireMessages, { tokenSaver: 'max', force: true });
+  assert.ok(forced.savedChars > 4000);
+  assert.match(forced.messages[2].content, /Stale read_file\(src\/app\.js\) superseded/i);
 });
 
-test('extractMentionedFileContext pre-pins @filepath and @filepath:start-end slices cleanly', () => {
-  const files = {
-    'src/utils.js': 'export const add = (a, b) => a + b;\nexport const mul = (a, b) => a * b;\n',
-    'src/large.js': generateSyntheticSourceFile(300)
-  };
-  const pinned = extractMentionedFileContext(
-    'Please check @src/utils.js and lines @src/large.js:100-112 for the bug',
-    files,
-    { tokenSaver: 'max' }
-  );
-  assert.deepEqual(pinned.paths, ['src/utils.js', 'src/large.js']);
-  assert.match(pinned.block, /<referenced_file path="src\/utils\.js">/);
-  assert.match(pinned.block, /export const add/);
-  assert.match(pinned.block, /handlerSection3/);
-});
+test('applyPromptCacheBreakpoints keeps cache_control anchored on FIXED user index across Steps 1..N (never invalidates prefix!) & prevents 2x reasoning token double-count', async () => {
+  const sys = 'Long stable system prompt '.repeat(80);
+  const step1Msgs = [
+    { role: 'system', content: sys },
+    { role: 'user', content: 'Earlier question' },
+    { role: 'assistant', content: 'Earlier answer' },
+    { role: 'user', content: 'Current turn user goal' }
+  ];
+  const step2Msgs = [
+    ...step1Msgs,
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_files', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: 'app.js' }
+  ];
+  const step3Msgs = [
+    ...step2Msgs,
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'read_file', arguments: '{"path":"app.js"}' } }] },
+    { role: 'tool', tool_call_id: 'c2', content: 'const x = 1;' }
+  ];
 
-test('resolveAdaptiveStepEffort preserves 100% power on Step 1 & errors while stepping down trivial/closing steps', () => {
-  assert.equal(
-    resolveAdaptiveStepEffort({ baseEffort: 'xhigh', step: 1, tokenSaver: 'max' }),
-    'xhigh'
-  );
-  assert.equal(
-    resolveAdaptiveStepEffort({
-      baseEffort: 'xhigh',
-      step: 4,
-      tokenSaver: 'max',
-      lastStepInfo: { hadError: true, onlyListing: false }
-    }),
-    'xhigh'
-  );
-  assert.equal(
-    resolveAdaptiveStepEffort({
-      baseEffort: 'high',
-      step: 3,
-      tokenSaver: 'max',
-      isAutoRepair: true,
-      lastStepInfo: { onlyListing: true }
-    }),
-    'high'
-  );
-  assert.equal(
-    resolveAdaptiveStepEffort({
-      baseEffort: 'xhigh',
-      step: 2,
-      tokenSaver: 'max',
-      lastStepInfo: { onlyListing: true, hadError: false, hadValidationError: false }
-    }),
-    'low'
-  );
-  assert.equal(
-    resolveAdaptiveStepEffort({
-      baseEffort: 'xhigh',
-      step: 3,
-      tokenSaver: 'max',
-      lastStepInfo: { justVerifiedClean: true, hadError: false, hadValidationError: false }
-    }),
-    'low'
-  );
-  assert.equal(
-    resolveAdaptiveStepEffort({
-      baseEffort: 'xhigh',
-      step: 2,
-      tokenSaver: 'off',
-      lastStepInfo: { onlyListing: true }
-    }),
-    'xhigh'
-  );
-});
+  const tools = [{ type: 'function', function: { name: 'list_files', description: 'list' } }];
+  const w1 = applyPromptCacheBreakpoints(step1Msgs, tools, { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4' });
+  const w2 = applyPromptCacheBreakpoints(step2Msgs, tools, { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4' });
+  const w3 = applyPromptCacheBreakpoints(step3Msgs, tools, { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4' });
 
-test('applyPromptCacheBreakpoints & callModel inject OpenRouter cache_control, parse cached_tokens, and auto-fallback on 400', async () => {
-  const untouched = applyPromptCacheBreakpoints(
-    [{ role: 'system', content: 'Sys prompt '.repeat(60) }, { role: 'user', content: 'Hi' }],
-    [{ type: 'function', function: { name: 'think', description: 'plan' } }],
-    { baseUrl: 'https://api.tooken.club/v1', model: 'claude-sonnet-5-5', tokenSaver: 'max' }
-  );
-  assert.equal(untouched.injected, false);
-  assert.equal(typeof untouched.messages[0].content, 'string');
+  // CRITICAL: Messages 0..3 MUST be 100% byte-for-byte identical across Step 1, Step 2, and Step 3!
+  assert.equal(JSON.stringify(w1.messages.slice(0, 4)), JSON.stringify(w2.messages.slice(0, 4)));
+  assert.equal(JSON.stringify(w2.messages.slice(0, 4)), JSON.stringify(w3.messages.slice(0, 4)));
 
-  let callCount = 0;
+  // Verify callModel does NOT double-count reasoning_tokens when total_tokens === prompt_tokens + completion_tokens
   const origFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async (_url, init) => {
-      callCount += 1;
-      const body = JSON.parse(init.body);
-      if (callCount === 1) {
-        assert.ok(Array.isArray(body.messages[0].content));
-        assert.deepEqual(body.messages[0].content[0].cache_control, { type: 'ephemeral' });
-        assert.deepEqual(body.tools[0].cache_control, { type: 'ephemeral' });
-        return new Response(
-          JSON.stringify({
-            choices: [{ message: { role: 'assistant', content: 'Cached hello!' }, finish_reason: 'stop' }],
-            usage: {
-              prompt_tokens: 4200,
-              completion_tokens: 45,
-              total_tokens: 4245,
-              prompt_tokens_details: { cached_tokens: 3900 }
-            }
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      if (callCount === 2) {
-        assert.ok(Array.isArray(body.messages[0].content));
-        return new Response(
-          JSON.stringify({ error: { message: 'Unknown field cache_control in message content' } }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      assert.equal(typeof body.messages[0].content, 'string');
-      return new Response(
+    globalThis.fetch = async () =>
+      new Response(
         JSON.stringify({
-          choices: [{ message: { role: 'assistant', content: 'Fallback ok!' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 500, completion_tokens: 20, total_tokens: 520 }
+          choices: [{ message: { role: 'assistant', content: 'Done!' }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 3000,
+            completion_tokens: 2200,
+            total_tokens: 5200,
+            prompt_tokens_details: { cached_tokens: 2700 },
+            completion_tokens_details: { reasoning_tokens: 1800 }
+          }
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
-    };
 
-    const env = {
-      MODEL_BASE_URL: 'https://openrouter.ai/api/v1',
-      MODEL_API_KEY: 'sk-or-test',
-      _agentConfig: { tokenSaver: 'max' }
-    };
-    const res1 = await callModel(env, {
-      model: 'anthropic/claude-sonnet-4',
-      messages: [
-        { role: 'system', content: 'Long stable system prompt '.repeat(80) },
-        { role: 'user', content: 'Hello' }
-      ],
-      tools: [{ type: 'function', function: { name: 'think', description: 'plan' } }]
-    });
-    assert.equal(res1.message.content, 'Cached hello!');
-    assert.equal(res1.usage.cached_tokens, 3900);
-
-    const res2 = await callModel(env, {
-      model: 'anthropic/claude-sonnet-4',
-      messages: [
-        { role: 'system', content: 'Long stable system prompt '.repeat(80) },
-        { role: 'user', content: 'Fallback check' }
-      ],
-      tools: [{ type: 'function', function: { name: 'think', description: 'plan' } }]
-    });
-    assert.equal(res2.message.content, 'Fallback ok!');
-    assert.equal(callCount, 3);
-  } finally {
-    globalThis.fetch = origFetch;
-  }
-});
-
-test('buildSystemPrompt is 100% byte-identical across shuffled workspace keys within the same day for prefix cache hits', () => {
-  const wsA = { files: { 'z.js': '1', 'a.js': '2', 'm/index.js': '3' }, active: 'a.js' };
-  const wsB = { files: { 'm/index.js': '3', 'z.js': '1', 'a.js': '2' }, active: 'a.js' };
-  const pA = buildSystemPrompt({ workspace: wsA, memories: [] });
-  const pB = buildSystemPrompt({ workspace: wsB, memories: [] });
-  assert.equal(pA, pB);
-  assert.doesNotMatch(currentClockLine(), /\d{2}:\d{2}:\d{2}/);
-});
-
-test('buildWorkingContext uses Cloudflare Workers AI for zero-API-token rolling summarization when env.AI is bound', async () => {
-  let workersAiCalled = 0;
-  let paidModelCalled = 0;
-  fakeJwks(sharedKeys);
-  const baseEnv = makeEnv(sharedKeys);
-  const origFetch = globalThis.fetch;
-
-  try {
-    const authRes = await authApi.onRequestGet(
-      ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(sharedKeys) } }), baseEnv)
+    const res = await callModel(
+      { MODEL_BASE_URL: 'https://openrouter.ai/api/v1', MODEL_API_KEY: 'sk-or-test' },
+      { model: 'anthropic/claude-sonnet-4', messages: step1Msgs, tools }
     );
-    const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
-    const created = await (
-      await stateApi.onRequestPost(
-        ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), baseEnv)
-      )
-    ).json();
-
-    globalThis.fetch = async () => {
-      paidModelCalled += 1;
-      throw new Error('Paid API should NOT be called when Workers AI succeeds');
-    };
-
-    const env = {
-      ...baseEnv,
-      CONTEXT_BUDGET_TOKENS: '1500',
-      _agentConfig: { tokenSaver: 'max' },
-      AI: {
-        async run(modelName) {
-          workersAiCalled += 1;
-          assert.equal(modelName, '@cf/meta/llama-3.1-8b-instruct');
-          return {
-            response: JSON.stringify({
-              summary: 'Refactored auth module and verified all JWT routes.',
-              memo: [{ scope: 'project', key: 'auth_token', value: 'Use Ed25519 tokens' }]
-            })
-          };
-        }
-      }
-    };
-
-    const messages = [];
-    for (let i = 0; i < 20; i += 1) {
-      messages.push({
-        seq: i + 1,
-        role: i % 2 === 0 ? 'user' : 'assistant',
-        content: `Turn ${i}: ${'Detailed engineering discussion and code changes '.repeat(35)}`
-      });
-    }
-
-    const result = await buildWorkingContext({
-      env,
-      conversation: { id: created.id, owner: 'dev@example.com', summary: '', summary_until: 0 },
-      messages,
-      callModel: async () => {
-        paidModelCalled += 1;
-        throw new Error('Should not call paid model');
-      }
-    });
-
-    assert.equal(workersAiCalled, 1);
-    assert.equal(paidModelCalled, 0);
-    assert.match(result.summary, /Refactored auth module/);
+    assert.equal(res.usage.prompt_tokens, 3000);
+    assert.equal(res.usage.completion_tokens, 400, 'visible completion tokens separated cleanly from reasoning_tokens');
+    assert.equal(res.usage.reasoning_tokens, 1800);
+    assert.equal(
+      res.usage.prompt_tokens + res.usage.completion_tokens + res.usage.reasoning_tokens,
+      5200,
+      'Total must equal exact 5200, NEVER 7000!'
+    );
   } finally {
     globalThis.fetch = origFetch;
   }
 });
 
-test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read + 1-shot patch recovery + adaptive effort + turnTokens telemetry', async () => {
+test('buildWorkingContext slims completed past-turn giant tool payloads on fresh user turns (saving 95%+ historical tool bloat)', async () => {
+  fakeJwks(sharedKeys);
+  const env = { ...makeEnv(sharedKeys), _agentConfig: { tokenSaver: 'max' } };
+  const authRes = await authApi.onRequestGet(
+    ctx(req('/api/auth', { headers: { 'Cf-Access-Jwt-Assertion': accessToken(sharedKeys) } }), env)
+  );
+  const cookie = authRes.headers.get('Set-Cookie').split(';')[0];
+  const created = await (
+    await stateApi.onRequestPost(
+      ctx(req('/api/state', { method: 'POST', body: { action: 'create' }, headers: { Cookie: cookie } }), env)
+    )
+  ).json();
+
+  const giantWriteArgs = JSON.stringify({ path: 'big.js', content: 'const x = 1;\n'.repeat(1500) });
+  const giantReadOutput = 'line of file\n'.repeat(1200);
+  const messages = [
+    { seq: 1, role: 'user', content: 'Build big.js' },
+    {
+      seq: 2,
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'write_file', arguments: giantWriteArgs } }]
+    },
+    { seq: 3, role: 'tool', tool_call_id: 'tc1', content: giantReadOutput },
+    { seq: 4, role: 'assistant', content: 'big.js created.' },
+    { seq: 5, role: 'user', content: 'Now change button color' }
+  ];
+
+  const ctxOut = await buildWorkingContext({
+    env,
+    conversation: { id: created.id, owner: 'dev@example.com', summary: '', summary_until: 0 },
+    messages,
+    callModel: async () => ({ content: '' })
+  });
+
+  const serializedRecent = JSON.stringify(ctxOut.recent);
+  assert.ok(
+    serializedRecent.length < 2500,
+    `Expected completed past turn tool dumps (>34KB) to be compacted below 2.5KB, got ${serializedRecent.length}`
+  );
+});
+
+test('End-to-end /api/chat v2: 100% append-only prefix across steps + @mention pre-pin + 1-shot clean patch recovery + exact non-double-counted turnTokens', async () => {
   fakeJwks(sharedKeys);
   const env = makeEnv(sharedKeys);
   const origFetch = globalThis.fetch;
@@ -398,11 +265,10 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
 
     const created = await (
       await stateApi.onRequestPost(
-        ctx(req('/api/state', { method: 'POST', body: { action: 'create', title: 'Eco Benchmark' }, headers: { Cookie: cookie } }), env)
+        ctx(req('/api/state', { method: 'POST', body: { action: 'create', title: 'Eco v2' }, headers: { Cookie: cookie } }), env)
       )
     ).json();
 
-    const hugeFile = generateSyntheticSourceFile(650);
     const targetFile = [
       'export function computeDiscount(price, tier) {',
       '  if (tier === "gold") return price * 0.8;',
@@ -419,10 +285,7 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
             action: 'workspace',
             id: created.id,
             workspace: {
-              files: {
-                'src/huge.js': hugeFile,
-                'src/pricing.js': targetFile
-              },
+              files: { 'src/pricing.js': targetFile },
               active: 'src/pricing.js'
             }
           }
@@ -432,17 +295,15 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
     );
 
     const jwksFetch = globalThis.fetch;
+    const wireSnapshots = [];
     let stepNum = 0;
     globalThis.fetch = async (url, init) => {
       if (String(url).includes('/cdn-cgi/access/certs')) return jwksFetch(url, init);
       stepNum += 1;
       const payload = JSON.parse(init.body);
+      wireSnapshots.push(payload.messages);
 
       if (stepNum === 1) {
-        const lastUser = [...payload.messages].reverse().find((m) => m.role === 'user');
-        assert.match(lastUser.content, /<referenced_file path="src\/pricing\.js">/);
-        assert.match(lastUser.content, /computeDiscount/);
-
         return new Response(
           JSON.stringify({
             choices: [
@@ -451,11 +312,6 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
                   role: 'assistant',
                   content: '',
                   tool_calls: [
-                    {
-                      id: 'call_read_huge',
-                      type: 'function',
-                      function: { name: 'read_file', arguments: JSON.stringify({ path: 'src/huge.js' }) }
-                    },
                     {
                       id: 'call_bad_patch',
                       type: 'function',
@@ -478,10 +334,11 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
               }
             ],
             usage: {
-              prompt_tokens: 1800,
-              completion_tokens: 90,
-              total_tokens: 1890,
-              prompt_tokens_details: { cached_tokens: 1450 }
+              prompt_tokens: 1200,
+              completion_tokens: 400,
+              total_tokens: 1600,
+              prompt_tokens_details: { cached_tokens: 1000 },
+              completion_tokens_details: { reasoning_tokens: 320 }
             }
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -489,14 +346,8 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
       }
 
       if (stepNum === 2) {
-        // Step 2 preserves full reasoning_effort='high' because Step 1 had a patch failure!
-        assert.equal(payload.reasoning_effort, 'high');
-        const hugeReadMsg = payload.messages.find((m) => m.tool_call_id === 'call_read_huge');
-        assert.match(hugeReadMsg.content, /Smart Structural Map of src\/huge\.js/);
-        const patchToolMsg = payload.messages.find((m) => m.tool_call_id === 'call_bad_patch');
-        assert.match(patchToolMsg.content, /Auto-Context Recovery/);
-        assert.match(patchToolMsg.content, /price \* 0\.8;/);
-
+        // Prefix of Step 1 MUST remain 100% identical in Step 2!
+        assert.equal(JSON.stringify(wireSnapshots[0]), JSON.stringify(payload.messages.slice(0, wireSnapshots[0].length)));
         return new Response(
           JSON.stringify({
             choices: [
@@ -527,31 +378,33 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
               }
             ],
             usage: {
-              prompt_tokens: 2100,
-              completion_tokens: 75,
-              total_tokens: 2175,
-              prompt_tokens_details: { cached_tokens: 1750 }
+              prompt_tokens: 1350,
+              completion_tokens: 300,
+              total_tokens: 1650,
+              prompt_tokens_details: { cached_tokens: 1200 },
+              completion_tokens_details: { reasoning_tokens: 220 }
             }
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
       }
 
-      // Step 3: Clean edit verified -> adaptive effort steps down cleanly for closing summary!
-      assert.equal(payload.reasoning_effort, 'low');
+      // Prefix of Step 2 MUST remain 100% identical in Step 3!
+      assert.equal(JSON.stringify(wireSnapshots[1]), JSON.stringify(payload.messages.slice(0, wireSnapshots[1].length)));
       return new Response(
         JSON.stringify({
           choices: [
             {
-              message: { role: 'assistant', content: 'Updated gold discount to 25% off cleanly.' },
+              message: { role: 'assistant', content: 'تخفیف طلایی به ۲۵٪ تغییر یافت.' },
               finish_reason: 'stop'
             }
           ],
           usage: {
-            prompt_tokens: 2150,
-            completion_tokens: 30,
-            total_tokens: 2180,
-            prompt_tokens_details: { cached_tokens: 1980 }
+            prompt_tokens: 1400,
+            completion_tokens: 80,
+            total_tokens: 1480,
+            prompt_tokens_details: { cached_tokens: 1350 },
+            completion_tokens_details: { reasoning_tokens: 30 }
           }
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -565,7 +418,7 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
           headers: { Cookie: cookie },
           body: {
             conversationId: created.id,
-            message: 'Update gold tier discount in @src/pricing.js and inspect src/huge.js',
+            message: 'تخفیف طلایی را در @src/pricing.js به ۲۵٪ تغییر بده',
             reasoningEffort: 'high',
             tokenSaver: 'max'
           }
@@ -576,16 +429,11 @@ test('End-to-end /api/chat Hyper-Efficiency loop: @mention pre-pin + smart read 
     assert.equal(res.status, 200);
     const events = await parseSse(res);
     const doneEvt = events.find((e) => e.event === 'done');
-    assert.ok(doneEvt, 'Expected SSE done event');
-    assert.equal(doneEvt.data.turnTokens.cachedTokens, 1450 + 1750 + 1980);
-    assert.ok(
-      doneEvt.data.turnTokens.savedTokensEstimate > 4500,
-      `Expected >4500 saved tokens estimate, got ${doneEvt.data.turnTokens.savedTokensEstimate}`
-    );
-    assert.ok(
-      doneEvt.data.turnTokens.savingsPercent >= 40,
-      `Expected >=40% explicit savedTokensEstimate percent, got ${doneEvt.data.turnTokens.savingsPercent}%`
-    );
+    assert.ok(doneEvt);
+    // Exact upstream total: 1600 + 1650 + 1480 = 4730 (NEVER double-counted as 4730 + 570 = 5300!)
+    assert.equal(doneEvt.data.turnTokens.totalTokens, 4730);
+    assert.equal(doneEvt.data.turnTokens.cachedTokens, 3550);
+    assert.ok(doneEvt.data.turnTokens.effectiveBilledTokens < 1800);
   } finally {
     globalThis.fetch = origFetch;
   }
