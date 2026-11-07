@@ -13,6 +13,7 @@ import {
   saveCachedProviderModels,
   saveDiscoveredSpec
 } from './provider.js';
+import { applyPromptCacheBreakpoints } from './token-optimizer.js';
 
 export const ALLOWED_TOOLS = new Set([
   'think',
@@ -2964,18 +2965,27 @@ export async function callModel(env, payload) {
     let rateLimitRetries = 0;
     let forceNonStreamFallback = false;
     let omitStreamOptions = false;
+    let omitCacheControl = false;
+    const tokenSaverMode = payload.tokenSaver || env?._agentConfig?.tokenSaver || 'max';
 
     while (variantIdx < wireVariants.length) {
       const currentVariant = wireVariants[variantIdx];
       const streamThisAttempt = useUpstreamStream && !forceNonStreamFallback;
+      const cacheWrapped = omitCacheControl
+        ? { messages: activeMessages, tools: payload.tools, injected: false }
+        : applyPromptCacheBreakpoints(activeMessages, payload.tools, {
+            baseUrl,
+            model,
+            tokenSaver: tokenSaverMode
+          });
       const body = JSON.stringify({
         model,
         stream: streamThisAttempt,
         ...(streamThisAttempt && !omitStreamOptions ? { stream_options: { include_usage: true } } : {}),
         ...currentVariant.params,
-        messages: activeMessages,
-        ...(payload.tools && payload.tools.length
-          ? { tools: payload.tools, tool_choice: payload.tool_choice || 'auto' }
+        messages: cacheWrapped.messages,
+        ...(cacheWrapped.tools && cacheWrapped.tools.length
+          ? { tools: cacheWrapped.tools, tool_choice: payload.tool_choice || 'auto' }
           : {})
       });
 
@@ -3147,6 +3157,15 @@ export async function callModel(env, payload) {
           latestRateLimitByEndpoint.set(baseUrl, rateLimit);
         }
 
+        const cachedTokens =
+          Number(
+            data?.usage?.prompt_tokens_details?.cached_tokens ??
+              data?.usage?.input_tokens_details?.cached_tokens ??
+              data?.usage?.cache_read_input_tokens ??
+              data?.usage?.cached_tokens ??
+              0
+          ) || 0;
+
         return {
           model: String(data.model || model),
           finishReason: String(choice.finish_reason || 'stop'),
@@ -3162,7 +3181,8 @@ export async function callModel(env, payload) {
           usage: {
             prompt_tokens: Number(data?.usage?.prompt_tokens ?? data?.usage?.input_tokens) || 0,
             completion_tokens: Number(data?.usage?.completion_tokens ?? data?.usage?.output_tokens) || 0,
-            reasoning_tokens: reasoningTokens
+            reasoning_tokens: reasoningTokens,
+            cached_tokens: cachedTokens
           }
         };
       }
@@ -3172,6 +3192,15 @@ export async function callModel(env, payload) {
       const errText = await response.text().catch(() => '');
       const safeDetail = extractSafeUpstreamError(errText, envSecrets(env));
       if (safeDetail) lastErrDetail = safeDetail;
+
+      if (
+        (status === 400 || status === 422) &&
+        !omitCacheControl &&
+        /cache_control|ephemeral/i.test(errText)
+      ) {
+        omitCacheControl = true;
+        continue;
+      }
 
       // Some OpenAI-compatible proxies (Anthropic/Gemini bridges, older OneAPI) reject `stream_options` with 400/422:
       if (
