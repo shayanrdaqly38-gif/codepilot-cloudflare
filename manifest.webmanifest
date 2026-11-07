@@ -1,0 +1,21 @@
+{
+  "name": "CodePilot — محیط توسعه هوشمند",
+  "short_name": "CodePilot",
+  "description": "CodePilot AI Coding Workspace",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "background_color": "#211b17",
+  "theme_color": "#211b17",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='44' fill='%23211b17'/><rect x='16' y='16' width='160' height='160' rx='36' fill='%23E87B52'/><text x='96' y='134' font-size='112' font-weight='900' text-anchor='middle' fill='%231F1612'>✳</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
