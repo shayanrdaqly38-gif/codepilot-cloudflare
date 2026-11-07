@@ -27,7 +27,8 @@ export const ALLOWED_TOOLS = new Set([
   'file_history',
   'run_command',
   'web_search',
-  'fetch_url'
+  'fetch_url',
+  'generate_image'
 ]);
 
 export const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];

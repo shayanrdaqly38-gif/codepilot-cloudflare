@@ -70,6 +70,7 @@ import { validateFile } from '../_lib/validate.js';
 import { linuxRunnerEnabled, runCommand, sandboxEnabled } from '../_lib/sandbox.js';
 import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
 import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
+import { generateAndStoreImage } from '../_lib/image.js';
 
 const MAX_CONTENT = 100_000;
 const MAX_LOOP_STEPS = 16;
@@ -293,6 +294,54 @@ export const TOOLS = [
         additionalProperties: false
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generate_image',
+      description:
+        'Generate a studio-grade high-resolution image (powered for free by Cloudflare Workers AI FLUX.1 / Phoenix + unlimited FLUX failover) and display it directly in chat. Always write `prompt` in vivid, detailed ENGLISH (50–120 words covering subject, composition, lighting, textures, and color palette) even when the user writes in Persian.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: {
+            type: 'string',
+            description:
+              'Rich, detailed English visual prompt describing subject, composition, lighting, camera/art direction, textures, and mood.'
+          },
+          title: {
+            type: 'string',
+            description: 'Short human-friendly title/caption (in Persian if user speaks Persian).'
+          },
+          aspectRatio: {
+            type: 'string',
+            enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
+            description: 'Image aspect ratio (1:1 square, 16:9 widescreen, 9:16 mobile vertical, 4:3, 3:4).'
+          },
+          style: {
+            type: 'string',
+            enum: [
+              'auto',
+              'photorealistic',
+              'cinematic',
+              'digital-art',
+              'logo-icon',
+              'ui-mockup',
+              '3d-render',
+              'anime',
+              'pixel-art'
+            ],
+            description: 'Studio art-direction preset (default: auto).'
+          },
+          seed: {
+            type: 'number',
+            description: 'Optional integer seed for reproducible variations.'
+          }
+        },
+        required: ['prompt'],
+        additionalProperties: false
+      }
+    }
   }
 ];
 
@@ -400,7 +449,7 @@ function estimateMessagesTextChars(messages) {
  * external tools (web_search / fetch_url / run_command) so a user stop cancels
  * in-flight tool work immediately instead of waiting for a network timeout.
  */
-async function executeTool({ env, owner, conversation, name, args, workspace, turn, send, signal }) {
+async function executeTool({ env, effectiveEnv, owner, conversation, name, args, workspace, turn, send, signal }) {
   if (!args || typeof args !== 'object') return { text: 'Error: invalid arguments', ok: false };
 
   switch (name) {
@@ -653,6 +702,35 @@ async function executeTool({ env, owner, conversation, name, args, workspace, tu
       });
     }
 
+    case 'generate_image': {
+      const image = await generateAndStoreImage(effectiveEnv || env, owner, {
+        prompt: String(args.prompt || ''),
+        title: String(args.title || ''),
+        aspectRatio: String(args.aspectRatio || '1:1'),
+        style: String(args.style || 'auto'),
+        seed: Number.isInteger(args.seed) ? args.seed : undefined,
+        conversationId: conversation?.id || '',
+        externalSignal: signal
+      });
+      if (Array.isArray(turn?.generatedImages)) {
+        turn.generatedImages.push(image);
+      }
+      if (send) {
+        send('generated_image', image);
+      }
+      const cleanAlt = (image.title || 'Generated Image').replace(/[\[\]\r\n]/g, ' ').trim();
+      return {
+        ok: true,
+        text:
+          `Image generated successfully!\n` +
+          `- URL: ${image.url}\n` +
+          `- Download URL: ${image.downloadUrl}\n` +
+          `- Resolution: ${image.width}x${image.height} (${image.aspectRatio})\n` +
+          `- Engine: ${image.modelLabel || image.engine}\n` +
+          `- Markdown to include in your reply: ![${cleanAlt}](${image.url})`
+      };
+    }
+
     default:
       return { ok: false, text: `Error: unknown tool ${name}` };
   }
@@ -794,6 +872,7 @@ export async function onRequestPost(context) {
         diffs: [],
         validation: [],
         commands: [],
+        generatedImages: [],
         touched: new Set(),
         deleted: new Set(),
         workspaceChanged: false,
@@ -944,7 +1023,7 @@ export async function onRequestPost(context) {
           let autoRepairAttempts = 0;
           let hitWaveBoundary = false;
           const MUTATING_LIVE_SET = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
-          const EXTERNAL_FETCH_TOOLS = new Set(['run_command', 'web_search', 'fetch_url']);
+          const EXTERNAL_FETCH_TOOLS = new Set(['run_command', 'web_search', 'fetch_url', 'generate_image']);
           const safeWaveSteps = Math.max(2, Math.min(Number(effectiveEnv.WAVE_STEP_BUDGET) || 24, 34));
           const safeSubreqCap = Math.max(4, Math.min(Number(effectiveEnv.WAVE_SUBREQ_BUDGET) || 34, 42));
           const priorCompletedSteps = resumingFromCheckpoint ? Number(existingCheckpoint?.completedSteps) || 0 : 0;
@@ -1121,6 +1200,7 @@ export async function onRequestPost(context) {
                 try {
                   outcome = await executeTool({
                     env,
+                    effectiveEnv,
                     owner: identity.owner,
                     conversation,
                     name: call.function.name,
@@ -1134,7 +1214,13 @@ export async function onRequestPost(context) {
                   outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
                 }
                 if (outcome.ok) {
-                  const argHint = args?.path || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
+                  const argHint =
+                    args?.path ||
+                    args?.title?.slice(0, 40) ||
+                    args?.prompt?.slice(0, 40) ||
+                    args?.command?.slice(0, 40) ||
+                    args?.query?.slice(0, 40) ||
+                    '';
                   completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
                 }
                 const toolResult = {
@@ -1224,7 +1310,17 @@ export async function onRequestPost(context) {
             }
 
             healedTextCarry = '';
-            finalText = stitchedProse.trim() || 'انجام شد.';
+            let missingImgMarkdown = '';
+            if (Array.isArray(turn.generatedImages) && turn.generatedImages.length > 0) {
+              const missingCards = turn.generatedImages.filter((img) => !stitchedProse.includes(img.url));
+              if (missingCards.length > 0) {
+                missingImgMarkdown =
+                  missingCards
+                    .map((img) => `![${(img.title || 'تصویر تولیدشده').replace(/[\[\]\r\n]/g, ' ').trim()}](${img.url})`)
+                    .join('\n\n') + '\n\n';
+              }
+            }
+            finalText = (missingImgMarkdown + stitchedProse.trim()).trim() || 'انجام شد.';
             stepStreamedContent = '';
             newMessages.push({
               role: 'assistant',
