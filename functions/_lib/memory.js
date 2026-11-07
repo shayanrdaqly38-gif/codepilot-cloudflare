@@ -205,7 +205,7 @@ export function buildSystemPrompt({
     `Reply in Persian unless the user writes in another language. ${styleGuide}`,
     '',
     '## Execution Rules',
-    '1. Precision & Parallel Batching: Batch independent `read_file`/`search_code`/`list_symbols` calls in ONE parallel `tool_calls` turn to minimize round-trips. For large files, read targeted `startLine`/`endLine` slices rather than re-reading whole files.',
+    '1. Zero-Waste Precision: Workspace file paths are already listed below — skip `list_files` unless >140 files exist. Answer conceptual/chat questions directly with zero tool calls. When editing code, read only the needed file/slice once, `apply_patch` cleanly, and finish without redundant re-reads.',
     netRule,
     editRule,
     `4. Honesty & Verification: Never claim a tool ran unless confirmed by tool output.${cfg.autoVerify !== false && shellOn ? ' Run syntax/unit checks via `run_command` for non-trivial code edits.' : ''}`,
@@ -435,8 +435,11 @@ function parseSummary(raw) {
   const text = String(raw || '').trim();
   if (!text) return { summary: '', memo: [] };
   const unfenced = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const jsonCandidate = unfenced.startsWith('{')
+    ? unfenced
+    : unfenced.match(/\{[\s\S]*\}/)?.[0] || unfenced;
   try {
-    const data = JSON.parse(unfenced);
+    const data = JSON.parse(jsonCandidate);
     const summary = typeof data.summary === 'string' ? data.summary : '';
     const memo = Array.isArray(data.memo)
       ? data.memo
@@ -475,7 +478,7 @@ export function slimHistoricalToolPayloads(wireMessages, { keepVerbatimTail = 4 
       if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
         nextCalls = msg.tool_calls.map((tc) => {
           const rawArgs = String(tc?.function?.arguments || '');
-          if (rawArgs.length <= 850) return tc;
+          if (rawArgs.length <= 500) return tc;
           changed = true;
           let targetPath = '';
           try {
@@ -502,11 +505,11 @@ export function slimHistoricalToolPayloads(wireMessages, { keepVerbatimTail = 4 
       return changed ? { ...msg, content: nextContent, ...(nextCalls ? { tool_calls: nextCalls } : {}) } : msg;
     }
 
-    if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 1350) {
+    if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 650) {
       const origLen = msg.content.length;
       return {
         ...msg,
-        content: `${msg.content.slice(0, 750)}\n…[خروجی قدیمی ابزار فشرده شد (${origLen} کاراکتر) — در صورت نیاز مجدداً read_file اجرا کنید]…\n${msg.content.slice(-300)}`
+        content: `${msg.content.slice(0, 380)}\n…[خروجی قدیمی ابزار فشرده شد (${origLen} کاراکتر) — در صورت نیاز read_file اجرا کنید]…\n${msg.content.slice(-160)}`
       };
     }
 
@@ -587,7 +590,19 @@ export async function buildWorkingContext({
   saveMemories
 }) {
   const repaired = repairToolGroups(messages);
-  const budget = Number(env.CONTEXT_BUDGET_TOKENS) || DEFAULT_CONTEXT_TOKENS;
+  const cfgSaver = env?._agentConfig?.tokenSaver || 'max';
+  const cfgStamina = env?._agentConfig?.workStamina || 'medium';
+  const explicitEnvBudget = Number(env.CONTEXT_BUDGET_TOKENS) || 0;
+  const baseBudget = explicitEnvBudget || Number(env?._agentConfig?.contextBudget) || DEFAULT_CONTEXT_TOKENS;
+  // In Hyper-Eco ('max') mode with normal stamina and default 24k budget, keep active verbatim history lean (~10k tokens)
+  // so old chat messages don't get re-billed on every tool step while older turns summarize into durable memory!
+  const budget =
+    !explicitEnvBudget &&
+    cfgSaver === 'max' &&
+    baseBudget === DEFAULT_CONTEXT_TOKENS &&
+    (cfgStamina === 'low' || cfgStamina === 'medium')
+      ? 10_000
+      : baseBudget;
 
   let summary = redactSecrets(String(conversation.summary || ''));
   let summaryUntil = Number(conversation.summary_until) || 0;
@@ -715,10 +730,15 @@ export async function buildWorkingContext({
     return toWire(msg);
   };
 
-  let recent = slimHistoricalToolPayloads(
-    normalizeWireSequence(recentSlice.map(toRecentWire)),
-    { keepVerbatimTail: 6 }
-  );
+  const normalizedRecent = normalizeWireSequence(recentSlice.map(toRecentWire));
+  // On a fresh user turn (tail is `role: 'user'`), EVERY message before the final user message belongs to
+  // COMPLETED past turns whose file edits are ALREADY persisted in `workspace.files`!
+  // Slimming all completed past turns (`keepVerbatimTail: 1`) eliminates 15k–40k dead tool tokens per turn
+  // while keeping past messages 100% deterministic & byte-identical across turns for Prefix KV-Caching!
+  const isFreshUserTurn = normalizedRecent.at(-1)?.role === 'user';
+  const tailToKeep =
+    cfgSaver === 'off' ? 6 : isFreshUserTurn ? 1 : 4;
+  let recent = slimHistoricalToolPayloads(normalizedRecent, { keepVerbatimTail: tailToKeep });
 
   // Measure FULL wire text size INCLUDING `tool_calls[].function.arguments` so proxy 413 limits are never tripped!
   const wireCharsOf = (items) =>
