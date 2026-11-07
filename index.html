@@ -1085,6 +1085,77 @@ body[data-theme="claude-day"] .md-h3{color:var(--claude-deep)}
 .msg.user:hover .user-msg-acts{opacity:1}
 .msg.user .user-msg-acts button{min-height:24px!important;padding:1px 7px!important;font-size:10px;border-radius:7px!important;background:rgba(0,0,0,.18);border-color:transparent;color:var(--text-soft)}
 body[data-theme="claude-day"] .msg.user .user-msg-acts button{background:rgba(0,0,0,.06)}
+
+/* =========================================================================
+   AI Image Studio Cards, Aspect/Style Chips, Gallery & Fullscreen Lightbox
+   ========================================================================= */
+.gen-image-card{
+  margin:10px 0;max-width:440px;border-radius:14px;overflow:hidden;
+  border:1px solid var(--line-strong);background:var(--panel2);
+  box-shadow:0 10px 30px rgba(0,0,0,.24);direction:rtl;
+}
+.gen-image-frame{
+  position:relative;width:100%;background:var(--code-bg,#120e0b);
+  display:flex;align-items:center;justify-content:center;min-height:160px;cursor:zoom-in;
+}
+.gen-image-frame img{
+  display:block;width:100%;height:auto;max-height:460px;object-fit:contain;
+  transition:transform .22s ease;
+}
+.gen-image-frame:hover img{transform:scale(1.01)}
+.gen-image-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+  padding:8px 11px;border-top:1px solid var(--line);background:var(--panel);
+}
+.gen-image-caption{
+  font-size:11.5px;font-weight:650;color:var(--text-soft);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px;
+}
+.gen-image-actions{display:inline-flex;align-items:center;gap:5px;margin-right:auto}
+.gen-img-btn{
+  display:inline-flex;align-items:center;gap:4px;text-decoration:none;
+  min-height:27px!important;padding:3px 9px!important;border-radius:8px!important;
+  font-size:11px;font-weight:650;background:var(--panel2);border:1px solid var(--line);
+  color:var(--text-soft);cursor:pointer;
+}
+.gen-img-btn:hover{border-color:var(--claude);color:var(--text)}
+.gen-img-btn.dl{
+  background:var(--claude-tint);border-color:rgba(232,123,82,.48);color:var(--claude-bright);
+}
+body[data-theme="claude-day"] .gen-img-btn.dl{color:var(--claude-deep)}
+
+.img-chip-grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.img-chip{
+  min-height:32px!important;padding:4px 10px!important;border-radius:10px!important;
+  font-size:11.5px;font-weight:600;background:var(--panel2);border:1px solid var(--line);
+  color:var(--text-soft);cursor:pointer;
+}
+.img-chip.active{
+  background:var(--claude-tint);border-color:var(--claude);color:var(--claude-bright);font-weight:750;
+}
+body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
+.img-gallery-strip{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:7px;
+  margin-top:8px;max-height:188px;overflow-y:auto;padding:2px;
+}
+.img-gallery-thumb{
+  position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;
+  border:1px solid var(--line);background:var(--code-bg);cursor:pointer;padding:0!important;
+}
+.img-gallery-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.img-gallery-thumb:hover{border-color:var(--claude)}
+
+.lightbox-card{
+  position:relative;max-width:min(94vw,920px);max-height:90dvh;display:flex;flex-direction:column;
+  align-items:center;gap:10px;padding:12px;border-radius:16px;background:var(--panel);
+  border:1px solid var(--line-strong);box-shadow:0 24px 70px rgba(0,0,0,.65);
+}
+.lightbox-card img{
+  max-width:100%;max-height:calc(82dvh - 64px);border-radius:10px;object-fit:contain;background:#0d0b09;
+}
+.comp-icon-btn.art-btn{
+  border-color:rgba(232,123,82,.38);background:var(--claude-tint);
+}
 </style>
 </head>
 <body data-view="chat" data-theme="claude-warm">
@@ -1302,6 +1373,7 @@ body[data-theme="claude-day"] .msg.user .user-msg-acts button{background:rgba(0,
       <textarea class="chat-input" id="prompt" rows="1" aria-label="پیام به دستیار" placeholder="پیام یا دستور (/ و @)…" oninput="onPromptInput(event)" onkeydown="onPromptKeydown(event)"></textarea>
       <div class="sendrow">
         <button type="button" class="comp-icon-btn" onclick="document.getElementById('attachmentInput').click()" title="افزودن عکس یا فایل" aria-label="افزودن عکس یا فایل">📎</button>
+        <button type="button" class="comp-icon-btn art-btn" id="imageStudioBtn" onclick="openImageStudioModal()" title="استودیو تصویرساز رایگان و باکیفیت (FLUX.1)" aria-label="استودیو تصویرساز رایگان">🎨</button>
         <button type="button" class="comp-icon-btn" onclick="toggleSlashPalette()" title="دستورات اسلش (/)" aria-label="دستورات اسلش">/</button>
         <button type="button" class="comp-icon-btn" onclick="toggleMentionPalette()" title="انتخاب فایل پروژه (@)" aria-label="ارجاع به فایل">@</button>
         <button type="button" class="mode-pill" id="modeCycleBtn" data-mode="auto-edit" onclick="cycleAgentMode()" title="تغییر حالت عامل (Shift+Tab)">⚡ Auto</button>
@@ -1665,6 +1737,73 @@ body[data-theme="claude-day"] .msg.user .user-msg-acts button{background:rgba(0,
   </div>
 </div>
 
+<!-- Free Studio Image Generator Modal (Cloudflare Workers AI FLUX.1 + Unlimited Failover) -->
+<div class="modal" id="imageStudioModal" onclick="if(event.target===this)closeModal('imageStudioModal')">
+  <div class="modal-card sheet-card" style="max-width:520px;direction:rtl;text-align:right">
+    <div class="sheet-head">
+      <button type="button" class="sheet-icon-btn" onclick="closeModal('imageStudioModal')" aria-label="بستن">✕</button>
+      <h2>🎨 استودیو تصویرساز رایگان (FLUX)</h2>
+      <span id="imgStudioEngineBadge" class="tiny" style="padding:3px 8px;border-radius:999px;background:var(--claude-tint);color:var(--claude-bright);font-weight:700">⚡ رایگان</span>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.65">
+      توضیح تصویر را به فارسی یا انگلیسی بنویسید؛ پرامپت شما خودکار به فرمت استودیویی تبدیل شده و با موتور <b>Cloudflare FLUX.1 / Phoenix</b> (همراه با پشتیبان رایگان بدون سقف) ساخته می‌شود.
+    </p>
+    <label class="field-label" for="imgStudioPrompt">توضیح تصویر (پرامپت فارسی یا انگلیسی)</label>
+    <textarea class="field" id="imgStudioPrompt" rows="3" style="resize:vertical;min-height:74px;line-height:1.6" placeholder="مثلاً: یک لوگوی مینیمال و لوکس طلایی به شکل ققنوس روی پس‌زمینه تیره مات…"></textarea>
+
+    <label class="field-label" style="margin-top:8px">نسبت تصویر و رزولوشن</label>
+    <div class="img-chip-grid" id="imgStudioAspectList">
+      <button type="button" class="img-chip active" data-aspect="1:1" onclick="selectImgStudioAspect('1:1')">1:1 مربع (1024×1024)</button>
+      <button type="button" class="img-chip" data-aspect="16:9" onclick="selectImgStudioAspect('16:9')">16:9 افقی (1344×768)</button>
+      <button type="button" class="img-chip" data-aspect="9:16" onclick="selectImgStudioAspect('9:16')">9:16 موبایل (768×1344)</button>
+      <button type="button" class="img-chip" data-aspect="4:3" onclick="selectImgStudioAspect('4:3')">4:3 کلاسیک</button>
+      <button type="button" class="img-chip" data-aspect="3:4" onclick="selectImgStudioAspect('3:4')">3:4 پرتره</button>
+    </div>
+
+    <label class="field-label" style="margin-top:10px">سبک هنری و نورپردازی</label>
+    <div class="img-chip-grid" id="imgStudioStyleList">
+      <button type="button" class="img-chip active" data-style="auto" onclick="selectImgStudioStyle('auto')">✨ خودکار استودیویی</button>
+      <button type="button" class="img-chip" data-style="photorealistic" onclick="selectImgStudioStyle('photorealistic')">📷 عکاسی واقعی</button>
+      <button type="button" class="img-chip" data-style="cinematic" onclick="selectImgStudioStyle('cinematic')">🎬 سینمایی</button>
+      <button type="button" class="img-chip" data-style="digital-art" onclick="selectImgStudioStyle('digital-art')">🎨 هنر دیجیتال</button>
+      <button type="button" class="img-chip" data-style="logo-icon" onclick="selectImgStudioStyle('logo-icon')">💎 لوگو و آیکون</button>
+      <button type="button" class="img-chip" data-style="ui-mockup" onclick="selectImgStudioStyle('ui-mockup')">📱 رابط کاربری</button>
+      <button type="button" class="img-chip" data-style="3d-render" onclick="selectImgStudioStyle('3d-render')">🧊 سه‌بعدی Octane</button>
+      <button type="button" class="img-chip" data-style="anime" onclick="selectImgStudioStyle('anime')">🌸 انیمه</button>
+      <button type="button" class="img-chip" data-style="pixel-art" onclick="selectImgStudioStyle('pixel-art')">👾 پیکسل‌آرت</button>
+    </div>
+
+    <label class="field-label" style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer">
+      <input type="checkbox" id="imgStudioEnhanceChk" checked style="width:auto">
+      <span>ارتقای هوشمند پرامپت به جزئیات حرفه‌ای انگلیسی (پیشنهادی برای بالاترین کیفیت)</span>
+    </label>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button type="button" class="primary" id="imgStudioSubmitBtn" onclick="submitDirectStudioImage()" style="flex:1;min-width:190px;justify-content:center">✨ ساخت فوری و رایگان</button>
+      <button type="button" id="imgStudioAgentBtn" onclick="delegateStudioImageToAgent()" style="justify-content:center" title="سپردن به هوش مصنوعی تا چند ایده بسازد یا در کد پروژه استفاده کند">🤖 سپردن به هوش مصنوعی</button>
+    </div>
+
+    <div id="imgStudioGalleryWrap" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)" hidden>
+      <div class="tiny" style="color:var(--muted)">تصاویر ساخته‌شده اخیر شما (کلیک برای مشاهده و دانلود):</div>
+      <div class="img-gallery-strip" id="imgStudioGallery"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Fullscreen Image Lightbox Modal -->
+<div class="modal" id="imageLightboxModal" onclick="if(event.target===this)closeModal('imageLightboxModal')">
+  <div class="lightbox-card">
+    <img id="imgLightboxPic" src="" alt="پیش‌نمایش تمام‌صفحه">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;direction:rtl;flex-wrap:wrap">
+      <span id="imgLightboxCaption" style="font-size:12px;color:var(--text-soft);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      <div style="display:flex;gap:6px;margin-right:auto">
+        <a id="imgLightboxDownload" href="#" download class="gen-img-btn dl">⬇ دانلود کیفیت اصلی</a>
+        <button type="button" class="gen-img-btn" onclick="closeModal('imageLightboxModal')">✕ بستن</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1700,6 +1839,7 @@ const API = {
   auth: '/api/auth',
   config: '/api/config',
   models: '/api/models',
+  images: '/api/images',
   run: '/api/run',
   state: '/api/state',
   usage: '/api/state/usage',
@@ -3284,6 +3424,7 @@ async function boot() {
       state.contextBudget = config.contextBudgetTokens || state.agentConfig.contextBudget || 24000;
       state.sandbox = Boolean(config.sandbox);
       state.linuxRunner = Boolean(config.linuxRunner);
+      state.workersAi = Boolean(config.workersAi);
       state.executionMode = config.executionMode || (state.sandbox ? 'sandbox' : state.linuxRunner ? 'linux-container' : 'virtual');
       const fullCatalogLoaded = config.modelsSource === 'remote' || config.modelsSource === 'cache';
       if (
@@ -4584,9 +4725,15 @@ function runPreview() {
   if (!html) return toast('index.html در فایل‌های پروژه نیست');
   const css = state.workspace.files['style.css'] || '';
   const js = state.workspace.files['app.js'] || '';
-  const src = html
+  let src = html
     .replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, () => `<style>${css.replace(/<\/style/gi, '<\\/style')}</style>`)
     .replace(/<script[^>]*src=["']app\.js["'][^>]*><\/script>/i, () => `<script>${js.replace(/<\/script/gi, '<\\/script')}<\/script>`);
+  if (!/<base\s/i.test(src) && /^https?:\/\//i.test(window.location.origin)) {
+    const baseTag = `<base href="${esc(window.location.origin)}/">`;
+    src = /<head[^>]*>/i.test(src)
+      ? src.replace(/<head[^>]*>/i, (m) => `${m}${baseTag}`)
+      : `${baseTag}${src}`;
+  }
   const win = window.open('about:blank', '_blank');
   if (!win) return toast('برای پیش‌نمایش، پنجره‌ی جدید را مجاز کنید');
   win.document.open();
@@ -4752,7 +4899,8 @@ const TOOL_LABELS = {
   file_history: '🕓 تاریخچه‌ی فایل',
   run_command: '🐧 اجرای فرمان لینوکس',
   web_search: '🌐 جست‌وجوی زنده وب',
-  fetch_url: '🔗 فراخوانی لینک / API'
+  fetch_url: '🔗 فراخوانی لینک / API',
+  generate_image: '🎨 ساخت تصویر استودیویی (FLUX)'
 };
 
 function claudeMascotSvg() {
@@ -4825,19 +4973,40 @@ function initMobileAndChatUxListeners() {
     chat.addEventListener('scroll', updateScrollBottomFab, { passive: true });
     chat.addEventListener('click', (event) => {
       const copyBtn = event.target?.closest?.('[data-role="copy-fence"]');
-      if (!copyBtn) return;
-      const wrap = copyBtn.closest('.code-fence-wrap');
-      const pre = wrap?.querySelector('pre');
-      if (!pre) return;
-      navigator.clipboard?.writeText(pre.textContent || '');
-      copyBtn.classList.add('copied');
-      const prev = copyBtn.textContent;
-      copyBtn.textContent = '✓ کپی شد';
-      toast('کد کپی شد');
-      setTimeout(() => {
-        copyBtn.classList.remove('copied');
-        copyBtn.textContent = prev || '⧉ کپی کد';
-      }, 1500);
+      if (copyBtn) {
+        const wrap = copyBtn.closest('.code-fence-wrap');
+        const pre = wrap?.querySelector('pre');
+        if (!pre) return;
+        navigator.clipboard?.writeText(pre.textContent || '');
+        copyBtn.classList.add('copied');
+        const prev = copyBtn.textContent;
+        copyBtn.textContent = '✓ کپی شد';
+        toast('کد کپی شد');
+        setTimeout(() => {
+          copyBtn.classList.remove('copied');
+          copyBtn.textContent = prev || '⧉ کپی کد';
+        }, 1500);
+        return;
+      }
+
+      const zoomTarget = event.target?.closest?.('[data-role="zoom-gen-img"]');
+      if (zoomTarget) {
+        const card = zoomTarget.closest('.gen-image-card');
+        const imgUrl = card?.getAttribute('data-img-url');
+        const caption = card?.querySelector('.gen-image-caption')?.textContent || '';
+        if (imgUrl) openImageLightbox(imgUrl, caption);
+        return;
+      }
+
+      const copyImgBtn = event.target?.closest?.('[data-role="copy-img-url"]');
+      if (copyImgBtn) {
+        const card = copyImgBtn.closest('.gen-image-card');
+        const imgUrl = card?.getAttribute('data-img-url');
+        if (imgUrl) {
+          navigator.clipboard?.writeText(imgUrl);
+          toast('آدرس تصویر کپی شد (' + imgUrl + ')');
+        }
+      }
     });
   }
 
@@ -4894,9 +5063,9 @@ function welcomeHtml() {
       </div>
     </div>
     <div class="suggestions">
+      <button type="button" onclick="openImageStudioModal()">🎨 ساخت تصویر رایگان (FLUX)</button>
       <button type="button" onclick="quickPrompt('/plan معماری پروژه را تحلیل کن و نقشه ارتقا بده.')">🧭 تحلیل معماری</button>
       <button type="button" onclick="executeSlashCommand('/review')">🔍 بازبینی کد (/review)</button>
-      <button type="button" onclick="quickPrompt('رابط کاربری، تجربه موبایل و جزئیات بصری پروژه را بررسی و ارتقا بده.')">✨ ارتقای UI و موبایل</button>
       <button type="button" onclick="scaffoldAgentsMdFile()">📄 ساخت AGENTS.md</button>
     </div>
   </div>`;
@@ -5028,7 +5197,28 @@ function toolLineHtml(id, name, detail, done) {
   return `<div class="tool-line ${done ? 'done' : ''}" data-tool-id="${esc(id)}">${label}<span style="color:#6f7d92">·</span><span style="overflow:hidden;text-overflow:ellipsis">${esc(short)}</span></div>`;
 }
 
-// Safe, rich markdown: code fences with language header + 1-tap copy, headings, bold, inline code. Zero raw HTML.
+function renderGeneratedImageCardHtml({ url, escapedTitle }) {
+  const safeUrl = /^\/api\/images\/[a-zA-Z0-9_-]{8,64}$/.test(String(url || '')) ? String(url) : '';
+  if (!safeUrl) return '';
+  const label = escapedTitle || 'تصویر تولیدشده';
+  return (
+    `<div class="gen-image-card" data-img-url="${safeUrl}">` +
+    `<div class="gen-image-frame" data-role="zoom-gen-img" title="کلیک برای بزرگ‌نمایی تمام‌صفحه">` +
+    `<img src="${safeUrl}" alt="${label}" loading="lazy">` +
+    `</div>` +
+    `<div class="gen-image-foot">` +
+    `<span class="gen-image-caption">${label}</span>` +
+    `<div class="gen-image-actions">` +
+    `<a href="${safeUrl}?download=1" download class="gen-img-btn dl" title="دانلود فایل اصلی با کیفیت کامل">⬇ دانلود</a>` +
+    `<button type="button" class="gen-img-btn" data-role="zoom-gen-img" title="مشاهده تمام‌صفحه">🔍 بزرگ‌نمایی</button>` +
+    `<button type="button" class="gen-img-btn" data-role="copy-img-url" title="کپی مسیر تصویر برای استفاده در HTML/CSS">📋 لینک</button>` +
+    `</div>` +
+    `</div>` +
+    `</div>`
+  );
+}
+
+// Safe, rich markdown: code fences with language header + 1-tap copy, trusted /api/images cards, headings, bold, inline code. Zero raw HTML.
 function renderMarkdownish(text) {
   const parts = String(text).split(/```/);
   return parts
@@ -5046,6 +5236,9 @@ function renderMarkdownish(text) {
         );
       }
       return esc(part)
+        .replace(/!\[([^\]]*)\]\((\/api\/images\/[a-zA-Z0-9_-]{8,64})\)/g, (_, alt, imgUrl) =>
+          renderGeneratedImageCardHtml({ url: imgUrl, escapedTitle: alt || 'تصویر تولیدشده' })
+        )
         .replace(/`([^`\n]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
         .replace(/(?:^|\n)###\s+([^\n]+)/g, '\n<span class="md-h3">$1</span>')
@@ -5226,6 +5419,7 @@ const CLAUDE_SPINNER_VERBS = [
 ];
 
 const SLASH_COMMANDS = [
+  { cmd: '/imagine', args: '[توضیح تصویر]', desc: 'ساخت فوری و رایگان تصویر باکیفیت استودیویی (FLUX.1 بدون مصرف توکن چت)' },
   { cmd: '/continue', args: '', desc: 'ادامه دقیق کار ناتمام از همان نقطه‌ای که قطع یا متوقف شده بود' },
   { cmd: '/marathon', args: '[هدف | pause | resume | stop | status]', desc: 'شروع، مکث، ادامه یا توقف حالت ماراتن خودکار با هدف دلخواه' },
   { cmd: '/power', args: '[ultra|max|very-hard|hard|medium|low]', desc: 'موتور تقویت ۴محوره هوش مصنوعی (طول کار، جزئیات، پیشرفته‌سازی، حساسیت)' },
@@ -5441,6 +5635,15 @@ async function executeSlashCommand(rawText) {
   const rest = (m[2] || '').trim();
 
   switch (cmd) {
+    case '/imagine':
+    case '/image': {
+      if (!rest) {
+        openImageStudioModal();
+        return true;
+      }
+      await generateDirectImageInChat({ prompt: rest });
+      return true;
+    }
     case '/continue':
     case '/resume':
       return sendMessage(rest || 'ادامه', { resumeCheckpoint: true });
@@ -6126,10 +6329,41 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
           `<span style="color:var(--muted)">→</span><span style="overflow:hidden;text-overflow:ellipsis;max-width:160px">${esc(preview)}</span>`
         );
       }
+    } else if (event === 'generated_image') {
+      if (data?.url && /^\/api\/images\/[a-zA-Z0-9_-]{8,64}$/.test(String(data.url))) {
+        let liveGallery = bubble.querySelector('.live-gen-images');
+        if (!liveGallery) {
+          liveGallery = document.createElement('div');
+          liveGallery.className = 'live-gen-images';
+          bubble.insertBefore(liveGallery, textArea);
+        }
+        if (!liveGallery.querySelector(`[data-img-url="${cssEscape(data.url)}"]`)) {
+          liveGallery.insertAdjacentHTML(
+            'beforeend',
+            renderGeneratedImageCardHtml({
+              url: data.url,
+              escapedTitle: esc(data.title || 'تصویر تولیدشده')
+            })
+          );
+        }
+        const verbEl = bubble.querySelector('.claude-verb');
+        if (verbEl) verbEl.textContent = '🎨 تصویر آماده شد · ادامه پاسخ…';
+        maybeAutoScrollChat();
+      }
     } else if (event === 'assistant') {
       assistantText = data.content || '';
       textArea.classList.remove('stream-cursor');
       textArea.innerHTML = renderMarkdownish(assistantText);
+      const liveGallery = bubble.querySelector('.live-gen-images');
+      if (liveGallery) {
+        liveGallery.querySelectorAll('.gen-image-card').forEach((card) => {
+          const u = card.getAttribute('data-img-url');
+          if (u && textArea.querySelector(`.gen-image-card[data-img-url="${cssEscape(u)}"]`)) {
+            card.remove();
+          }
+        });
+        if (!liveGallery.children.length) liveGallery.remove();
+      }
       maybeAutoScrollChat();
     } else if (event === 'done') {
       bubble.querySelector('.claude-spinner-bar')?.remove();
@@ -7751,6 +7985,195 @@ setInterval(() => {
   if (getMarathonState().active) renderMarathonUI();
 }, 1000);
 renderMarathonUI();
+
+/* -------------------- Studio Image Generator & Lightbox ------------------- */
+let imgStudioAspect = '1:1';
+let imgStudioStyle = 'auto';
+let imgStudioBusy = false;
+
+function selectImgStudioAspect(aspect) {
+  imgStudioAspect = aspect || '1:1';
+  document.querySelectorAll('#imgStudioAspectList .img-chip').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.aspect === imgStudioAspect);
+  });
+}
+
+function selectImgStudioStyle(style) {
+  imgStudioStyle = style || 'auto';
+  document.querySelectorAll('#imgStudioStyleList .img-chip').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.style === imgStudioStyle);
+  });
+}
+
+function openImageLightbox(url, caption = '') {
+  const safeUrl = /^\/api\/images\/[a-zA-Z0-9_-]{8,64}$/.test(String(url || '')) ? String(url) : '';
+  if (!safeUrl) return;
+  const pic = $('imgLightboxPic');
+  const cap = $('imgLightboxCaption');
+  const dl = $('imgLightboxDownload');
+  if (pic) pic.src = safeUrl;
+  if (cap) cap.textContent = caption || 'تصویر باکیفیت استودیویی';
+  if (dl) dl.href = `${safeUrl}?download=1`;
+  $('imageLightboxModal')?.classList.add('open');
+}
+
+async function loadStudioRecentGallery() {
+  const wrap = $('imgStudioGalleryWrap');
+  const strip = $('imgStudioGallery');
+  const badge = $('imgStudioEngineBadge');
+  if (!wrap || !strip || !state.ready) return;
+  try {
+    const res = await api(`${API.images}?limit=12`);
+    if (badge) {
+      badge.textContent = res.workersAiBound ? '⚡ Cloudflare FLUX.1 فعال' : '⚡ FLUX رایگان فعال';
+    }
+    const items = Array.isArray(res?.images) ? res.images : [];
+    if (!items.length) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    strip.innerHTML = items
+      .map((img) => {
+        const safeUrl = /^\/api\/images\/[a-zA-Z0-9_-]{8,64}$/.test(String(img.url || '')) ? img.url : '';
+        if (!safeUrl) return '';
+        const cap = esc(img.title || img.prompt || '');
+        return `<button type="button" class="img-gallery-thumb" title="${cap}" data-gallery-url="${safeUrl}" data-gallery-cap="${cap}"><img src="${safeUrl}" alt="${cap}" loading="lazy"></button>`;
+      })
+      .join('');
+    strip.querySelectorAll('[data-gallery-url]').forEach((btn) => {
+      btn.onclick = () => {
+        closeModal('imageStudioModal');
+        openImageLightbox(btn.getAttribute('data-gallery-url'), btn.getAttribute('data-gallery-cap') || '');
+      };
+    });
+  } catch {
+    wrap.hidden = true;
+  }
+}
+
+function openImageStudioModal(prefillPrompt = '') {
+  const modal = $('imageStudioModal');
+  if (!modal) return;
+  const input = $('imgStudioPrompt');
+  const composerVal = $('prompt')?.value?.trim() || '';
+  if (input) {
+    if (prefillPrompt) input.value = prefillPrompt;
+    else if (!input.value.trim() && composerVal && !composerVal.startsWith('/')) input.value = composerVal;
+  }
+  const badge = $('imgStudioEngineBadge');
+  if (badge) {
+    badge.textContent = state.workersAi ? '⚡ Cloudflare FLUX.1 فعال' : '⚡ FLUX رایگان فعال';
+  }
+  modal.classList.add('open');
+  setTimeout(() => input?.focus(), 40);
+  loadStudioRecentGallery();
+}
+
+async function generateDirectImageInChat({ prompt, aspectRatio = '1:1', style = 'auto', enhance = true } = {}) {
+  const cleanPrompt = String(prompt || '').trim();
+  if (!cleanPrompt) return toast('لطفاً توضیح تصویر را بنویسید');
+  if (imgStudioBusy || state.busy) return toast('در حال پردازش درخواست قبلی…');
+  if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
+
+  if (String(state.conversationId || '').startsWith('pending-') && state.pendingCreatePromise) {
+    const resolvedId = await state.pendingCreatePromise;
+    if (!resolvedId) return;
+  }
+  if (!state.conversationId) {
+    const id = await newConversation(false);
+    if (!id) return;
+  }
+
+  imgStudioBusy = true;
+  const submitBtn = $('imgStudioSubmitBtn');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '⏳ در حال خلق تصویر…';
+  }
+  closeModal('imageStudioModal');
+  setWorkspaceView('chat');
+
+  const userMsg = { role: 'user', content: `🎨 ساخت تصویر: ${cleanPrompt}` };
+  state.messages.push(userMsg);
+  appendMessageElement(userMsg);
+
+  const chat = $('chat');
+  const pendingBubble = document.createElement('div');
+  pendingBubble.className = 'msg assistant';
+  pendingBubble.innerHTML =
+    `<div class="claude-spinner-bar">` +
+    `<span class="claude-star">✦</span>` +
+    `<span class="claude-verb">🎨 در حال خلق تصویر استودیویی با کیفیت بالا (${esc(aspectRatio)})…</span>` +
+    `</div>`;
+  chat.appendChild(pendingBubble);
+  scrollChatToBottom();
+
+  try {
+    const res = await api(API.images, {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: cleanPrompt,
+        aspectRatio,
+        style,
+        enhance,
+        conversationId: state.conversationId,
+        appendToConversation: true
+      })
+    });
+    pendingBubble.remove();
+    const img = res?.image;
+    if (!img?.url) throw new Error('تصویری دریافت نشد');
+    const mdAlt = (img.title || 'تصویر تولیدشده').replace(/[\[\]\r\n]/g, ' ').trim();
+    const engineLabel =
+      img.engine === 'cloudflare-ai'
+        ? `Cloudflare Workers AI (${String(img.model || '').split('/').pop()})`
+        : img.modelLabel || img.engine;
+    const assistantMsg = {
+      role: 'assistant',
+      content: `![${mdAlt}](${img.url})\n**${mdAlt}** · \`${img.width}×${img.height}\` · موتور: \`${engineLabel}\``
+    };
+    state.messages.push(assistantMsg);
+    appendMessageElement(assistantMsg);
+    scrollChatToBottom();
+    toast('✨ تصویر باکیفیت آماده شد');
+  } catch (err) {
+    pendingBubble.remove();
+    toast('خطا در ساخت تصویر: ' + (err?.message || 'نامشخص'));
+  } finally {
+    imgStudioBusy = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '✨ ساخت فوری و رایگان';
+    }
+  }
+}
+
+async function submitDirectStudioImage() {
+  const prompt = $('imgStudioPrompt')?.value?.trim() || '';
+  if (!prompt) {
+    $('imgStudioPrompt')?.focus();
+    return toast('ابتدا توضیح تصویر را بنویسید');
+  }
+  const enhance = $('imgStudioEnhanceChk') ? $('imgStudioEnhanceChk').checked : true;
+  await generateDirectImageInChat({
+    prompt,
+    aspectRatio: imgStudioAspect,
+    style: imgStudioStyle,
+    enhance
+  });
+}
+
+function delegateStudioImageToAgent() {
+  const prompt = $('imgStudioPrompt')?.value?.trim() || '';
+  if (!prompt) {
+    $('imgStudioPrompt')?.focus();
+    return toast('ابتدا توضیح تصویر را بنویسید');
+  }
+  closeModal('imageStudioModal');
+  const msg = `لطفاً با ابزار generate_image (نسبت تصویر ${imgStudioAspect} و سبک ${imgStudioStyle}) یک تصویر بسیار باکیفیت برای این ایده بساز و نمایش بده: ${prompt}`;
+  sendMessage(msg);
+}
 
 window.addEventListener('DOMContentLoaded', boot);
 

@@ -4,9 +4,34 @@ import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 const CREATE = [
+  `CREATE TABLE IF NOT EXISTS generated_images (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    conversation_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL,
+    enhanced_prompt TEXT NOT NULL DEFAULT '',
+    style TEXT NOT NULL DEFAULT 'auto',
+    aspect_ratio TEXT NOT NULL DEFAULT '1:1',
+    width INTEGER NOT NULL DEFAULT 1024,
+    height INTEGER NOT NULL DEFAULT 1024,
+    engine TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS generated_image_chunks (
+    image_id TEXT NOT NULL,
+    part INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (image_id, part)
+  )`,
+  `CREATE INDEX IF NOT EXISTS generated_images_owner_created ON generated_images(owner, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS workspace_files (
     conversation_id TEXT NOT NULL,
     path TEXT NOT NULL,

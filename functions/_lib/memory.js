@@ -213,6 +213,7 @@ export function buildSystemPrompt({
     '6. If `apply_patch` is rejected, re-read the relevant lines with `read_file` (`startLine`/`endLine`) and send a clean, unique search block.',
     '7. After editing, state clearly which files changed and whether validation/tests passed.',
     '8. If the user references `@filepath` in their message, prioritize reading and inspecting that file immediately.',
+    '9. Studio Image Generation (`generate_image`): You have a built-in, free, studio-grade AI image generator (Cloudflare Workers AI FLUX.1 / Leonardo Phoenix + unlimited FLUX failover). Whenever the user asks to create, design, illustrate, or visualize an image, logo, icon, UI hero, game asset, poster, or artwork: call `generate_image` with a rich, vivid, detailed ENGLISH `prompt` (50–120 words specifying subject, composition, lighting, lens/materials, color palette, and mood — always translate Persian ideas into rich English for maximum FLUX quality), a short Persian `title`, the best `aspectRatio` (`1:1`, `16:9`, `9:16`, `4:3`, `3:4`), and `style` (`auto`, `photorealistic`, `cinematic`, `digital-art`, `logo-icon`, `ui-mockup`, `3d-render`, `anime`, `pixel-art`). Include the returned `![title](/api/images/<id>)` markdown in your reply so the user sees and downloads it in chat, and you may also use `/api/images/<id>` inside workspace HTML/CSS/game `<img src="...">` tags.',
     '',
     '## Safety',
     '- Never ask for, repeat, store, or echo API keys, tokens, cookies or passwords. If a secret appears in the conversation, suggest rotating it.',
