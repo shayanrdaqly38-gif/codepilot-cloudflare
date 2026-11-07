@@ -1640,6 +1640,14 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن)</label>
         <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
       </div>
+      <div>
+        <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز مصرف توکن</label>
+        <select class="field" id="cfgTokenSaver" style="direction:rtl;text-align:right">
+          <option value="max">حداکثر صرفه‌جویی هوشمند (تا ۹۰٪+ · پیشنهادی)</option>
+          <option value="balanced">متعادل (صرفه‌جویی ۵۰–۷۰٪)</option>
+          <option value="off">خاموش (ارسال خام)</option>
+        </select>
+      </div>
     </div>
 
     <div class="effort-keep-banner" style="margin-top:10px;margin-bottom:4px">
@@ -2158,6 +2166,7 @@ const DEFAULT_CLIENT_AGENT_CONFIG = {
   detailThinking: 'medium',
   ambitionLevel: 'medium',
   humanSensitivity: 'medium',
+  tokenSaver: 'max',
   customInstructions: '',
   goal: '',
   theme: 'claude-warm',
@@ -2273,6 +2282,8 @@ const state = {
   usageDays: [],
   tokenCap: null,
   lastTurnTokens: null,
+  sessionSavedTokens: 0,
+  sessionCachedTokens: 0,
   busy: false,
   activeTurnToken: 0,
   chatAbortController: null,
@@ -3575,6 +3586,7 @@ function openCodexModal() {
   }
   if ($('cfgMaxSteps')) $('cfgMaxSteps').value = String(cfg.maxSteps || 16);
   if ($('cfgContextBudget')) $('cfgContextBudget').value = String(cfg.contextBudget || 24000);
+  if ($('cfgTokenSaver')) $('cfgTokenSaver').value = cfg.tokenSaver || 'max';
   if ($('cfgSessionGoal')) $('cfgSessionGoal').value = cfg.goal || '';
   if ($('cfgCustomInstructions')) $('cfgCustomInstructions').value = cfg.customInstructions || '';
   if ($('cfgReducedMotion')) $('cfgReducedMotion').checked = Boolean(cfg.reducedMotion);
@@ -3595,6 +3607,7 @@ async function saveAgentConfigFromModal() {
     temperature: Math.min(Math.max(Number($('cfgTemperature')?.value ?? 0.25), 0), 1.5),
     maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 96),
     contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 160000),
+    tokenSaver: $('cfgTokenSaver')?.value || 'max',
     goal: String($('cfgSessionGoal')?.value || '').trim().slice(0, 600),
     customInstructions: String($('cfgCustomInstructions')?.value || '').trim().slice(0, 4000),
     reducedMotion: Boolean($('cfgReducedMotion')?.checked),
@@ -4455,6 +4468,19 @@ function renderTopTokenBadge() {
   }
 }
 
+async function setTokenSaverMode(mode) {
+  if (!['off', 'balanced', 'max'].includes(mode)) return;
+  await persistAgentConfigPatch({ tokenSaver: mode }, false);
+  if ($('cfgTokenSaver')) $('cfgTokenSaver').value = mode;
+  renderQuotaModalBody();
+  const labels = {
+    max: 'حداکثر صرفه‌جویی هوشمند (۹۰٪+) فعال شد ⚡',
+    balanced: 'حالت بهینه‌سازی متعادل فعال شد ⚖',
+    off: 'بهینه‌ساز توکن خاموش شد'
+  };
+  toast(labels[mode]);
+}
+
 function renderQuotaModalBody() {
   const body = $('quotaModalBody');
   if (!body) return;
@@ -4566,9 +4592,32 @@ function renderQuotaModalBody() {
 
   // Last turn token breakdown if present
   const turn = state.lastTurnTokens;
+  const saverMode = state.agentConfig?.tokenSaver || 'max';
+  const turnSaved = Number(turn?.savedTokensEstimate || 0);
+  const turnCached = Number(turn?.cachedTokens || 0);
+  const turnSavePct = Number(turn?.savingsPercent || 0);
   const turnHtml = turn && turn.totalTokens > 0
-    ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${turn.totalTokens.toLocaleString('en-US')}</b> توکن (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر مجزا: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''})</div>`
+    ? `<div style="margin-top:6px;font-size:11px;color:#8fa6c9">آخرین پیام: <b>${turn.totalTokens.toLocaleString('en-US')}</b> توکن (ورودی: ${turn.promptTokens.toLocaleString('en-US')} · خروجی: ${turn.completionTokens.toLocaleString('en-US')}${turn.reasoningTokens ? ` · تفکر مجزا: ${turn.reasoningTokens.toLocaleString('en-US')}` : ''}${turnCached > 0 ? ` · کش: <b style="color:#7ee2a8">${turnCached.toLocaleString('en-US')}</b>` : ''}${turnSaved > 0 ? ` · صرفه‌جویی: <b style="color:#7ee2a8">~${turnSaved.toLocaleString('en-US')} (${turnSavePct}%)</b>` : ''})</div>`
     : '';
+
+  const ecoBoxHtml = `
+    <div class="spec-box" style="margin-top:10px;border-color:rgba(126,226,168,.28)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:#7ee2a8;font-weight:700;font-size:12px">⚡ موتور بهینه‌سازی هوشمند توکن (Hyper-Eco)</span>
+        <span style="font-size:10.5px;color:#9aa1ae">${saverMode === 'max' ? 'حداکثر صرفه‌جویی (۹۰٪+)' : saverMode === 'balanced' ? 'متعادل' : 'غیرفعال'}</span>
+      </div>
+      <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
+        <button type="button" onclick="setTokenSaverMode('max')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'max' ? 'border-color:#7ee2a8;color:#7ee2a8;background:rgba(126,226,168,.12)' : ''}">⚡ حداکثر (۹۰٪+)</button>
+        <button type="button" onclick="setTokenSaverMode('balanced')" style="flex:1;min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'balanced' ? 'border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)' : ''}">⚖ متعادل</button>
+        <button type="button" onclick="setTokenSaverMode('off')" style="min-height:28px;font-size:11px;padding:2px 8px;${saverMode === 'off' ? 'border-color:#f5b14c;color:#f5b14c' : ''}">خاموش</button>
+      </div>
+      <div style="font-size:11px;color:#9fb4d6;margin-top:7px;line-height:1.65">
+        کش پیشوند خودکار + نقشه ساختاری فایل‌های بزرگ + حذف اسنپ‌شات کهنه + Effort تطبیقی (۱۰۰٪ قدرت در تحلیل و رفع خطا)
+        ${(state.sessionSavedTokens > 0 || state.sessionCachedTokens > 0)
+          ? `<br><span style="color:#7ee2a8">✔ ذخیره‌شده در این نشست: <b style="direction:ltr">~${Math.round(state.sessionSavedTokens).toLocaleString('en-US')} tok</b>${state.sessionCachedTokens > 0 ? ` (کش درگاه: <b style="direction:ltr">${Math.round(state.sessionCachedTokens).toLocaleString('en-US')}</b>)` : ''}</span>`
+          : ''}
+      </div>
+    </div>`;
 
   body.innerHTML = `
     <div class="spec-box" style="margin-top:4px">
@@ -4579,6 +4628,7 @@ function renderQuotaModalBody() {
       ${providerHtml}
       ${rlHtml}
     </div>
+    ${ecoBoxHtml}
     ${capHtml}
     <div class="spec-box" style="margin-top:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px">
@@ -6271,6 +6321,7 @@ async function sendMessage(overrideText, opts = {}) {
       detailThinking: state.agentConfig?.detailThinking || 'medium',
       ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
+      tokenSaver: state.agentConfig?.tokenSaver || 'max',
       localRunner: isLocalTermuxActive() && opts._forceCloudRunner !== true,
       ...(Array.isArray(opts.localExecResults) ? { localExecResults: opts.localExecResults } : {}),
       ...(effectiveTurnMarathon ? { marathon: effectiveTurnMarathon } : {}),
@@ -6742,6 +6793,12 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       syncShellBadge();
       if (data.turnTokens && typeof data.turnTokens === 'object') {
         state.lastTurnTokens = data.turnTokens;
+        if (Number(data.turnTokens.savedTokensEstimate) > 0) {
+          state.sessionSavedTokens = (state.sessionSavedTokens || 0) + Number(data.turnTokens.savedTokensEstimate);
+        }
+        if (Number(data.turnTokens.cachedTokens) > 0) {
+          state.sessionCachedTokens = (state.sessionCachedTokens || 0) + Number(data.turnTokens.cachedTokens);
+        }
         const turnTotal = Number(data.turnTokens.totalTokens || 0);
         if (turnTotal > 0) {
           if (!state.usageTotals) {
