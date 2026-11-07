@@ -1,41 +1,38 @@
-// Hyper-Efficiency & Precision Token Engine for CodePilot:
-//   1. Smart Structural Code Map for large files (replaces blind 12k truncation with exact line-numbered AST/landmark outlines)
-//   2. Surgical `apply_patch` failure recovery (injects exact surrounding file lines so retries succeed in 1 shot)
-//   3. Stale-snapshot invalidation + prefix-cache-friendly epoch pruning inside multi-step loops
-//   4. Zero-roundtrip `@filepath` / `@filepath:start-end` pre-pinning
-//   5. Adaptive per-step Reasoning Effort (100% full power on Step 1, architecture & debugging; zero wasted spin on trivial steps)
-//   6. Multi-provider Prompt Cache breakpoint injection (`cache_control: { type: 'ephemeral' }`)
+// Hyper-Efficiency & Precision Token Engine v2 for CodePilot:
+//   1. 100% Append-Only Prefix KV-Cache Preservation (never mutates mid-turn history unless emergency >140k ceiling)
+//   2. Fixed Turn-Anchor Prompt Cache Breakpoints on OpenRouter Claude/Gemini (writes cache ONCE on Step 1; 90% cache read on Steps 2..N)
+//   3. Zero-Extra-Roundtrip File Reader (full verbatim read up to 24KB with raw un-prefixed lines so `apply_patch` never fails or re-reads)
+//   4. Clean Raw-Line 1-Shot `apply_patch` Failure Recovery (exact copy-paste lines without tab/line-number corruption)
+//   5. Zero-Roundtrip `@filepath` / `@filepath:start-end` Pre-Pinning
+//   6. Adaptive Per-Step Reasoning Effort (100% full power on Step 1 & errors; smart step-down on routine/closing steps)
 
 export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max'];
 
-const FULL_READ_CHAR_LIMIT = 11_200;
-const MAX_RANGED_LINES = 320;
-const LANDMARK_CAP = 72;
+const FULL_READ_CHAR_LIMIT = 24_000;
+const HUGE_HEAD_CHAR_BUDGET = 16_000;
+const MAX_RANGED_LINES = 400;
+const LANDMARK_CAP = 60;
 
 const STRUCTURAL_PATTERNS = [
-  // JS / TS / MJS functions, classes, exports, routes
   /^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/,
   /^\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)/,
   /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/,
   /^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/,
   /^\s*case\s+['"`]([^'"`]{1,60})['"`]\s*:/,
-  // HTML / SPA landmarks
   /^\s*<(style|script|header|main|nav|aside|footer)\b[^>]*>/i,
   /^\s*<\/(style|script)>/i,
   /<(?:div|section|aside|nav|dialog)\b[^>]*\bid=["']([^"']{2,60})["'][^>]*>/i,
-  // Python / Go / Rust / C-like
   /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/,
   /^\s*func\s+(?:\([^)]+\)\s*)?([A-Za-z_]\w*)\s*\(/,
   /^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*[<(]/,
   /^\s*(?:pub\s+)?(?:struct|enum|trait)\s+([A-Za-z_]\w*)/,
-  // CSS major media/root/section comments & Markdown headings
   /^\s*(@media\b[^{]{1,80})\{/,
   /^\s*(#{1,3}\s+.{2,80})$/
 ];
 
-function extractStructuralOutline(lines, maxItems = LANDMARK_CAP) {
+function extractStructuralOutline(lines, fromLineIdx = 0, maxItems = LANDMARK_CAP) {
   const hits = [];
-  for (let i = 0; i < lines.length; i += 1) {
+  for (let i = Math.max(0, fromLineIdx); i < lines.length; i += 1) {
     const raw = lines[i];
     if (!raw || raw.length > 260) continue;
     for (const rx of STRUCTURAL_PATTERNS) {
@@ -46,7 +43,6 @@ function extractStructuralOutline(lines, maxItems = LANDMARK_CAP) {
     }
   }
   if (hits.length <= maxItems) return hits;
-  // Evenly sample across the entire file so head, middle, and tail landmarks are all visible!
   const sampled = [];
   const step = (hits.length - 1) / (maxItems - 1);
   let lastIdx = -1;
@@ -60,19 +56,12 @@ function extractStructuralOutline(lines, maxItems = LANDMARK_CAP) {
   return sampled;
 }
 
-function formatNumberedSlice(lines, fromIdx, toIdx) {
-  const out = [];
-  for (let i = fromIdx; i < toIdx; i += 1) {
-    out.push(`${i + 1}\t${lines[i]}`);
-  }
-  return out.join('\n');
-}
-
 /**
- * High-precision file reader:
- * - Small/medium files (<= 11.2k chars): returned 100% verbatim.
- * - Explicit `startLine`/`endLine`: returns exact numbered lines (capped cleanly at 320 lines per slice so lines never get chopped mid-character).
- * - Large files (> 11.2k chars) without line range: returns a complete Structural Symbol & Landmark Map with exact line numbers across the ENTIRE file + numbered head & tail!
+ * Zero-Extra-Roundtrip File Reader:
+ * - Files <= 24,000 chars (~95% of all source files): returned 100% verbatim in ONE shot with ZERO extra round-trips!
+ * - Explicit `startLine`/`endLine`: returns 100% CLEAN RAW LINES (never prepends `lineNum\t` so `apply_patch` matches on first try!).
+ * - Truly giant files (> 24,000 chars, e.g. 445KB `index.html`) read without line range: returns first ~16,000 chars of clean raw lines
+ *   PLUS a Structural Landmark Map of the remaining lines so the model has exact line numbers without blind truncation!
  */
 export function buildSmartFileRead(path, rawContent, { startLine, endLine, tokenSaver = 'max' } = {}) {
   const content = String(rawContent ?? '');
@@ -83,10 +72,10 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, token
     const from = Math.max(0, (Number.isFinite(Number(startLine)) ? Math.floor(Number(startLine)) : 1) - 1);
     const requestedTo = Number.isFinite(Number(endLine)) ? Math.floor(Number(endLine)) : from + MAX_RANGED_LINES;
     const cappedTo = Math.min(lines.length, Math.max(from + 1, Math.min(requestedTo, from + MAX_RANGED_LINES)));
-    const slice = formatNumberedSlice(lines, from, cappedTo);
+    const slice = lines.slice(from, cappedTo).join('\n');
     const moreHint =
       cappedTo < Math.min(lines.length, requestedTo) || (!Number.isFinite(Number(endLine)) && cappedTo < lines.length)
-        ? `\n[Showing lines ${from + 1}-${cappedTo} of ${lines.length}. Call read_file({ path: "${path}", startLine: ${cappedTo + 1}, endLine: ${Math.min(lines.length, cappedTo + MAX_RANGED_LINES)} }) for next lines.]`
+        ? `\n[Showing lines ${from + 1}-${cappedTo} of ${lines.length}. Pass startLine: ${cappedTo + 1}, endLine: ${Math.min(lines.length, cappedTo + MAX_RANGED_LINES)} if needed.]`
         : '';
     const text = `Lines ${from + 1}-${cappedTo} of ${lines.length} in ${path}:\n${slice}${moreHint}`;
     const savedChars = Math.max(0, content.length - text.length);
@@ -98,15 +87,19 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, token
   }
 
   const lines = content.split('\n');
-  const headCount = Math.min(72, lines.length);
-  const tailCount = lines.length > 110 ? Math.min(24, lines.length - headCount) : 0;
-  const outline = extractStructuralOutline(lines, LANDMARK_CAP);
+  let headEndIdx = 0;
+  let usedHeadChars = 0;
+  while (headEndIdx < lines.length && usedHeadChars + lines[headEndIdx].length + 1 <= HUGE_HEAD_CHAR_BUDGET) {
+    usedHeadChars += lines[headEndIdx].length + 1;
+    headEndIdx += 1;
+  }
+  if (headEndIdx === 0) headEndIdx = 1;
 
+  const outline = extractStructuralOutline(lines, 0, LANDMARK_CAP);
   const sections = [
-    `[Smart Structural Map of ${path} — ${lines.length} lines (${content.length} chars). Call read_file({ path: "${path}", startLine, endLine }) to read any exact section before patching.]`,
-    '',
-    `--- Head (Lines 1-${headCount}) ---`,
-    formatNumberedSlice(lines, 0, headCount)
+    `[Smart Structural Map of ${path} — ${lines.length} lines (${content.length} chars). Lines 1-${headEndIdx} shown verbatim below; pass startLine/endLine to read_file for deeper sections.]`,
+    `Lines 1-${headEndIdx} of ${lines.length} in ${path}:`,
+    lines.slice(0, headEndIdx).join('\n')
   ];
 
   if (outline.length) {
@@ -117,24 +110,15 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, token
     );
   }
 
-  if (tailCount > 0) {
-    const tailStart = lines.length - tailCount;
-    sections.push(
-      '',
-      `--- Tail (Lines ${tailStart + 1}-${lines.length}) ---`,
-      formatNumberedSlice(lines, tailStart, lines.length)
-    );
-  }
-
   const text = sections.join('\n');
   const savedChars = Math.max(0, content.length - text.length);
   return { text, savedChars, mode: 'outline' };
 }
 
 /**
- * When `apply_patch` fails to match, find the closest lines in `fileContent`
- * and return their exact numbered context so the model succeeds in 1 shot on the next step
- * without wasting 2–3 extra `search_code` + `read_file` steps!
+ * 1-Shot `apply_patch` Failure Recovery:
+ * Returns CLEAN, UNMODIFIED raw lines (no `lineNum\t` prefix!) around the fuzzy match
+ * so the model copies the exact string into `search` and succeeds immediately without extra `read_file` calls.
  */
 export function buildPatchFailureContext(path, fileContent, edits, errorMessage) {
   const baseMsg = `Patch rejected: ${errorMessage}`;
@@ -152,7 +136,6 @@ export function buildPatchFailureContext(path, fileContent, edits, errorMessage)
       .filter((l) => l.length >= 6 && !/^[{};()[\]]+$/.test(l));
     if (!candidateLines.length) continue;
 
-    // Pick the longest/most specific line from the search block
     const sorted = [...candidateLines].sort((a, b) => b.length - a.length);
     const anchor = sorted[0];
     const anchorTokens = (anchor.match(/[A-Za-z_$][\w$]{2,}/g) || []).slice(0, 8);
@@ -161,9 +144,9 @@ export function buildPatchFailureContext(path, fileContent, edits, errorMessage)
     for (let i = 0; i < fileLines.length; i += 1) {
       const fl = fileLines[i].trim();
       if (!fl) continue;
-      if (fl.includes(anchor) || anchor.includes(fl) && fl.length >= 12) {
+      if (fl.includes(anchor) || (anchor.includes(fl) && fl.length >= 12)) {
         matchedLineNums.push(i);
-        if (matchedLineNums.length >= 2) break;
+        if (matchedLineNums.length >= 1) break;
       }
     }
 
@@ -184,17 +167,17 @@ export function buildPatchFailureContext(path, fileContent, edits, errorMessage)
       if (bestIdx >= 0) matchedLineNums.push(bestIdx);
     }
 
-    for (const center of matchedLineNums.slice(0, 2)) {
-      const from = Math.max(0, center - 8);
-      const to = Math.min(fileLines.length, center + 12);
+    for (const center of matchedLineNums.slice(0, 1)) {
+      const from = Math.max(0, center - 6);
+      const to = Math.min(fileLines.length, center + 10);
       snippets.push(
-        `Actual lines ${from + 1}-${to} in ${path}:\n${formatNumberedSlice(fileLines, from, to)}`
+        `--- Exact raw lines ${from + 1}-${to} in ${path} (copy verbatim into search) ---\n${fileLines.slice(from, to).join('\n')}`
       );
     }
   }
 
   if (!snippets.length) return baseMsg;
-  return `${baseMsg}\n\n[Auto-Context Recovery — exact current lines in ${path} so you can retry apply_patch immediately without extra read_file calls]:\n${snippets.join('\n---\n').slice(0, 4500)}`;
+  return `${baseMsg}\n\n[Auto-Context Recovery — retry apply_patch directly using these exact raw lines without calling read_file]:\n${snippets.join('\n').slice(0, 2200)}`;
 }
 
 const MUTATING_TOOL_NAMES = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
@@ -208,17 +191,33 @@ function safeParseJson(raw) {
 }
 
 /**
- * Prefix-Cache-Friendly + Accuracy-Boosting In-Turn Wire Pruner:
- * 1. Invalidates stale `read_file` outputs for files that were edited in a LATER step (prevents stale-line hallucinations AND frees tokens).
- * 2. Deduplicates identical `read_file` / `list_files` / `list_symbols` calls repeated later in the turn.
- * 3. Compacts giant older `write_file` / `apply_patch` arguments and tool dumps in clean epochs once older uncompacted tool chars cross threshold.
+ * Emergency-Only Epoch Wire Pruner:
+ * CRITICAL CACHE RULE: During normal multi-step turns (< 140k chars), NEVER mutate earlier messages in `wireMessages`!
+ * Mutating middle messages breaks Prefix KV-Caching across steps and causes the entire prompt to be re-billed at 100% price.
+ * This function runs ONLY when `force === true` or total wire chars cross `emergencyThresholdChars` (default 140,000) to prevent HTTP 413.
  */
-export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {}) {
+export function pruneInTurnWireMessages(
+  wireMessages,
+  { tokenSaver = 'max', force = false, emergencyThresholdChars = 140_000 } = {}
+) {
   if (tokenSaver === 'off' || !Array.isArray(wireMessages) || wireMessages.length < 5) {
     return { messages: wireMessages, savedChars: 0 };
   }
 
-  // Locate assistant->tool exchange groups
+  if (!force) {
+    let totalChars = 0;
+    for (const m of wireMessages) {
+      if (!m) continue;
+      if (typeof m.content === 'string') totalChars += m.content.length;
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) totalChars += (tc?.function?.arguments?.length || 0) + 24;
+      }
+    }
+    if (totalChars < emergencyThresholdChars) {
+      return { messages: wireMessages, savedChars: 0 };
+    }
+  }
+
   const groups = [];
   for (let i = 0; i < wireMessages.length; i += 1) {
     const m = wireMessages[i];
@@ -240,8 +239,6 @@ export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {
 
   const out = wireMessages.slice();
   let savedChars = 0;
-
-  // Pass 1 (Newest -> Oldest): Track mutated files & duplicate read/list signatures
   const mutatedLater = new Set();
   const seenSignaturesLater = new Set();
 
@@ -253,7 +250,6 @@ export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {
       const tm = out[ti];
       if (tm?.tool_call_id) toolByCallId.set(tm.tool_call_id, { idx: ti, msg: tm });
     }
-
     const isLatestGroup = gIdx === groups.length - 1;
 
     for (const call of aMsg.tool_calls || []) {
@@ -265,7 +261,7 @@ export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {
 
       if (!isLatestGroup && tEntry && tContent.length > 260 && !tContent.startsWith('[Stale ') && !tContent.startsWith('[Duplicate ')) {
         if (name === 'read_file' && args.path && mutatedLater.has(String(args.path))) {
-          const replacement = `[Stale read_file(${args.path}) superseded by a later edit in this turn (${tContent.length} chars freed). Call read_file if fresh post-edit lines are needed.]`;
+          const replacement = `[Stale read_file(${args.path}) superseded by a later edit in this turn (${tContent.length} chars freed).]`;
           savedChars += Math.max(0, tContent.length - replacement.length);
           out[tEntry.idx] = { ...tEntry.msg, content: replacement };
         } else if (name === 'read_file' || name === 'list_files' || name === 'list_symbols') {
@@ -283,7 +279,6 @@ export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {
         }
       }
 
-      // Register mutations & read signatures as we walk backward toward older steps
       if (MUTATING_TOOL_NAMES.has(name) && args.path && !failed) {
         mutatedLater.add(String(args.path));
       }
@@ -295,74 +290,6 @@ export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {
               ? `sym:${args.query || ''}`
               : 'list_files';
         seenSignaturesLater.add(sig);
-        if (name === 'read_file' && args.path && mutatedLater.has(String(args.path))) {
-          // Do not mark post-mutation signature as valid for pre-mutation reads (already handled by mutatedLater)
-        }
-      }
-    }
-  }
-
-  // Pass 2: Epoch Compaction of older groups (keep last 2 groups 100% verbatim; compact older groups once uncompacted tool chars cross threshold)
-  const keepTailGroups = 2;
-  if (groups.length > keepTailGroups) {
-    const olderGroups = groups.slice(0, groups.length - keepTailGroups);
-    const epochThreshold = tokenSaver === 'max' ? 14_000 : 26_000;
-    let olderUncompactedChars = 0;
-
-    for (const grp of olderGroups) {
-      const aMsg = out[grp.assistantIdx];
-      for (const tc of aMsg.tool_calls || []) {
-        const rawArgs = String(tc?.function?.arguments || '');
-        if (rawArgs.length > 850 && !rawArgs.includes('"_compacted_step":true')) {
-          olderUncompactedChars += rawArgs.length;
-        }
-      }
-      for (const ti of grp.toolIndices) {
-        const tc = String(out[ti]?.content || '');
-        if (tc.length > 1500 && !tc.includes('فشرده شد')) {
-          olderUncompactedChars += tc.length;
-        }
-      }
-    }
-
-    if (olderUncompactedChars >= epochThreshold) {
-      for (const grp of olderGroups) {
-        const aMsg = out[grp.assistantIdx];
-        let callsChanged = false;
-        const nextCalls = (aMsg.tool_calls || []).map((tc) => {
-          const rawArgs = String(tc?.function?.arguments || '');
-          if (rawArgs.length <= 850 || rawArgs.includes('"_compacted_step":true')) return tc;
-          callsChanged = true;
-          const parsed = safeParseJson(rawArgs);
-          const compactJson = JSON.stringify({
-            ...(parsed.path ? { path: parsed.path } : {}),
-            ...(parsed.command ? { command: String(parsed.command).slice(0, 90) } : {}),
-            _compacted_step: true,
-            _original_chars: rawArgs.length,
-            _note: 'Applied to workspace; call read_file if latest lines are needed.'
-          });
-          savedChars += Math.max(0, rawArgs.length - compactJson.length);
-          return {
-            ...tc,
-            function: {
-              ...tc.function,
-              arguments: compactJson
-            }
-          };
-        });
-        if (callsChanged) {
-          out[grp.assistantIdx] = { ...aMsg, tool_calls: nextCalls };
-        }
-
-        for (const ti of grp.toolIndices) {
-          const tm = out[ti];
-          const tc = String(tm?.content || '');
-          if (tc.length > 1500 && !tc.includes('فشرده شد') && !tc.startsWith('[Stale ') && !tc.startsWith('[Duplicate ')) {
-            const compacted = `${tc.slice(0, 750)}\n…[خروجی گام قبلی فشرده شد (${tc.length} کاراکتر) — در صورت نیاز read_file با بازه خطوط صدا بزنید]…\n${tc.slice(-300)}`;
-            savedChars += Math.max(0, tc.length - compacted.length);
-            out[ti] = { ...tm, content: compacted };
-          }
-        }
       }
     }
   }
@@ -372,8 +299,7 @@ export function pruneInTurnWireMessages(wireMessages, { tokenSaver = 'max' } = {
 
 /**
  * Zero-Roundtrip `@filepath` / `@filepath:start-end` Pre-Pinner:
- * Injects referenced workspace files (or their structural outline if huge) directly on Step 1
- * so the model skips an entire extra LLM round-trip!
+ * Injects explicitly @-mentioned workspace files on Step 1 so the model skips an extra `read_file` round-trip.
  */
 export function extractMentionedFileContext(userText, workspaceFiles, { tokenSaver = 'max' } = {}) {
   if (tokenSaver === 'off' || typeof userText !== 'string' || !workspaceFiles || typeof workspaceFiles !== 'object') {
@@ -384,7 +310,7 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
   const blocks = [];
   const paths = [];
   let totalChars = 0;
-  const MAX_PREPIN_CHARS = 9_200;
+  const MAX_PREPIN_CHARS = 12_000;
 
   let match;
   while ((match = regex.exec(userText)) !== null) {
@@ -393,7 +319,7 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
     if (!filePath || seen.has(filePath) || workspaceFiles[filePath] === undefined) continue;
     seen.add(filePath);
     const startLine = match[2] ? Number(match[2]) : undefined;
-    const endLine = match[3] ? Number(match[3]) : startLine ? startLine + 90 : undefined;
+    const endLine = match[3] ? Number(match[3]) : startLine ? startLine + 100 : undefined;
 
     const smart = buildSmartFileRead(filePath, workspaceFiles[filePath], {
       startLine,
@@ -409,7 +335,7 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
 
   if (!blocks.length) return { block: '', paths: [], savedRoundtripChars: 0 };
   return {
-    block: `\n\n[محتوای مستقیم فایل‌های اشاره‌شده با @ — بدون نیاز به فراخوانی مجدد read_file روی همین بخش]:\n${blocks.join('\n\n')}`,
+    block: `\n\n[فایل‌های اشاره‌شده با @ — بدون نیاز به فراخوانی مجدد read_file]:\n${blocks.join('\n\n')}`,
     paths,
     savedRoundtripChars: 3_600 * paths.length
   };
@@ -417,8 +343,8 @@ export function extractMentionedFileContext(userText, workspaceFiles, { tokenSav
 
 /**
  * Adaptive Per-Step Reasoning Effort:
- * - Preserves 100% full `baseEffort` on Step 1 (architecture & planning) and on ANY error / patch-rejection / validation-failure / auto-repair step!
- * - Steps down expensive `max`/`xhigh`/`high` reasoning spin on purely mechanical steps (e.g. post-`list_files` lookup or writing a 2-line closing confirmation after all edits & tests already passed cleanly).
+ * - Preserves 100% full `baseEffort` on Step 1 (architecture & planning) and on ANY error / patch-rejection / validation-failure / auto-repair!
+ * - Steps down excessive spin on purely mechanical steps or clean closing confirmations.
  */
 export function resolveAdaptiveStepEffort({
   baseEffort,
@@ -433,13 +359,11 @@ export function resolveAdaptiveStepEffort({
   }
   const levels = Array.isArray(supportedLevels) ? supportedLevels : [];
 
-  // Boost low -> medium automatically during auto-repair of broken syntax!
   if (isAutoRepair || lastStepInfo?.hadError || lastStepInfo?.hadValidationError) {
     if (baseEffort === 'low' && levels.includes('medium')) return 'medium';
     return baseEffort;
   }
 
-  // Step 1 ALWAYS runs at 100% of the user's chosen Effort!
   if (step <= 1 || !lastStepInfo) {
     return baseEffort;
   }
@@ -456,27 +380,33 @@ export function resolveAdaptiveStepEffort({
     return baseEffort;
   }
 
-  // Case 1: Previous step ONLY listed files/symbols and succeeded with 0 errors
   if (lastStepInfo.onlyListing) {
     return tokenSaver === 'max'
       ? pickSupported(['low', 'minimal', 'medium'])
       : pickSupported(['medium', 'low']);
   }
 
-  // Case 2: Previous step applied edits/commands AND every validation & command passed 100% cleanly
   if (lastStepInfo.justVerifiedClean) {
     return tokenSaver === 'max'
       ? pickSupported(['low', 'medium'])
       : pickSupported(['medium']);
   }
 
+  // On clean intermediate read/search steps, step down ultra-expensive `max`/`xhigh` by 1 notch to `high`
+  if (tokenSaver === 'max' && (baseEffort === 'max' || baseEffort === 'xhigh')) {
+    return pickSupported(['high', baseEffort]);
+  }
+
   return baseEffort;
 }
 
 /**
- * Inject explicit `cache_control: { type: 'ephemeral' }` breakpoints for Anthropic Claude & Google Gemini
- * on OpenRouter (activating 75%–90%-off Cached Input reads!), while leaving OpenAI / DeepSeek / Qwen / Tooken
- * plain strings intact for their automatic byte-identical prefix KV-caching.
+ * FIXED-ANCHOR Prompt Cache Breakpoints for Anthropic Claude & Google Gemini on OpenRouter:
+ * - NEVER uses a moving `messages.length - 3` index (which strips `cache_control` on the next step, invalidating the cache and charging +25% cache-write on every step!).
+ * - Instead anchors strictly on:
+ *   1) Last `tools` schema
+ *   2) `messages[0]` (`system` prompt, if >= 1200 chars)
+ *   3) The FIXED User Turn Anchor (`anchorUserIdx`) — constant across ALL tool steps 1..N of a turn!
  */
 export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', model = '', tokenSaver = 'max' } = {}) {
   if (
@@ -492,8 +422,21 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
   const nextMessages = messages.map((m) => ({ ...m }));
   let breakpointsUsed = 0;
 
-  // Breakpoint 1: System prompt (largest static block)
-  if (nextMessages[0]?.role === 'system' && typeof nextMessages[0].content === 'string' && nextMessages[0].content.length >= 400) {
+  // Breakpoint 1: Last tool schema (sits at very start of prompt prefix)
+  let nextTools = tools;
+  if (Array.isArray(tools) && tools.length > 0) {
+    nextTools = tools.map((t, idx) =>
+      idx === tools.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
+    );
+    breakpointsUsed += 1;
+  }
+
+  // Breakpoint 2: System prompt (must be >= 1200 chars to meet minimum cacheable token threshold)
+  if (
+    nextMessages[0]?.role === 'system' &&
+    typeof nextMessages[0].content === 'string' &&
+    nextMessages[0].content.length >= 1200
+  ) {
     nextMessages[0] = {
       ...nextMessages[0],
       content: [
@@ -507,12 +450,23 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
     breakpointsUsed += 1;
   }
 
-  // Breakpoint 2: Stable prefix tail (2 messages back from tip so multi-step agent loops hit cache on every new step!)
-  const pivotIdx = nextMessages.length >= 4 ? nextMessages.length - 3 : nextMessages.length - 1;
-  if (pivotIdx >= 1 && breakpointsUsed < 3) {
-    const target = nextMessages[pivotIdx];
-    if (target && (target.role === 'user' || target.role === 'assistant') && typeof target.content === 'string' && target.content.length > 0) {
-      nextMessages[pivotIdx] = {
+  // Breakpoint 3: FIXED Turn-Entry User Message (index NEVER changes across Step 1, Step 2, ..., Step N!)
+  let anchorUserIdx = -1;
+  for (let i = nextMessages.length - 1; i >= 1; i -= 1) {
+    const m = nextMessages[i];
+    if (m?.role === 'user') {
+      const txt = typeof m.content === 'string' ? m.content : '';
+      if (!txt.startsWith('[ادامه‌ی خودکار') && !txt.startsWith('[کنترل کیفیت خودکار')) {
+        anchorUserIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (anchorUserIdx >= 1) {
+    const target = nextMessages[anchorUserIdx];
+    if (typeof target.content === 'string' && target.content.length > 0) {
+      nextMessages[anchorUserIdx] = {
         ...target,
         content: [
           {
@@ -523,15 +477,33 @@ export function applyPromptCacheBreakpoints(messages, tools, { baseUrl = '', mod
         ]
       };
       breakpointsUsed += 1;
+    } else if (Array.isArray(target.content) && target.content.length > 0) {
+      const clonedParts = target.content.map((p, idx) =>
+        idx === target.content.length - 1 ? { ...p, cache_control: { type: 'ephemeral' } } : p
+      );
+      nextMessages[anchorUserIdx] = { ...target, content: clonedParts };
+      breakpointsUsed += 1;
     }
   }
 
-  // Breakpoint 3: Last tool schema
-  let nextTools = tools;
-  if (Array.isArray(tools) && tools.length > 0 && breakpointsUsed < 4) {
-    nextTools = tools.map((t, idx) =>
-      idx === tools.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
-    );
+  // Breakpoint 4 (Optional Fixed Epoch): Only if turn exceeds 4 full tool rounds after anchorUserIdx,
+  // place ONE fixed checkpoint at anchorUserIdx + 8 (never moves for Steps 5..9).
+  const fixedEpochIdx = anchorUserIdx >= 1 ? anchorUserIdx + 8 : -1;
+  if (fixedEpochIdx > 0 && fixedEpochIdx < nextMessages.length - 1 && breakpointsUsed < 4) {
+    const epMsg = nextMessages[fixedEpochIdx];
+    if (epMsg?.role === 'tool' && typeof epMsg.content === 'string' && epMsg.content.length > 0) {
+      nextMessages[fixedEpochIdx] = {
+        ...epMsg,
+        content: [
+          {
+            type: 'text',
+            text: epMsg.content,
+            cache_control: { type: 'ephemeral' }
+          }
+        ]
+      };
+      breakpointsUsed += 1;
+    }
   }
 
   return { messages: nextMessages, tools: nextTools, injected: breakpointsUsed > 0 };
