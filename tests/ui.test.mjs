@@ -729,6 +729,21 @@ $('chat').querySelector('.gen-image-card [data-role="zoom-gen-img"]').click();
 assert.ok($('imageLightboxModal').classList.contains('open'), 'clicking studio image opens fullscreen lightbox');
 window.closeModal('imageLightboxModal');
 
+// Zero-overflow mobile layout guards (viewport lock, modal grid track clamp, pill non-crushing, busy button swap)
+const styleText = Array.from(window.document.querySelectorAll('style')).map((s) => s.textContent).join('\n');
+assert.ok(/html\s*\{[^}]*overflow-x\s*:\s*hidden/.test(styleText), 'html locks overflow-x:hidden against mobile viewport shift');
+assert.ok(/\.modal\s*\{[^}]*grid-template-columns\s*:\s*minmax\(0,\s*1fr\)/.test(styleText), '.modal clamps implicit grid column to minmax(0,1fr)');
+assert.ok(/\.sendrow\s*\{[^}]*flex-wrap\s*:\s*wrap/.test(styleText), '.sendrow wraps gracefully instead of overflowing .chatbox');
+assert.ok(/\.mode-pill\s*\{[^}]*flex\s*:\s*0\s+0\s+auto/.test(styleText) && /\.mode-pill\s*\{[^}]*overflow\s*:\s*hidden/.test(styleText), '.mode-pill never crushes into a circle with bleeding text');
+assert.ok(/\.power-pill\s*\{[^}]*flex\s*:\s*0\s+0\s+auto/.test(styleText) && /\.power-pill\s*\{[^}]*overflow\s*:\s*hidden/.test(styleText), '.power-pill never crushes into a circle with bleeding text');
+assert.ok(/body\.is-working\s+#sendBtn\s*\{\s*display\s*:\s*none!important\s*\}/.test(styleText), 'disabled #sendBtn hides while #stopTurnBtn is shown during generation');
+assert.ok(styleText.includes('.top-drawer .workspace-nav{display:none!important}'), 'duplicate workspace-nav inside #topDrawer is hidden on mobile');
+
+window.document.body.classList.add('is-working');
+assert.equal(window.getComputedStyle($('sendBtn')).display, 'none', '#sendBtn computed display is none while working');
+window.document.body.classList.remove('is-working');
+assert.notEqual(window.getComputedStyle($('sendBtn')).display, 'none', '#sendBtn computed display is restored when idle');
+
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
 process.exit(0);

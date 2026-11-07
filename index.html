@@ -15,7 +15,9 @@
   font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;font-size:13px}
+[hidden]{display:none!important}
+html{width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%}
+body{margin:0;width:100%;max-width:100%;position:relative;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;overflow-x:clip;font-size:13px}
 button,input,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:1px solid var(--line);background:#1b2130;border-radius:7px;padding:7px 10px}
 button:hover{background:#252d3e;border-color:#3a465b}
@@ -114,9 +116,9 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .primary:hover{background:#91e7b2}
 .ghost{background:transparent}
 .icon-btn{padding:5px 8px;font-size:11px}
-.modal{position:fixed;inset:0;background:#0009;display:none;place-items:center;z-index:20;padding:14px}
+.modal{position:fixed;inset:0;width:100%;max-width:100vw;background:#0009;display:none;grid-template-columns:minmax(0,1fr);place-items:center;z-index:20;padding:14px;overflow-x:hidden}
 .modal.open{display:grid}
-.modal-card{width:min(540px,100%);max-height:92vh;overflow:auto;background:#141923;border:1px solid #343c4c;border-radius:12px;padding:18px;box-shadow:0 20px 90px #0009}
+.modal-card{width:min(540px,100%);min-width:0;max-width:100%;max-height:92vh;overflow-y:auto;overflow-x:hidden;background:#141923;border:1px solid #343c4c;border-radius:12px;padding:18px;box-shadow:0 20px 90px #0009}
 .modal-card h2{font-size:16px;margin:0 0 6px}
 .modal-card p{color:var(--muted);font-size:12px;line-height:1.8;margin:0}
 .field-label{display:block;margin:13px 0 6px;color:#bfc6d3;font-size:12px}
@@ -765,7 +767,8 @@ body[data-theme="claude-day"] .top-drawer .workspace-nav button[aria-pressed="tr
 }
 .chat-input::placeholder{color:var(--muted);opacity:.82}
 .sendrow{
-  display:flex;align-items:center;justify-content:flex-start;gap:5px;
+  display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;row-gap:6px;column-gap:5px;
+  min-width:0;max-width:100%;
   border-top:1px solid var(--line);margin-top:4px!important;padding-top:6px!important;
 }
 .comp-icon-btn{
@@ -777,6 +780,7 @@ body[data-theme="claude-day"] .top-drawer .workspace-nav button[aria-pressed="tr
 .comp-icon-btn:hover{border-color:var(--claude-bright);color:var(--text)}
 .mode-pill{
   display:inline-flex;align-items:center;gap:4px;padding:3px 9px!important;min-height:32px!important;min-width:34px;
+  flex:0 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;
   border-radius:999px!important;font-size:11px;font-weight:700;white-space:nowrap;
   background:var(--claude-tint);border:1px solid rgba(232,123,82,.5);color:var(--claude-bright);
 }
@@ -787,8 +791,11 @@ body[data-theme="claude-day"] .mode-pill[data-mode="plan"]{color:#2459a8}
 .mode-pill[data-mode="full-auto"]{background:rgba(130,217,160,.16);border-color:rgba(130,217,160,.52);color:var(--green)}
 .comp-chip-btn.active{border-color:var(--claude);color:var(--claude-bright);background:var(--claude-tint)}
 body[data-theme="claude-day"] .comp-chip-btn.active{color:var(--claude-deep)}
-.sendrow .hint{margin-inline-start:auto;font-size:10.5px;color:var(--muted);white-space:nowrap}
-.send-pill{min-height:32px!important;padding:4px 13px!important;border-radius:999px!important;font-size:12px;white-space:nowrap;flex:none}
+.sendrow .hint{margin-inline-start:auto;font-size:10.5px;color:var(--muted);white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.sendrow .hint:empty{display:none}
+.send-pill{min-height:32px!important;padding:4px 13px!important;border-radius:999px!important;font-size:12px;white-space:nowrap;flex:0 0 auto;margin-inline-start:auto}
+.sendrow .hint:not(:empty) ~ .send-pill{margin-inline-start:0}
+body.is-working #sendBtn{display:none!important}
 
 /* Slash Command & @File Mention Floating Palette */
 .floating-palette{
@@ -849,6 +856,7 @@ body[data-theme="claude-day"] .theme-pill-btn.active{color:var(--claude-deep)}
 /* AI Power & Overdrive Booster Pill + 4-Axis Multi-Tier Deck */
 .power-pill{
   display:inline-flex;align-items:center;gap:4px;padding:3px 9px!important;min-height:32px!important;min-width:34px;
+  flex:0 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;
   border-radius:999px!important;font-size:11px;font-weight:700;white-space:nowrap;
   background:var(--panel2);border:1px solid var(--line-strong);color:var(--text-soft);transition:all .2s ease;
 }
@@ -1051,8 +1059,8 @@ body[data-theme="midnight"] .scroll-bottom-fab{background:rgba(22,27,37,.9);bord
 }
 @media(hover:none) and (pointer:coarse){
   button:active,.sheet-item:active,.model-card:active,.conv:active{transform:scale(.98)}
-  .comp-icon-btn{width:36px;height:36px;min-width:36px;min-height:36px!important}
-  .send-pill{min-height:36px!important;padding:5px 14px!important}
+  .comp-icon-btn{width:33px;height:33px;min-width:33px;min-height:33px!important}
+  .send-pill{min-height:34px!important;padding:4px 12px!important}
 }
 
 /* Rich Code Blocks with Language Header + One-Tap Copy & Markdown Polish */
@@ -1155,6 +1163,68 @@ body[data-theme="claude-day"] .img-chip.active{color:var(--claude-deep)}
 }
 .comp-icon-btn.art-btn{
   border-color:rgba(232,123,82,.38);background:var(--claude-tint);
+}
+
+/* =========================================================================
+   Zero-Overflow Responsive Layout Guard (Mobile Chrome / RTL / Bottom Sheet)
+   ========================================================================= */
+.top,.top-drawer,.top-drawer-inner,.mobile-view-bar,.layout,.right,.center,.chat,.chatbox{
+  min-width:0;max-width:100%;
+}
+.top{width:100%;overflow:hidden}
+.top-start{flex:0 0 auto;min-width:0}
+.top-end{flex:1 1 auto;min-width:0;justify-content:flex-end;overflow:hidden}
+.model-badge{flex:0 1 auto;min-width:46px}
+.token-pill{flex:0 1 auto;min-width:44px}
+#tokenQuotaText{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#topMarathonPill{flex:0 1 auto;min-width:0;max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat{overflow-x:hidden}
+.msg,.msg-text,.code-fence-wrap,.msg .tool-line,.turn-diff-card,.turn-diff-row,.gen-image-card,.welcome,.resume-checkpoint-card{
+  min-width:0;max-width:100%;
+}
+.code-fence-wrap pre,.msg pre{max-width:100%;overflow-x:auto}
+.sheet-card,.sheet-head,.sheet-search,.sheet-group,.sheet-item,.sheet-main,.sheet-nav-row,.spec-id-row{
+  min-width:0;max-width:100%;box-sizing:border-box;
+}
+.sheet-head h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px}
+.sheet-name,.sheet-sub{overflow-wrap:anywhere;word-break:break-word}
+.sheet-nav-row{gap:8px}
+.sheet-nav-row > span,.spec-id-row > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media(max-width:760px){
+  .top{padding:0 8px!important;gap:5px!important}
+  .top-start,.top-end{gap:4px}
+  .top .logo{width:26px!important;height:26px!important;font-size:14px!important}
+  .icon-pill,.quick-new-btn{width:32px!important;height:32px!important;min-width:32px!important;min-height:32px!important}
+  .model-badge{max-width:102px;min-width:44px;font-size:10.5px;padding:3px 6px;min-height:30px}
+  .token-pill{max-width:84px;min-width:42px;padding:3px 6px!important;min-height:30px!important;font-size:10px!important;gap:4px}
+  .drawer-toggle-btn{padding:3px 7px!important;min-height:30px!important;font-size:10.5px}
+  .top-drawer .workspace-nav{display:none!important}
+  .drawer-tools{gap:5px;width:100%;max-width:100%}
+  .drawer-tools button{
+    flex:1 1 auto;justify-content:center;text-align:center;
+    min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;
+    padding:4px 8px;font-size:11px;
+  }
+  #modelModal.open{align-items:flex-end;justify-items:stretch;padding:0!important}
+  #modelModal .sheet-card{
+    width:100%;max-width:100%;border-radius:22px 22px 0 0;
+    border-inline:0;border-bottom:0;
+    padding:16px 14px max(18px,env(safe-area-inset-bottom));
+  }
+  .chatbox{margin:0 8px max(6px,env(safe-area-inset-bottom))!important;padding:7px 8px!important}
+  .chat-input{font-size:16px!important}
+  .sendrow{column-gap:4px;row-gap:5px}
+  #composerHint{display:none!important}
+  .comp-icon-btn{width:32px!important;height:32px!important;min-width:32px!important;min-height:32px!important;font-size:13px}
+  .mode-pill,.power-pill{min-height:32px!important;padding:3px 7px!important;font-size:10.5px}
+  .send-pill{min-height:32px!important;padding:4px 11px!important;font-size:11.5px;margin-inline-start:auto!important}
+}
+@media(max-width:390px){
+  .top .brand .logo{display:none}
+  .comp-icon-btn{width:30px!important;height:30px!important;min-width:30px!important;min-height:30px!important;font-size:12.5px}
+  .mode-pill,.power-pill{min-height:30px!important;padding:2px 6px!important;font-size:10px}
+  .send-pill{min-height:30px!important;padding:3px 10px!important;font-size:11px}
 }
 </style>
 </head>
