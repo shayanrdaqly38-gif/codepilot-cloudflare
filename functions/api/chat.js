@@ -945,6 +945,7 @@ export async function onRequestPost(context) {
       const newMessages = [];
       let finalText = '';
       let usedModel = '';
+      let requestedModelUsed = selectedModel || '';
       let appliedEffort = reasoningEffort;
       let totalPromptTokens = 0;
       let totalCompletionTokens = 0;
@@ -1364,6 +1365,9 @@ export async function onRequestPost(context) {
               throw stepErr;
             }
             usedModel = result.model;
+            if (!requestedModelUsed && result.requestedModel) {
+              requestedModelUsed = result.requestedModel;
+            }
             if (result.reasoningEffort !== undefined) appliedEffort = result.reasoningEffort;
             if (result.rateLimit) latestRateLimit = result.rateLimit;
             const stepPromptTokens = Number(result.usage?.prompt_tokens) || 0;
@@ -1647,13 +1651,26 @@ export async function onRequestPost(context) {
                 }
                 stepStreamedContent = '';
                 turn.savedRequests = (turn.savedRequests || 0) + 1;
+                const fastGw = effectiveEnv._activeGateway || {
+                  slot: 1,
+                  baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
+                };
                 newMessages.push({
                   role: 'assistant',
                   content: finalText,
+                  ...(usedModel ? { actual_model: usedModel } : {}),
+                  ...(requestedModelUsed ? { requested_model: requestedModelUsed } : {}),
+                  gateway_info: fastGw,
                   created_at: Date.now()
                 });
                 messages.push({ role: 'assistant', content: finalText });
-                send('assistant', { content: finalText, interrupted: false });
+                send('assistant', {
+                  content: finalText,
+                  interrupted: false,
+                  actualModel: usedModel,
+                  requestedModel: requestedModelUsed,
+                  activeGateway: fastGw
+                });
                 break;
               }
               continue;
@@ -1720,16 +1737,29 @@ export async function onRequestPost(context) {
             }
             finalText = (missingImgMarkdown + stitchedProse.trim()).trim() || 'انجام شد.';
             stepStreamedContent = '';
+            const turnActiveGw = effectiveEnv._activeGateway || {
+              slot: 1,
+              baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
+            };
             newMessages.push({
               role: 'assistant',
               content: finalText,
+              ...(usedModel ? { actual_model: usedModel } : {}),
+              ...(requestedModelUsed ? { requested_model: requestedModelUsed } : {}),
+              gateway_info: turnActiveGw,
               ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
               ...(appliedEffort && appliedEffort !== 'none' ? { reasoning_effort: appliedEffort } : {}),
               ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
               created_at: Date.now()
             });
             messages.push({ role: 'assistant', content: finalText });
-            send('assistant', { content: finalText, interrupted: Boolean(turnInterruptedReason) });
+            send('assistant', {
+              content: finalText,
+              interrupted: Boolean(turnInterruptedReason),
+              actualModel: usedModel,
+              requestedModel: requestedModelUsed,
+              activeGateway: turnActiveGw
+            });
             break;
           }
 
@@ -1822,11 +1852,34 @@ export async function onRequestPost(context) {
             savedTokensEstimate > 0
               ? Math.min(96, Math.round((savedTokensEstimate / baselineTokens) * 100))
               : 0;
+          const normCompareModel = (val) =>
+            String(val || '')
+              .trim()
+              .toLowerCase()
+              .replace(/:free$/, '')
+              .replace(/-\d{4}-?\d{2}-?\d{2}$/, '');
+          const normReq = normCompareModel(requestedModelUsed);
+          const normAct = normCompareModel(usedModel);
+          const modelMismatch = Boolean(
+            normReq &&
+              normAct &&
+              normReq !== normAct &&
+              !normAct.endsWith(`/${normReq}`) &&
+              !normReq.endsWith(`/${normAct}`) &&
+              !normAct.startsWith(`${normReq}-`)
+          );
+          const finalActiveGw = effectiveEnv._activeGateway || {
+            slot: 1,
+            baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
+          };
           send('done', {
             content: displayFinalText,
             marathonCompleted: marathonGoalDone,
             model: usedModel,
-            activeGateway: effectiveEnv._activeGateway || null,
+            actualModel: usedModel,
+            requestedModel: requestedModelUsed,
+            modelMismatch,
+            activeGateway: finalActiveGw,
             reasoningEffort: appliedEffort,
             reasoningTokens: totalReasoningTokens,
             turnTokens: {

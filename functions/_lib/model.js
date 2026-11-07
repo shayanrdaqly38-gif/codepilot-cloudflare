@@ -297,16 +297,17 @@ const OPENROUTER_PREFERRED_DEFAULTS = [
   'openrouter/auto'
 ];
 const OPENROUTER_FALLBACK_IDS = [
-  { id: 'openrouter/auto', name: 'OpenRouter Auto (Best Router)', context_length: 200_000, featured: true },
-  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', context_length: 200_000, featured: true },
-  { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', context_length: 200_000, featured: true },
-  { id: 'openai/gpt-4.1', name: 'GPT-4.1', context_length: 1_000_000, featured: true },
-  { id: 'openai/o4-mini', name: 'OpenAI o4-mini', context_length: 200_000, featured: true },
-  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_length: 1_000_000, featured: true },
-  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_length: 1_000_000, featured: true },
-  { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3', context_length: 128_000, featured: true },
-  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', context_length: 128_000, featured: true },
-  { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder', context_length: 256_000, featured: true }
+  { id: 'openrouter/auto', name: 'OpenRouter Auto (Best Router)', context_length: 200_000, featured: true, pricingTier: 'auto' },
+  { id: 'openrouter/free', name: 'OpenRouter Free Router (:free)', context_length: 128_000, featured: true, pricing: { prompt: '0', completion: '0' } },
+  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', context_length: 200_000, featured: true, pricingTier: 'paid' },
+  { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', context_length: 200_000, featured: true, pricingTier: 'paid' },
+  { id: 'openai/gpt-4.1', name: 'GPT-4.1', context_length: 1_000_000, featured: true, pricingTier: 'paid' },
+  { id: 'openai/o4-mini', name: 'OpenAI o4-mini', context_length: 200_000, featured: true, pricingTier: 'paid' },
+  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_length: 1_000_000, featured: true, pricingTier: 'paid' },
+  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_length: 1_000_000, featured: true, pricingTier: 'paid' },
+  { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3', context_length: 128_000, featured: true, pricingTier: 'paid' },
+  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', context_length: 128_000, featured: true, pricingTier: 'paid' },
+  { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder', context_length: 256_000, featured: true, pricingTier: 'paid' }
 ];
 const DEFAULT_TIMEOUT_MS = 95_000;
 const LIVE_MODELS_TTL_MS = 5 * 60 * 1000;
@@ -1627,6 +1628,24 @@ export function parseProviderModelItem(item, options = {}) {
     };
   }
 
+  let pricingTier = typeof item.pricingTier === 'string' ? item.pricingTier : null;
+  if (!pricingTier) {
+    if (idLower.endsWith(':free') || idLower === 'openrouter/free') {
+      pricingTier = 'free';
+    } else if (idLower === 'openrouter/auto') {
+      pricingTier = 'auto';
+    } else if (item.pricing && typeof item.pricing === 'object') {
+      const pPrompt = Number(item.pricing.prompt);
+      const pComp = Number(item.pricing.completion);
+      const hasPromptStr = item.pricing.prompt !== undefined && item.pricing.prompt !== null && String(item.pricing.prompt).trim() !== '';
+      if (hasPromptStr && pPrompt === 0 && (Number.isNaN(pComp) || pComp === 0)) {
+        pricingTier = 'free';
+      } else if ((Number.isFinite(pPrompt) && pPrompt > 0) || (Number.isFinite(pComp) && pComp > 0)) {
+        pricingTier = 'paid';
+      }
+    }
+  }
+
   if (!base) {
     return {
       id,
@@ -1635,6 +1654,7 @@ export function parseProviderModelItem(item, options = {}) {
       label: title,
       tier: 'live',
       featured: isFeatured,
+      pricingTier,
       maxInputTokens,
       maxOutputTokens,
       vision,
@@ -1651,6 +1671,7 @@ export function parseProviderModelItem(item, options = {}) {
     label: base.label || title,
     tier: base.tier || 'live',
     featured: isFeatured,
+    pricingTier,
     maxInputTokens,
     maxOutputTokens,
     vision,
@@ -2345,7 +2366,7 @@ function extractSafeUpstreamError(errText, secrets = []) {
   return clean;
 }
 
-function classifyInlineProviderError(errObj, secrets = []) {
+function classifyInlineProviderError(errObj, secrets = [], ctxInfo = {}) {
   if (!errObj) return null;
   const rawMsg =
     (typeof errObj === 'string' && errObj) ||
@@ -2357,7 +2378,33 @@ function classifyInlineProviderError(errObj, secrets = []) {
   const clean = stripSecrets(String(rawMsg || '').replace(/\s+/g, ' ').trim(), secrets).slice(0, 180);
   const combined = `${rawCode} ${clean}`.toLowerCase();
 
+  if (
+    rawCode === '404' ||
+    /(not\s+a\s+valid\s+model|model.*(?:not[_\s-]*found|does\s+not\s+exist|unavailable|unknown|deprecated)|no\s+endpoints\s+found)/.test(
+      combined
+    )
+  ) {
+    const mName = ctxInfo?.model || 'انتخابی';
+    return {
+      status: 502,
+      code: 'model_not_found',
+      message: `🚫 مدل «${mName}» در درگاه فعلی وجود ندارد یا موقتاً در دسترس نیست (درگاه تغییر نکرد). لطفاً مدلی از فهرست همین درگاه انتخاب کنید.`
+    };
+  }
+
   if (/quota|insufficient|balance|credit|billing|exhausted|afford|اعتبار|سهمیه|موجودی/.test(combined)) {
+    const mName = String(ctxInfo?.model || '');
+    if (
+      !ctxInfo?.hasPartialContent &&
+      ((ctxInfo?.isOpenRouter && mName && !/(:free|^openrouter\/free)$/i.test(mName)) ||
+        /(paid\s+model|requires\s+paid|upgrade.*plan.*model|pro\s+plan\s+required)/.test(combined))
+    ) {
+      return {
+        status: 402,
+        code: 'model_paid_required',
+        message: `💳 مدل «${mName}» پولی است و حساب فعلی در این درگاه شارژ دلاری ندارد (درگاه تغییر نکرد). یک مدل رایگان (:free) انتخاب کنید یا حساب/درگاه مناسب را فعال کنید.`
+      };
+    }
     return {
       status: 402,
       code: 'model_quota_exhausted',
@@ -2907,26 +2954,50 @@ function extractGatewayHost(urlStr) {
   }
 }
 
+const MODEL_SPECIFIC_NON_FAILOVER_CODES = new Set([
+  'model_paid_required',
+  'model_not_found',
+  'model_unavailable',
+  'model_rejected',
+  'context_too_large'
+]);
+
 const FAILOVER_ELIGIBLE_CODES = new Set([
   'model_rate_limited',
   'model_quota_exhausted',
   'model_upstream',
   'model_auth',
-  'model_not_found',
   'model_timeout',
   'model_bad_response',
-  'model_unreachable',
-  'context_too_large',
-  'model_rejected'
+  'model_unreachable'
 ]);
 
-const FAILOVER_ELIGIBLE_STATUSES = new Set([401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 504]);
+const FAILOVER_ELIGIBLE_STATUSES = new Set([401, 402, 403, 408, 429, 500, 502, 503, 504]);
 
 function isFailoverEligibleError(err) {
   if (!err) return false;
   if (err.code === 'turn_stopped' || err.code === 'subrequest_limit') return false;
+  if (MODEL_SPECIFIC_NON_FAILOVER_CODES.has(err.code)) return false;
   if (err.partialContent) return false;
   return FAILOVER_ELIGIBLE_CODES.has(err.code) || FAILOVER_ELIGIBLE_STATUSES.has(Number(err.status));
+}
+
+function injectRuntimeModelIdentity(messages, { model, baseUrl, gatewaySlot = 1 } = {}) {
+  if (!Array.isArray(messages) || !messages.length) return messages;
+  const first = messages[0];
+  if (!first || first.role !== 'system' || typeof first.content !== 'string') return messages;
+  if (!first.content.includes('You are CodePilot') || first.content.includes('## Verified Runtime AI Identity')) {
+    return messages;
+  }
+  const host = extractGatewayHost(baseUrl) || String(baseUrl || '');
+  const slotNum = Number(gatewaySlot) || 1;
+  const identityNote =
+    `\n\n## Verified Runtime AI Identity\n` +
+    `- Active upstream LLM model ID on this call: \`${model}\` | Active gateway: درگاه ${slotNum} (\`${host}\`).\n` +
+    `- IMPORTANT: "CodePilot" is ONLY the IDE/agent application name, NOT your AI model family. Whenever the user asks which AI, LLM, or model you are (e.g. «کدوم هوش مصنوعی هستی؟» / «واقعاً کدوم مدل هستی؟»), report your exact active model ID (\`${model}\`), its real AI creator/family, and active gateway (\`درگاه ${slotNum}: ${host}\`) honestly — even if earlier messages in this chat were generated by a different model.`;
+  const next = messages.slice();
+  next[0] = { ...first, content: first.content + identityNote };
+  return next;
 }
 
 function buildOrderedGatewayChain(env) {
@@ -3072,6 +3143,7 @@ export async function callModel(env, payload) {
       MODEL_FALLBACK: gw.slot === 1 && isTooken ? env.MODEL_FALLBACK : 'off',
       _apiKeyPool: Array.isArray(gw.apiKeyPool) && gw.apiKeyPool.length > 1 ? gw.apiKeyPool : null,
       _fallbackProvider: null,
+      _gatewaySlot: gw.slot || 1,
       _hasNextGateway: hasNextGateway,
       _isFallbackAttempt: gw.slot > 1,
       _discoveredSpecs: gwDiscovered
@@ -3210,8 +3282,6 @@ async function callModelOnProvider(env, payload) {
       if (!candidates.includes(candidate)) candidates.push(candidate);
       if (candidates.length >= 3) break;
     }
-  } else if (isOpenRouter && /:free$/i.test(requestedModel) && requestedModel !== 'openrouter/free') {
-    candidates.push('openrouter/free');
   }
 
   let activeMessages = payload.messages;
@@ -3243,13 +3313,19 @@ async function callModelOnProvider(env, payload) {
     let omitStreamOptions = false;
     let omitCacheControl = false;
     const tokenSaverMode = payload.tokenSaver || env?._agentConfig?.tokenSaver || 'max';
+    const gatewaySlot = Number(env?._gatewaySlot) || 1;
 
     while (variantIdx < wireVariants.length) {
       const currentVariant = wireVariants[variantIdx];
       const streamThisAttempt = useUpstreamStream && !forceNonStreamFallback;
+      const identityMessages = injectRuntimeModelIdentity(activeMessages, {
+        model,
+        baseUrl,
+        gatewaySlot
+      });
       const cacheWrapped = omitCacheControl
-        ? { messages: activeMessages, tools: payload.tools, injected: false }
-        : applyPromptCacheBreakpoints(activeMessages, payload.tools, {
+        ? { messages: identityMessages, tools: payload.tools, injected: false }
+        : applyPromptCacheBreakpoints(identityMessages, payload.tools, {
             baseUrl,
             model,
             tokenSaver: tokenSaverMode
@@ -3353,7 +3429,12 @@ async function callModelOnProvider(env, payload) {
         // 1. Inline error returned inside a 200 JSON or mid-SSE stream (e.g. quota exhausted mid-generation)
         const inlineErrRaw = snap?.inlineError || parsedOutcome?.error || (data?.error && !data?.choices?.length ? data.error : null);
         if (inlineErrRaw) {
-          const classified = classifyInlineProviderError(inlineErrRaw, secrets);
+          const classified = classifyInlineProviderError(inlineErrRaw, secrets, {
+            isOpenRouter,
+            model,
+            baseUrl,
+            hasPartialContent: Boolean(snap?.rawContent)
+          });
           const err = new Error(classified.message);
           err.status = classified.status;
           err.code = classified.code;
@@ -3463,6 +3544,7 @@ async function callModelOnProvider(env, payload) {
 
         return {
           model: String(data.model || model),
+          requestedModel: model,
           finishReason: String(choice.finish_reason || 'stop'),
           interrupted: Boolean(data.interrupted || choice.finish_reason === 'interrupted'),
           reasoning: cleanReasoning,
@@ -3623,17 +3705,6 @@ async function callModelOnProvider(env, payload) {
         continue;
       }
 
-      // If a backup gateway rejected a user-selected model ID as unknown/unavailable, fall back to that gateway's own defaultModel:
-      if (
-        (status === 404 || (status === 400 && /model.*(?:not[_\s-]*found|does not exist|invalid|unavailable|unknown)/i.test(errText))) &&
-        defaultModel &&
-        defaultModel !== model &&
-        !candidates.includes(defaultModel)
-      ) {
-        candidates.push(defaultModel);
-        break;
-      }
-
       if ((status === 404 || (status === 429 && !isDailyQuota429 && !env?._hasNextGateway) || status >= 500) && cIndex + 1 < candidates.length) {
         break;
       }
@@ -3646,6 +3717,18 @@ async function callModelOnProvider(env, payload) {
         );
       }
       if (status === 402) {
+        const isPaidModelRejection =
+          (isOpenRouter && !/(:free|^openrouter\/free)$/i.test(model)) ||
+          /(paid\s+model|requires\s+paid|upgrade.*plan.*model|pro\s+plan\s+required|tier.*not\s+include|not\s+available\s+on\s+free)/i.test(
+            errText
+          );
+        if (isPaidModelRejection) {
+          fail(
+            `💳 مدل «${model}» پولی است و حساب فعلی در این درگاه (${extractGatewayHost(baseUrl)}) شارژ یا اشتراک پولی برای آن ندارد (درگاه تغییر نکرد). یک مدل رایگان (:free) انتخاب کنید یا حساب/درگاه مناسب را فعال کنید.`,
+            402,
+            'model_paid_required'
+          );
+        }
         fail(
           `اعتبار یا سهمیه‌ی حساب/کلید در سرویس مدل تمام شده است${lastErrDetail ? ` (${lastErrDetail})` : ''}.`,
           402,
@@ -3653,7 +3736,11 @@ async function callModelOnProvider(env, payload) {
         );
       }
       if (status === 404) {
-        fail(`مدل یا مسیر «${model}» در سرویس فعلی پیدا نشد (آدرس یا نام مدل را بررسی کنید).`, 502, 'model_not_found');
+        fail(
+          `🚫 مدل یا مسیر «${model}» در درگاه فعلی (${extractGatewayHost(baseUrl)}) وجود ندارد یا در دسترس نیست (درگاه تغییر نکرد). لطفاً مدلی از فهرست همین درگاه انتخاب کنید.`,
+          502,
+          'model_not_found'
+        );
       }
       if (status === 408 || status === 499) {
         fail('پاسخ مدل طولانی شد و ارتباط توسط درگاه بسته شد. دوباره تلاش کنید یا سطح تفکر را کمتر کنید.', 504, 'model_timeout');
@@ -3673,6 +3760,17 @@ async function callModelOnProvider(env, payload) {
         throw rateErr;
       }
       if (status >= 400 && status < 500) {
+        if (
+          /(not\s+a\s+valid\s+model|model.*(?:not[_\s-]*found|does\s+not\s+exist|unavailable|unknown|deprecated)|no\s+endpoints\s+found)/i.test(
+            errText
+          )
+        ) {
+          fail(
+            `🚫 مدل «${model}» در درگاه فعلی (${extractGatewayHost(baseUrl)}) وجود ندارد یا در دسترس نیست (درگاه تغییر نکرد). لطفاً مدلی از فهرست همین درگاه انتخاب کنید.`,
+            502,
+            'model_not_found'
+          );
+        }
         fail(
           `درخواست توسط مدل رد شد${lastErrDetail ? `: ${lastErrDetail}` : ' (ناسازگاری پارامتر یا محتوا).'}` ,
           502,

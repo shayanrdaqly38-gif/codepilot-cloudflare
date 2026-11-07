@@ -1789,7 +1789,12 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <button class="sheet-icon-btn" onclick="refreshLiveModels()" id="refreshModelsBtn" title="بروزرسانی زنده لیست مدل‌ها از /v1/models">↻</button>
       </div>
       <div class="sheet-search">
-        <input id="modelSearchInput" placeholder="Search models or type new model ID…" oninput="onModelSearchInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applySearchedOrCustomModel()}">
+        <input id="modelSearchInput" placeholder="جستجوی مدل، رایگان (free) یا شناسه‌ی جدید…" oninput="onModelSearchInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applySearchedOrCustomModel()}">
+      </div>
+      <div id="modelPricingFilterBar" style="display:flex;gap:6px;padding:0 12px 8px;direction:rtl">
+        <button type="button" class="icon-btn" data-price-filter="all" onclick="setModelPricingFilter('all')" style="font-size:11px;padding:3px 10px;border-color:rgba(126,226,168,.4);color:#7ee2a8">همه مدل‌ها</button>
+        <button type="button" class="icon-btn" data-price-filter="free" onclick="setModelPricingFilter('free')" style="font-size:11px;padding:3px 10px">🆓 فقط رایگان‌ها</button>
+        <button type="button" class="icon-btn" data-price-filter="paid" onclick="setModelPricingFilter('paid')" style="font-size:11px;padding:3px 10px">💳 فقط پولی</button>
       </div>
       <div class="sheet-group" id="featuredModelList"></div>
       <button type="button" class="sheet-nav-row" id="effortRowBtn" onclick="openModelSheetView('effort')">
@@ -2838,6 +2843,31 @@ function applySearchedOrCustomModel() {
   }
 }
 
+function resolveModelPricingTier(m) {
+  if (!m) return null;
+  if (m.pricingTier === 'free' || m.pricingTier === 'paid' || m.pricingTier === 'auto') return m.pricingTier;
+  const idLow = String(m.id || '').toLowerCase();
+  if (idLow.endsWith(':free') || idLow === 'openrouter/free') return 'free';
+  if (idLow === 'openrouter/auto') return 'auto';
+  const effUrl = String(state.provider?.effectiveBaseUrl || '').toLowerCase();
+  if (effUrl.includes('openrouter.ai') && idLow) return 'paid';
+  return null;
+}
+
+function setModelPricingFilter(tier = 'all') {
+  state.modelPricingFilter = ['all', 'free', 'paid'].includes(tier) ? tier : 'all';
+  const bar = $('modelPricingFilterBar');
+  if (bar) {
+    bar.querySelectorAll('[data-price-filter]').forEach((btn) => {
+      const active = btn.getAttribute('data-price-filter') === state.modelPricingFilter;
+      btn.style.borderColor = active ? 'rgba(126,226,168,.45)' : '';
+      btn.style.color = active ? '#7ee2a8' : '';
+      btn.style.background = active ? 'rgba(126,226,168,.12)' : '';
+    });
+  }
+  renderFeaturedSheet(false);
+}
+
 function buildFeaturedItemHtml(m, activeId) {
   const isAct = m.id === activeId;
   const title = m.title || m.id;
@@ -2850,10 +2880,17 @@ function buildFeaturedItemHtml(m, activeId) {
       ? `<span class="sheet-pill-rec" style="opacity:.6">No effort</span>`
       : `<span class="sheet-pill-rec">${spec.levels.length === 7 ? 'none–max' : spec.levels.join('·')}</span>`;
   const badge = m.badge ? `<span class="sheet-pill-pro">${esc(m.badge)}</span>` : effortTag;
+  const priceTier = resolveModelPricingTier(m);
+  const priceTag =
+    priceTier === 'free'
+      ? `<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(126,226,168,.16);color:#7ee2a8;border:1px solid rgba(126,226,168,.35);font-weight:700">🆓 رایگان</span>`
+      : priceTier === 'paid'
+        ? `<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(245,177,76,.14);color:#ffd58c;border:1px solid rgba(245,177,76,.32);font-weight:700">💳 پولی</span>`
+        : '';
   return `<div class="sheet-item" role="button" tabindex="0" data-model-id="${esc(m.id)}" onclick="selectModel('${esc(m.id)}', false)">
     <span class="sheet-check">${isAct ? '✓' : ''}</span>
     <div class="sheet-main">
-      <div class="sheet-title-row">${badge}<span class="sheet-name">${esc(title)}</span></div>
+      <div class="sheet-title-row">${priceTag}${badge}<span class="sheet-name">${esc(title)}</span></div>
       <div class="sheet-sub">${esc(sub !== m.id && title !== m.id ? `${m.id} · ${sub}` : sub)}</div>
     </div>
     <button type="button" class="sheet-info-btn" title="مشاهده مشخصات و تشخیص خودکار سطوح" onclick="inspectModelSpec('${esc(m.id)}', event)">ⓘ</button>
@@ -2932,14 +2969,20 @@ function renderFeaturedSheet(preserveCount = false) {
   }
 
   const q = String(state.modelFilter || '').trim().toLowerCase();
-  const filtered = q
-    ? fullList.filter(
-        (m) =>
-          m.id.toLowerCase().includes(q) ||
-          String(m.title || '').toLowerCase().includes(q) ||
-          String(m.subtitle || '').toLowerCase().includes(q)
-      )
-    : fullList;
+  const priceFilter = state.modelPricingFilter || 'all';
+  const filtered = fullList.filter((m) => {
+    const tier = resolveModelPricingTier(m);
+    if (priceFilter === 'free' && tier !== 'free') return false;
+    if (priceFilter === 'paid' && tier !== 'paid') return false;
+    if (!q) return true;
+    if ((q === 'free' || q === 'رایگان') && tier === 'free') return true;
+    if ((q === 'paid' || q === 'پولی') && tier === 'paid') return true;
+    return (
+      m.id.toLowerCase().includes(q) ||
+      String(m.title || '').toLowerCase().includes(q) ||
+      String(m.subtitle || '').toLowerCase().includes(q)
+    );
+  });
 
   const heading = $('selectModelHeading');
   if (heading) heading.textContent = fullList.length > 1 ? `Select model (${fullList.length})` : 'Select model';
@@ -5482,6 +5525,43 @@ function renderThinkHtml(thought, plan, open = false, meta = {}) {
   return `<details class="think-box"${open ? ' open' : ''}><summary>${esc(title)}</summary><pre>${esc(body)}</pre></details>`;
 }
 
+function renderVerifiedModelBadgeHtml({ actualModel = '', requestedModel = '', gateway = null } = {}) {
+  const act = String(actualModel || '').trim();
+  if (!act) return '';
+  const req = String(requestedModel || '').trim();
+  const normKey = (s) =>
+    String(s || '')
+      .trim()
+      .toLowerCase()
+      .replace(/:free$/, '')
+      .replace(/-\d{4}-?\d{2}-?\d{2}$/, '');
+  const nReq = normKey(req);
+  const nAct = normKey(act);
+  const isMismatch = Boolean(
+    nReq &&
+      nAct &&
+      nReq !== nAct &&
+      !nAct.endsWith(`/${nReq}`) &&
+      !nReq.endsWith(`/${nAct}`) &&
+      !nAct.startsWith(`${nReq}-`)
+  );
+  const slotNum = Number(gateway?.slot) || 1;
+  const hostName = (() => {
+    const rawUrl = String(gateway?.baseUrl || state.provider?.effectiveBaseUrl || '');
+    if (!rawUrl) return '';
+    try {
+      return new URL(rawUrl).hostname;
+    } catch {
+      return rawUrl;
+    }
+  })();
+  const gwPart = hostName ? ` · درگاه ${faNum(slotNum)} (<span style="direction:ltr">${esc(hostName)}</span>)` : '';
+  if (isMismatch) {
+    return `<div class="verified-model-pill mismatch" style="margin-top:8px;padding:5px 9px;border-radius:8px;font-size:11px;line-height:1.6;background:rgba(245,177,76,.12);border:1px solid rgba(245,177,76,.35);color:#ffd58c">⚠️ مدل واقعی اجراشده در سرور: <b style="direction:ltr">${esc(act)}</b> (انتخاب منو: <code style="direction:ltr">${esc(req)}</code>)${gwPart}</div>`;
+  }
+  return `<div class="verified-model-pill" style="margin-top:7px;font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:5px;flex-wrap:wrap"><span>🤖 مدل واقعی سرور:</span><code style="direction:ltr;color:#9ee6bc">${esc(act)}</code>${gwPart}</div>`;
+}
+
 function appendMessageElement(message, batchContainer = null) {
   const chat = $('chat');
   if (!batchContainer) {
@@ -5563,6 +5643,16 @@ function appendMessageElement(message, batchContainer = null) {
     div.innerHTML = thinkBlocks + renderMarkdownish(message.content || '');
     for (const call of otherCalls) {
       div.insertAdjacentHTML('beforeend', toolLineHtml(call.id, call.function.name, call.function.arguments, true));
+    }
+    if (message.actual_model) {
+      div.insertAdjacentHTML(
+        'beforeend',
+        renderVerifiedModelBadgeHtml({
+          actualModel: message.actual_model,
+          requestedModel: message.requested_model || '',
+          gateway: message.gateway_info || null
+        })
+      );
     }
     const acts = document.createElement('div');
     acts.className = 'msg-actions';
@@ -6897,7 +6987,21 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
       refreshProviderQuota({ live: true, force: true, silent: true }).catch(() => {});
       if (assistantText) {
-        bubble.querySelectorAll('.msg-actions').forEach((el) => el.remove());
+        const lastMsgObj = state.messages.at(-1);
+        if (lastMsgObj && lastMsgObj.role === 'assistant') {
+          if (data.actualModel || data.model) lastMsgObj.actual_model = data.actualModel || data.model;
+          if (data.requestedModel) lastMsgObj.requested_model = data.requestedModel;
+          if (data.activeGateway) lastMsgObj.gateway_info = data.activeGateway;
+        }
+        bubble.querySelectorAll('.verified-model-pill, .msg-actions').forEach((el) => el.remove());
+        const verifiedHtml = renderVerifiedModelBadgeHtml({
+          actualModel: data.actualModel || data.model || '',
+          requestedModel: data.requestedModel || activeModelId(),
+          gateway: data.activeGateway || state.lastActiveGateway || null
+        });
+        if (verifiedHtml) {
+          bubble.insertAdjacentHTML('beforeend', verifiedHtml);
+        }
         const acts = document.createElement('div');
         acts.className = 'msg-actions';
         acts.innerHTML = '<button>کپی</button><button>حذف از اینجا</button>';
