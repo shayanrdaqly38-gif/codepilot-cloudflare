@@ -170,7 +170,8 @@ test('credentials in tool output and user text never reach the model unredacted'
       'file_history',
       'run_command',
       'web_search',
-      'fetch_url'
+      'fetch_url',
+      'generate_image'
     ];
     const names = (payload.tools || []).map((t) => t.function.name).sort();
     assert.deepEqual(names, [...expectedTools].sort());

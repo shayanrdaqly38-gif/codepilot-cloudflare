@@ -158,6 +158,33 @@ function mockFetch(url, init = {}) {
       workspace: db.workspace
     });
   }
+  if (path.startsWith('/api/images') && (!init.method || init.method === 'GET')) {
+    return jsonResponse({
+      ok: true,
+      workersAiBound: true,
+      images: db.generatedImages || []
+    });
+  }
+  if (path === '/api/images' && init.method === 'POST') {
+    const body = JSON.parse(init.body || '{}');
+    const item = {
+      id: 'img-flux-1001',
+      url: '/api/images/img-flux-1001',
+      downloadUrl: '/api/images/img-flux-1001?download=1',
+      title: String(body.prompt || 'تصویر آزمایشی').slice(0, 48),
+      prompt: body.prompt || '',
+      style: body.style || 'auto',
+      aspectRatio: body.aspectRatio || '1:1',
+      width: 1024,
+      height: 1024,
+      engine: 'cloudflare-ai',
+      model: '@cf/black-forest-labs/flux-1-schnell',
+      modelLabel: 'Cloudflare FLUX.1 Schnell',
+      mimeType: 'image/jpeg'
+    };
+    db.generatedImages = [item, ...(db.generatedImages || [])];
+    return jsonResponse({ ok: true, image: item, persistedToChat: true });
+  }
   if (path === '/api/state' && init.method === 'POST') {
     const body = JSON.parse(init.body || '{}');
     if (body.action === 'create') {
@@ -682,6 +709,25 @@ assert.ok(mdHtml.includes('<strong>مهم</strong>'), 'bold markdown rendered');
 assert.ok(mdHtml.includes('class="md-h2"'), 'h2 heading rendered');
 assert.ok(mdHtml.includes('class="md-hr"'), 'horizontal rule rendered');
 assert.ok(!mdHtml.includes('<img'), 'raw HTML tags inside markdown stay escaped');
+
+// Studio Image Generator UI: safe internal `/api/images/:id` card rendering, XSS rejection on external image URLs, `/imagine` command & Lightbox
+assert.ok($('imageStudioBtn'), '#imageStudioBtn exists in composer');
+assert.ok($('imageStudioModal'), '#imageStudioModal exists');
+assert.ok($('imageLightboxModal'), '#imageLightboxModal exists');
+
+const safeImgMd = window.renderMarkdownish('![لوگوی ققنوس](/api/images/img-flux-1001)\n![bad](https://evil.example/track.png)');
+assert.ok(safeImgMd.includes('class="gen-image-card"'), 'trusted /api/images/:id rendered as interactive studio card');
+assert.ok(safeImgMd.includes('/api/images/img-flux-1001?download=1'), '1-tap download link included');
+assert.ok(!safeImgMd.includes('src="https://evil.example'), 'untrusted external markdown image URLs never auto-render');
+
+await window.executeSlashCommand('/imagine لوگوی مدرن طلایی برای اپلیکیشن هوش مصنوعی');
+assert.ok(
+  $('chat').querySelector('.gen-image-card[data-img-url="/api/images/img-flux-1001"]'),
+  '/imagine generates image via /api/images and renders studio card in chat'
+);
+$('chat').querySelector('.gen-image-card [data-role="zoom-gen-img"]').click();
+assert.ok($('imageLightboxModal').classList.contains('open'), 'clicking studio image opens fullscreen lightbox');
+window.closeModal('imageLightboxModal');
 
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
