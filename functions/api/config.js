@@ -102,6 +102,7 @@ export async function onRequestGet({ request, env }) {
       contextBudgetTokens: Number(effectiveEnv.CONTEXT_BUDGET_TOKENS || env.CONTEXT_BUDGET_TOKENS) || 24000,
       sandbox: sb,
       linuxRunner: linux,
+      workersAi: Boolean(env?.AI && typeof env.AI.run === 'function'),
       executionMode: realExecutionMode(env),
       features: {
         memory: true,
@@ -116,6 +117,7 @@ export async function onRequestGet({ request, env }) {
         linuxRunner: linux,
         webSearch: true,
         urlFetch: true,
+        imageGeneration: true,
         deepThinking: true,
         reasoningEffort: true,
         autoCapabilityDiscovery: true,

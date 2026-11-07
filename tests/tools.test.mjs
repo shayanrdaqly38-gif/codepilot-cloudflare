@@ -1542,5 +1542,176 @@ test('agent tools read, search, patch, and undo_edit a 480KB+ index.html without
   assert.ok(finalHtml.includes('<nav id="targetNav">FINAL_MOBILE_NAV</nav>'));
 });
 
+test('generate_image tool uses Cloudflare Workers AI (FLUX.1 / Phoenix), enhances Persian prompts, streams live SSE card, and serves owner-isolated binary images', async () => {
+  const { env, cookie, id } = await setUp();
+  const imagesIdxApi = await import(`${root}/api/images/index.js`);
+  const imageByIdApi = await import(`${root}/api/images/[id].js`);
+  const authApi = await import(`${root}/api/auth.js`);
+
+  // Build a real PNG header + payload (220 KB -> spans 2 D1 chunks of 192 KB!)
+  const fakePng = new Uint8Array(220_000);
+  fakePng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  for (let i = 8; i < fakePng.length; i += 1) fakePng[i] = (i * 31) & 0xff;
+
+  const aiCalls = [];
+  env.AI = {
+    async run(modelName, input) {
+      aiCalls.push({ modelName, input });
+      if (modelName.includes('llama')) {
+        return {
+          response:
+            'A majestic golden phoenix rising above desert dunes under a starry night sky, volumetric golden embers, dramatic rim lighting, ultra-detailed feathers'
+        };
+      }
+      if (modelName === '@cf/leonardo/phoenix-1.0') {
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(fakePng);
+            controller.close();
+          }
+        });
+      }
+      if (modelName === '@cf/black-forest-labs/flux-1-schnell') {
+        let bin = '';
+        for (let i = 0; i < fakePng.length; i += 24576) {
+          bin += String.fromCharCode.apply(null, fakePng.subarray(i, i + 24576));
+        }
+        return { image: btoa(bin) };
+      }
+      throw new Error('unexpected model: ' + modelName);
+    }
+  };
+
+  // Agent calls generate_image with Persian prompt and omits markdown in final reply -> backend auto-prepends markdown!
+  const model = scriptedModel([
+    toolCall('img1', 'generate_image', {
+      prompt: 'ققنوس طلایی باشکوه در شب کویر پرستاره',
+      title: 'ققنوس طلایی کویر',
+      aspectRatio: '16:9',
+      style: 'cinematic'
+    }),
+    { role: 'assistant', content: 'تصویر سینمایی ققنوس طلایی برای شما ساخته شد.' }
+  ]);
+
+  let events;
+  try {
+    events = await send(env, cookie, id, 'یک تصویر سینمایی از ققنوس طلایی در شب کویر بساز');
+  } finally {
+    model.restore();
+  }
+
+  assert.ok(aiCalls.some((c) => c.modelName.includes('llama')), 'Persian prompt enhanced to English via Workers AI Llama');
+  assert.ok(
+    aiCalls.some((c) => c.modelName === '@cf/leonardo/phoenix-1.0' && c.input.width === 1344 && c.input.height === 768),
+    '16:9 aspect ratio routed to native HD 1344x768 Workers AI model'
+  );
+
+  const liveImgEvt = events.find((e) => e.name === 'generated_image');
+  assert.ok(liveImgEvt, 'generated_image SSE event streamed live');
+  assert.equal(liveImgEvt.data.engine, 'cloudflare-ai');
+  assert.equal(liveImgEvt.data.width, 1344);
+  assert.equal(liveImgEvt.data.height, 768);
+  assert.match(liveImgEvt.data.url, /^\/api\/images\/[a-zA-Z0-9_-]+$/);
+
+  const assistantEvt = events.find((e) => e.name === 'assistant');
+  assert.ok(
+    assistantEvt.data.content.includes(`![ققنوس طلایی کویر](${liveImgEvt.data.url})`),
+    'assistant final markdown guaranteed to include generated image card'
+  );
+
+  const imageId = liveImgEvt.data.id;
+  // Fetch binary image via GET /api/images/:id
+  const binRes = await imageByIdApi.onRequestGet(
+    ctx(req(`/api/images/${imageId}`, { headers: { Cookie: cookie } }), env, { id: imageId })
+  );
+  assert.equal(binRes.status, 200);
+  assert.equal(binRes.headers.get('Content-Type'), 'image/png');
+  const downloadedBytes = new Uint8Array(await binRes.arrayBuffer());
+  assert.equal(downloadedBytes.byteLength, fakePng.byteLength, 'multi-chunk D1 binary image reconstructed byte-for-byte');
+  assert.equal(downloadedBytes[0], 0x89);
+  assert.equal(downloadedBytes[219999], fakePng[219999]);
+
+  // ETag 304 check
+  const etag = binRes.headers.get('ETag');
+  const cachedRes = await imageByIdApi.onRequestGet(
+    ctx(req(`/api/images/${imageId}`, { headers: { Cookie: cookie, 'If-None-Match': etag } }), env, { id: imageId })
+  );
+  assert.equal(cachedRes.status, 304);
+
+  // ?download=1 attachment header check
+  const dlRes = await imageByIdApi.onRequestGet(
+    ctx(req(`/api/images/${imageId}?download=1`, { headers: { Cookie: cookie } }), env, { id: imageId })
+  );
+  assert.equal(dlRes.status, 200);
+  assert.match(dlRes.headers.get('Content-Disposition') || '', /attachment; filename="codepilot-image-/);
+
+  // Strict owner isolation: foreign user cannot read another user's generated image
+  const { accessToken } = await import('./harness.mjs');
+  const otherAuth = await authApi.onRequestGet(
+    ctx(
+      req('/api/auth', {
+        headers: { 'Cf-Access-Jwt-Assertion': accessToken(keys, { sub: 'intruder-sub', email: 'other@example.com' }) }
+      }),
+      env
+    )
+  );
+  const otherCookie = otherAuth.headers.get('Set-Cookie').split(';')[0];
+  const forbiddenRes = await imageByIdApi.onRequestGet(
+    ctx(req(`/api/images/${imageId}`, { headers: { Cookie: otherCookie } }), env, { id: imageId })
+  );
+  assert.equal(forbiddenRes.status, 404, 'foreign user isolated from private generated image');
+
+  // Seamless Free Unlimited FLUX failover when Cloudflare daily free Neurons quota is exhausted
+  env.AI = {
+    async run() {
+      throw new Error('4006: daily free neurons quota exceeded');
+    }
+  };
+  const fakeJpeg = new Uint8Array(4096);
+  fakeJpeg.set([0xff, 0xd8, 0xff, 0xe0], 0);
+  for (let i = 4; i < fakeJpeg.length; i += 1) fakeJpeg[i] = (i * 17) & 0xff;
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('image.pollinations.ai/prompt/')) {
+      return new Response(fakeJpeg, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+    }
+    return origFetch(url, init);
+  };
+  try {
+    const directRes = await (
+      await imagesIdxApi.onRequestPost(
+        ctx(
+          req('/api/images', {
+            method: 'POST',
+            headers: { Cookie: cookie },
+            body: {
+              prompt: 'Minimalist geometric neon falcon logo',
+              style: 'logo-icon',
+              aspectRatio: '1:1',
+              conversationId: id,
+              appendToConversation: true
+            }
+          }),
+          env
+        )
+      )
+    ).json();
+    assert.equal(directRes.ok, true);
+    assert.equal(directRes.persistedToChat, true);
+    assert.equal(directRes.image.engine, 'free-flux-relay', 'automatically failed over to free unlimited FLUX relay');
+    assert.equal(directRes.image.mimeType, 'image/jpeg');
+
+    const gallery = await (
+      await imagesIdxApi.onRequestGet(ctx(req('/api/images?limit=10', { headers: { Cookie: cookie } }), env))
+    ).json();
+    assert.equal(gallery.ok, true);
+    assert.equal(gallery.images.length, 2, 'both Cloudflare AI and free failover images listed in gallery');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+
 
 

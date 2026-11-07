@@ -14,6 +14,11 @@ binding = "DB"                    # must stay "DB" — the code reads env.DB
 database_name = "codepilot-db"
 database_id = "88ad30cf-247a-4f66-af1d-b2d5a7722167"
 
+# Cloudflare Workers AI binding: enables free native FLUX.1 & Phoenix image
+# generation directly on Cloudflare's edge with zero external API keys needed.
+[ai]
+binding = "AI"
+
 # Optional: real code execution. Uncomment after creating the Sandbox Durable
 # Object (see SETUP.md §7). Without it, run_command is a clearly-labelled
 # virtual shell.
