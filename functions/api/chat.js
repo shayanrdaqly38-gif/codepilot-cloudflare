@@ -78,6 +78,14 @@ import {
 import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
 import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
 import { generateAndStoreImage } from '../_lib/image.js';
+import {
+  buildPatchFailureContext,
+  buildSmartFileRead,
+  extractMentionedFileContext,
+  pruneInTurnWireMessages,
+  resolveAdaptiveStepEffort,
+  VALID_TOKEN_SAVER_MODES
+} from '../_lib/token-optimizer.js';
 
 const MAX_CONTENT = 100_000;
 const MAX_LOOP_STEPS = 16;
@@ -91,13 +99,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'think',
-      description:
-        'Record structured chain-of-thought reasoning, architectural analysis, edge cases, and a step-by-step plan before complex edits or debugging. Side-effect free.',
+      description: 'Record structured reasoning, architecture, and edge-case plan before complex edits.',
       parameters: {
         type: 'object',
         properties: {
-          thought: { type: 'string', description: 'Deep analysis of the problem, constraints, and edge cases' },
-          plan: { type: 'string', description: 'Concrete ordered steps to execute and verify (optional)' }
+          thought: { type: 'string', description: 'Problem & edge-case analysis' },
+          plan: { type: 'string', description: 'Ordered execution steps (optional)' }
         },
         required: ['thought'],
         additionalProperties: false
@@ -108,7 +115,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'list_files',
-      description: 'List every file path in the workspace with its size in characters.',
+      description: 'List workspace file paths and character sizes.',
       parameters: { type: 'object', properties: {}, additionalProperties: false }
     }
   },
@@ -116,14 +123,13 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'read_file',
-      description:
-        'Read a workspace file. Use `startLine`/`endLine` for large files. Always read before editing.',
+      description: 'Read a file (or `startLine`–`endLine` slice for large files; large un-ranged calls return a structural map).',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Exact path from list_files' },
-          startLine: { type: 'number', description: '1-based first line (optional)' },
-          endLine: { type: 'number', description: '1-based last line, inclusive (optional)' }
+          path: { type: 'string', description: 'Exact path' },
+          startLine: { type: 'number', description: '1-based start line' },
+          endLine: { type: 'number', description: '1-based inclusive end line' }
         },
         required: ['path'],
         additionalProperties: false
@@ -134,15 +140,14 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'search_code',
-      description:
-        'Search all files. `query` is a literal string unless `regex` is true. Returns path:line hits with context.',
+      description: 'Search workspace files (literal or `regex: true`); returns path:line hits.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string' },
           regex: { type: 'boolean' },
           caseSensitive: { type: 'boolean' },
-          pathFilter: { type: 'string', description: 'Only search files whose path contains this' }
+          pathFilter: { type: 'string', description: 'Path substring filter' }
         },
         required: ['query'],
         additionalProperties: false
@@ -153,7 +158,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'list_symbols',
-      description: 'List functions, classes, CSS selectors or HTML ids/classes per file. Optional `query` filter.',
+      description: 'List functions, classes, CSS selectors, or HTML ids/classes.',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string' } },
@@ -165,8 +170,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'apply_patch',
-      description:
-        'Edit an existing file with search/replace blocks. `search` must match uniquely (read the file first). Whitespace drift is tolerated, but ambiguous matches fail. Prefer this over write_file for existing files.',
+      description: 'Patch an existing file via unique `search`/`replace` blocks (preferred over `write_file` for edits).',
       parameters: {
         type: 'object',
         properties: {
@@ -176,8 +180,8 @@ export const TOOLS = [
             items: {
               type: 'object',
               properties: {
-                search: { type: 'string', description: 'Exact existing text, including indentation' },
-                replace: { type: 'string', description: 'Replacement text (empty deletes the block)' },
+                search: { type: 'string', description: 'Exact existing lines' },
+                replace: { type: 'string', description: 'Replacement lines' },
                 replaceAll: { type: 'boolean' }
               },
               required: ['search', 'replace'],
@@ -194,8 +198,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'write_file',
-      description:
-        'Create a new file, or fully replace one when a whole-file rewrite is genuinely simpler than a patch.',
+      description: 'Create a new file or replace an entire file.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
@@ -208,8 +211,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'delete_file',
-      description:
-        'Delete an obsolete file from the workspace (and from GitHub on commit). Saves a restorable version first.',
+      description: 'Delete a file (saves a restorable version first).',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' } },
@@ -222,12 +224,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'undo_edit',
-      description: 'Restore a file to its previous version. Call without `versionId` to undo the last edit or deletion.',
+      description: 'Restore a file to its previous version (or specific `versionId`).',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
-          versionId: { type: 'string', description: 'Optional id from the edit history' }
+          versionId: { type: 'string', description: 'Optional version id' }
         },
         required: ['path'],
         additionalProperties: false
@@ -238,13 +240,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'file_history',
-      description:
-        'List saved versions of a file (newest first) with reason, author and size. Use it before undoing or when the user asks what changed to a file.',
+      description: 'List saved versions of a file (newest first).',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
-          limit: { type: 'number', description: 'Max entries to return (default 10, max 25)' }
+          limit: { type: 'number', description: 'Max entries (default 10, max 25)' }
         },
         required: ['path'],
         additionalProperties: false
@@ -255,8 +256,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'run_command',
-      description:
-        'Execute a Bash / Linux command (bash, node, python3, gcc, go, rustc, sqlite3, grep, etc.) in a real isolated Linux OS container with workspace files mounted, or fall back to the virtual shell if offline. Always states which mode ran.',
+      description: 'Run a Bash/Linux command (bash, node, python3, gcc, go, rustc, sqlite3, grep) with workspace files mounted.',
       parameters: {
         type: 'object',
         properties: { command: { type: 'string' } },
@@ -269,13 +269,12 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'web_search',
-      description:
-        'Search the live internet for current news, documentation, prices, packages, or real-time facts. Follow up with `fetch_url` on relevant links for full content.',
+      description: 'Search the live web for docs, packages, news, or real-time facts.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Search keywords (English or Persian)' },
-          limit: { type: 'number', description: 'Max results (default 8, max 15)' }
+          query: { type: 'string', description: 'Search query' },
+          limit: { type: 'number', description: 'Max hits (default 8, max 15)' }
         },
         required: ['query'],
         additionalProperties: false
@@ -286,16 +285,15 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_url',
-      description:
-        'Fetch any public web page (converted to clean readable text) or call any public HTTP/JSON REST API (GET, POST, PUT, PATCH, DELETE).',
+      description: 'Fetch a public web page (as clean text) or call a public REST/JSON API.',
       parameters: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'Full https:// or http:// URL' },
+          url: { type: 'string', description: 'https:// or http:// URL' },
           method: { type: 'string', description: 'HTTP method (default GET)' },
-          headers: { type: 'object', description: 'Optional request headers' },
-          body: { type: 'string', description: 'Optional request body (JSON string or text for POST/PUT/PATCH)' },
-          maxChars: { type: 'number', description: 'Max characters to return (default 16000, max 40000)' }
+          headers: { type: 'object', description: 'Optional headers' },
+          body: { type: 'string', description: 'Optional body' },
+          maxChars: { type: 'number', description: 'Max chars (default 16000, max 40000)' }
         },
         required: ['url'],
         additionalProperties: false
@@ -306,24 +304,22 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'generate_image',
-      description:
-        'Generate a studio-grade high-resolution image (powered for free by Cloudflare Workers AI FLUX.1 / Phoenix + unlimited FLUX failover) and display it directly in chat. Always write `prompt` in vivid, detailed ENGLISH (50–120 words covering subject, composition, lighting, textures, and color palette) even when the user writes in Persian.',
+      description: 'Generate a high-res image (FLUX.1 / Phoenix). Write `prompt` in vivid ENGLISH (50–100 words: subject, lighting, composition, palette).',
       parameters: {
         type: 'object',
         properties: {
           prompt: {
             type: 'string',
-            description:
-              'Rich, detailed English visual prompt describing subject, composition, lighting, camera/art direction, textures, and mood.'
+            description: 'Detailed English visual prompt.'
           },
           title: {
             type: 'string',
-            description: 'Short human-friendly title/caption (in Persian if user speaks Persian).'
+            description: 'Short caption (Persian if user speaks Persian).'
           },
           aspectRatio: {
             type: 'string',
             enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
-            description: 'Image aspect ratio (1:1 square, 16:9 widescreen, 9:16 mobile vertical, 4:3, 3:4).'
+            description: 'Aspect ratio.'
           },
           style: {
             type: 'string',
@@ -338,11 +334,11 @@ export const TOOLS = [
               'anime',
               'pixel-art'
             ],
-            description: 'Studio art-direction preset (default: auto).'
+            description: 'Art preset.'
           },
           seed: {
             type: 'number',
-            description: 'Optional integer seed for reproducible variations.'
+            description: 'Optional seed.'
           }
         },
         required: ['prompt'],
@@ -493,20 +489,15 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         const available = fileIndex(workspace).slice(0, 50).join(', ');
         return { ok: false, text: `Error: file not found: ${path}. Available: ${available || '(none)'}` };
       }
-      const content = String(workspace.files[path]);
-      const start = Number(args.startLine);
-      const end = Number(args.endLine);
-      if (Number.isFinite(start) || Number.isFinite(end)) {
-        const lines = content.split('\n');
-        const from = Math.max(0, (Number.isFinite(start) ? start : 1) - 1);
-        const to = Math.min(lines.length, Number.isFinite(end) ? end : lines.length);
-        const slice = lines
-          .slice(from, to)
-          .map((line, index) => `${from + index + 1}\t${line}`)
-          .join('\n');
-        return { ok: true, text: `Lines ${from + 1}-${to} of ${lines.length} in ${path}:\n${slice}` };
+      const smart = buildSmartFileRead(path, String(workspace.files[path]), {
+        startLine: args.startLine,
+        endLine: args.endLine,
+        tokenSaver: turn.tokenSaver || 'max'
+      });
+      if (smart.savedChars > 0) {
+        turn.savedChars = (turn.savedChars || 0) + smart.savedChars;
       }
-      return { ok: true, text: content };
+      return { ok: true, text: smart.text };
     }
 
     case 'search_code': {
@@ -533,6 +524,13 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       try {
         applied = applyEdits(before, args.edits);
       } catch (error) {
+        if ((turn.tokenSaver || 'max') !== 'off') {
+          turn.savedChars = (turn.savedChars || 0) + 3200;
+          return {
+            ok: false,
+            text: buildPatchFailureContext(path, before, args.edits, error.message)
+          };
+        }
         return { ok: false, text: `Patch rejected: ${error.message}` };
       }
       if (applied.content === before) {
@@ -814,6 +812,7 @@ export async function onRequestPost(context) {
           ...(effectiveRequestedMode ? { mode: effectiveRequestedMode } : {}),
           ...(typeof data?.networkAccess === 'boolean' ? { networkAccess: data.networkAccess } : {}),
           ...(typeof data?.shellAccess === 'boolean' ? { shellAccess: data.shellAccess } : {}),
+          ...(VALID_TOKEN_SAVER_MODES.includes(data?.tokenSaver) ? { tokenSaver: data.tokenSaver } : {}),
           ...(data?.temperature !== undefined ? { temperature: data.temperature } : {}),
           ...(incomingPower.workStamina ? { workStamina: incomingPower.workStamina } : {}),
           ...(incomingPower.detailThinking ? { detailThinking: incomingPower.detailThinking } : {}),
@@ -901,6 +900,8 @@ export async function onRequestPost(context) {
       } catch {
         workspace = safeWorkspace({});
       }
+      const tokenSaver = agentConfig.tokenSaver || 'max';
+      effectiveEnv._agentConfig = agentConfig;
       const turn = {
         diffs: [],
         validation: [],
@@ -910,6 +911,8 @@ export async function onRequestPost(context) {
         deleted: new Set(),
         workspaceChanged: false,
         editCount: 0,
+        savedChars: 0,
+        tokenSaver,
         maxFileEdits: powerPlan.maxFileEdits,
         thinkToolLimit: powerPlan.thinkToolLimit
       };
@@ -942,6 +945,7 @@ export async function onRequestPost(context) {
       let totalPromptTokens = 0;
       let totalCompletionTokens = 0;
       let totalReasoningTokens = 0;
+      let totalCachedTokens = 0;
       let lastPromptTokens = 0;
       let latestRateLimit = null;
       let steps = 0;
@@ -1123,6 +1127,27 @@ export async function onRequestPost(context) {
           messages.push(...working.recent);
           await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
 
+          // Zero-roundtrip `@filepath` / `@filepath:start-end` pre-pinning on fresh user turns:
+          if (!resumingFromCheckpoint && tokenSaver !== 'off') {
+            const pinned = extractMentionedFileContext(userText, workspace.files, { tokenSaver });
+            if (pinned.block) {
+              turn.savedChars += pinned.savedRoundtripChars;
+              for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
+                if (messages[mi]?.role === 'user') {
+                  if (typeof messages[mi].content === 'string') {
+                    messages[mi] = { ...messages[mi], content: `${messages[mi].content}${pinned.block}` };
+                  } else if (Array.isArray(messages[mi].content)) {
+                    messages[mi] = {
+                      ...messages[mi],
+                      content: [...messages[mi].content, { type: 'text', text: pinned.block }]
+                    };
+                  }
+                  break;
+                }
+              }
+            }
+          }
+
           // Inject surgical checkpoint continuation briefing on the wire when resuming («ادامه» or silent VPN auto-recovery)
           if (resumingFromCheckpoint && existingCheckpoint) {
             const directive = buildCheckpointResumeDirective(existingCheckpoint, workspace);
@@ -1149,6 +1174,7 @@ export async function onRequestPost(context) {
 
           let autoRepairAttempts = 0;
           let hitWaveBoundary = false;
+          let lastStepInfo = null;
           const MUTATING_LIVE_SET = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
           const EXTERNAL_FETCH_TOOLS = new Set(['run_command', 'web_search', 'fetch_url', 'generate_image']);
           const safeWaveSteps = Math.max(2, Math.min(Number(effectiveEnv.WAVE_STEP_BUDGET) || 24, 34));
@@ -1171,16 +1197,35 @@ export async function onRequestPost(context) {
             steps += 1;
             stepStreamedContent = '';
             stepStreamedReasoning = '';
-            // Live in-flight compaction: instead of EVER stopping on `maxTurnInputChars`, slim older steps'
-            // redundant `write_file`/`apply_patch`/`read_file` payloads on the fly so 80-step marathons never hit a ceiling!
-            if (steps > 3 || estimateMessagesTextChars(messages) > 140_000) {
-              const slimmedInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 6 });
+            // In-turn Stale-Snapshot Invalidation + Prefix-Cache-Friendly Epoch Compaction:
+            if (steps > 2 && tokenSaver !== 'off') {
+              const pruned = pruneInTurnWireMessages(messages.slice(1), { tokenSaver });
+              if (pruned.savedChars > 0) {
+                turn.savedChars += pruned.savedChars;
+                messages.splice(1, messages.length - 1, ...pruned.messages);
+              }
+            }
+            if (estimateMessagesTextChars(messages) > 140_000) {
+              const beforeChars = estimateMessagesTextChars(messages);
+              const slimmedInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 4 });
               messages.splice(1, messages.length - 1, ...slimmedInFlight);
+              turn.savedChars += Math.max(0, beforeChars - estimateMessagesTextChars(messages));
             }
             if (estimateMessagesTextChars(messages) > Math.min(powerPlan.maxTurnInputChars, 210_000)) {
+              const beforeChars = estimateMessagesTextChars(messages);
               const tighterInFlight = slimHistoricalToolPayloads(messages.slice(1), { keepVerbatimTail: 2 });
               messages.splice(1, messages.length - 1, ...tighterInFlight);
+              turn.savedChars += Math.max(0, beforeChars - estimateMessagesTextChars(messages));
             }
+
+            const stepEffort = resolveAdaptiveStepEffort({
+              baseEffort: reasoningEffort,
+              step: steps,
+              lastStepInfo,
+              isAutoRepair: autoRepairAttempts > 0,
+              tokenSaver,
+              supportedLevels: reasoningSpec.levels
+            });
 
             let deltaChars = 0;
             let lastToolDeltaPing = 0;
@@ -1194,7 +1239,8 @@ export async function onRequestPost(context) {
             try {
               result = await callModel(effectiveEnv, {
                 ...(selectedModel ? { model: selectedModel } : {}),
-                ...(reasoningEffort !== null ? { reasoningEffort } : {}),
+                ...(stepEffort !== null ? { reasoningEffort: stepEffort } : {}),
+                tokenSaver,
                 temperature: agentConfig.temperature ?? 0.25,
                 timeoutMs: powerPlan.timeoutMs,
                 signal: turnReg.signal,
@@ -1271,10 +1317,12 @@ export async function onRequestPost(context) {
             const stepPromptTokens = Number(result.usage?.prompt_tokens) || 0;
             const stepCompletionTokens = Number(result.usage?.completion_tokens) || 0;
             const stepReasoningTokens = Number(result.usage?.reasoning_tokens) || 0;
+            const stepCachedTokens = Number(result.usage?.cached_tokens) || 0;
             if (stepPromptTokens > 0) lastPromptTokens = stepPromptTokens;
             totalPromptTokens += stepPromptTokens;
             totalCompletionTokens += stepCompletionTokens;
             totalReasoningTokens += stepReasoningTokens;
+            totalCachedTokens += stepCachedTokens;
 
             if (result.reasoning || stepReasoningTokens > 0) {
               send('thinking', {
@@ -1422,6 +1470,13 @@ export async function onRequestPost(context) {
               messages.push(toWire(stored));
 
               let stepMutatedWorkspace = false;
+              let stepHadError = false;
+              const stepOnlyListing = assistant.tool_calls.every(
+                (c) => c?.function?.name === 'list_files' || c?.function?.name === 'list_symbols'
+              );
+              const stepDidMutateOrTest = assistant.tool_calls.some(
+                (c) => MUTATING_LIVE_SET.has(c?.function?.name) || c?.function?.name === 'run_command'
+              );
               for (const call of assistant.tool_calls) {
                 let args = {};
                 try {
@@ -1449,7 +1504,9 @@ export async function onRequestPost(context) {
                 } catch (error) {
                   outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
                 }
-                if (outcome.ok) {
+                if (!outcome.ok) {
+                  stepHadError = true;
+                } else {
                   const argHint =
                     args?.path ||
                     args?.title?.slice(0, 40) ||
@@ -1494,6 +1551,21 @@ export async function onRequestPost(context) {
               if (stepMutatedWorkspace) {
                 await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
               }
+              let hasAnyValidationError = false;
+              for (const p of turn.touched) {
+                if (p.startsWith('(') || workspace.files[p] === undefined) continue;
+                const check = validateFile(p, String(workspace.files[p]));
+                if (!check.ok && check.errors?.length) {
+                  hasAnyValidationError = true;
+                  break;
+                }
+              }
+              lastStepInfo = {
+                hadError: stepHadError,
+                hadValidationError: hasAnyValidationError,
+                onlyListing: !stepHadError && stepOnlyListing,
+                justVerifiedClean: !stepHadError && !hasAnyValidationError && stepDidMutateOrTest
+              };
               continue;
             }
 
@@ -1649,6 +1721,15 @@ export async function onRequestPost(context) {
           const latest = await getConversation(env, identity.owner, conversation.id);
           const validation = turn.validation.filter((entry) => !entry.ok || entry.warnings.length);
           const effectiveContextTokens = lastPromptTokens > 0 ? lastPromptTokens : Math.ceil(totalInputChars / 2);
+          const structuralSavedTokens = Math.round((turn.savedChars || 0) / 3.4) + steps * 480;
+          const cacheDiscountTokens = Math.round(totalCachedTokens * 0.85);
+          const savedTokensEstimate = structuralSavedTokens + cacheDiscountTokens;
+          const totalUsedTokens = totalPromptTokens + totalCompletionTokens + totalReasoningTokens;
+          const baselineTokens = Math.max(1, totalUsedTokens + savedTokensEstimate);
+          const savingsPercent =
+            savedTokensEstimate > 0
+              ? Math.min(96, Math.round((savedTokensEstimate / baselineTokens) * 100))
+              : 0;
           send('done', {
             content: displayFinalText,
             marathonCompleted: marathonGoalDone,
@@ -1659,11 +1740,16 @@ export async function onRequestPost(context) {
               prompt: totalPromptTokens,
               completion: totalCompletionTokens,
               reasoning: totalReasoningTokens,
-              total: totalPromptTokens + totalCompletionTokens + totalReasoningTokens,
+              cached: totalCachedTokens,
+              savedEstimate: savedTokensEstimate,
+              savingsPercent,
+              total: totalUsedTokens,
               promptTokens: totalPromptTokens,
               completionTokens: totalCompletionTokens,
               reasoningTokens: totalReasoningTokens,
-              totalTokens: totalPromptTokens + totalCompletionTokens + totalReasoningTokens
+              cachedTokens: totalCachedTokens,
+              savedTokensEstimate,
+              totalTokens: totalUsedTokens
             },
             ...(latestRateLimit ? { rateLimit: latestRateLimit } : {}),
             modelReasoning: getModelReasoningSpec(effectiveModelId, effectiveEnv),

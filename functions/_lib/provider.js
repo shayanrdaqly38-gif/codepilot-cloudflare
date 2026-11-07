@@ -247,6 +247,7 @@ export const VALID_RESPONSE_STYLES = ['balanced', 'concise', 'explanatory', 'sen
 export const VALID_THEMES = ['claude-warm', 'claude-day', 'midnight'];
 export const VALID_POWER_LEVELS = ['low', 'medium', 'hard', 'very-hard', 'max', 'ultra-code'];
 export const VALID_SANDBOX_MODES = ['auto', 'cloud-url', 'local-termux'];
+export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max'];
 
 /**
  * Validate and normalize a remote Cloud Runner URL (e.g. Hugging Face Spaces
@@ -405,6 +406,7 @@ export const DEFAULT_AGENT_CONFIG = Object.freeze({
   detailThinking: 'medium',
   ambitionLevel: 'medium',
   humanSensitivity: 'medium',
+  tokenSaver: 'max',
   theme: 'claude-warm',
   reducedMotion: false,
   mascot: true,
@@ -457,6 +459,7 @@ export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
     detailThinking: normalizePowerLevel(src.detailThinking, base.detailThinking || 'medium'),
     ambitionLevel: normalizePowerLevel(src.ambitionLevel, base.ambitionLevel || 'medium'),
     humanSensitivity: normalizePowerLevel(src.humanSensitivity, base.humanSensitivity || 'medium'),
+    tokenSaver: VALID_TOKEN_SAVER_MODES.includes(src.tokenSaver) ? src.tokenSaver : (base.tokenSaver || 'max'),
     theme,
     reducedMotion: typeof src.reducedMotion === 'boolean' ? src.reducedMotion : base.reducedMotion,
     mascot: typeof src.mascot === 'boolean' ? src.mascot : base.mascot,
