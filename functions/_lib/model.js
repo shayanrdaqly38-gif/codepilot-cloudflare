@@ -10,6 +10,7 @@ import {
   isOpenRouterUrl,
   isTookenUrl,
   loadCachedProviderModels,
+  loadDiscoveredSpecs,
   saveCachedProviderModels,
   saveDiscoveredSpec
 } from './provider.js';
@@ -1024,6 +1025,23 @@ export async function fetchProviderQuota(env, { force = false } = {}) {
         result = keyParsed;
       }
     }
+    const keyData = keyJson?.data && typeof keyJson.data === 'object' ? keyJson.data : keyJson;
+    const isFreeTier =
+      keyData?.is_free_tier === true ||
+      (result && typeof result.limitBalance === 'number' && result.limitBalance < 10 && keyData?.is_free_tier !== false);
+    if (isFreeTier) {
+      if (!result) {
+        result = {
+          supported: true,
+          unlimited: false,
+          remainingBalance: 0,
+          currency: 'USD',
+          source: 'openrouter.ai/api/v1/key'
+        };
+      }
+      result.isFreeTier = true;
+      result.dailyRequestLimit = Number(keyData?.rate_limit?.requests_per_day) || 50;
+    }
   } else if (lowerBase.includes('deepseek.com')) {
     const dsJson = await safeGetJson(`${originUrl}/user/balance`, '/user/balance');
     rawMetrics = extractSafeMetrics(dsJson);
@@ -1498,6 +1516,12 @@ export function parseProviderModelItem(item, options = {}) {
   } else if (base?.reasoningLevels) {
     levels = [...base.reasoningLevels];
     source = 'catalog';
+    needsDiscovery = false;
+  } else if ((hasSupportedParams && spHasReasoning) || idLower.endsWith(':free') || idLower === 'openrouter/free') {
+    // OpenRouter `/models` already supplies `supported_parameters` (or model is `:free` 50-req/day capped):
+    // NEVER burn 2–8 live `POST /chat/completions` daily requests on background capability probing!
+    levels = inferProvisionalLevels(idLower, { isTooken, booleanHint });
+    source = hasSupportedParams ? 'provider' : 'provisional';
     needsDiscovery = false;
   } else {
     levels = inferProvisionalLevels(idLower, { isTooken, booleanHint });
@@ -2781,13 +2805,15 @@ export function compactMessagesForRetry(messages, level = 1) {
 
   if (level === 1) {
     // Level 1: Keep last 2 atomic units untouched; slim all earlier tool_calls/tool outputs/long prose,
-    // and cap total middle units to ~90k chars.
+    // and cap total middle units tightly so even pre-slimmed histories shrink deterministically on retry.
     const tailKeep = Math.min(2, units.length);
-    const headUnits = units.slice(0, units.length - tailKeep).map((u) =>
-      u.map((m) => slimSingleMessage(m, { argCap: 600, toolOutCap: 1200, proseCap: 4000, stripBinary: true }))
+    const rawHeadUnits = units.slice(0, units.length - tailKeep);
+    const cappedHeadSlice = rawHeadUnits.length > 4 ? rawHeadUnits.slice(-4) : rawHeadUnits;
+    const headUnits = cappedHeadSlice.map((u) =>
+      u.map((m) => slimSingleMessage(m, { argCap: 160, toolOutCap: 220, proseCap: 1400, stripBinary: true }))
     );
     const tailUnits = units.slice(units.length - tailKeep).map((u, idx, arr) =>
-      idx === arr.length - 1 ? u : u.map((m) => slimSingleMessage(m, { argCap: 1800, toolOutCap: 3500, proseCap: 12_000 }))
+      idx === arr.length - 1 ? u : u.map((m) => slimSingleMessage(m, { argCap: 900, toolOutCap: 1800, proseCap: 8_000 }))
     );
     let budget = 85_000;
     const keptHead = [];
@@ -2877,9 +2903,54 @@ function computeRateLimitWaitMs(headers, attemptIdx, env) {
  * large edits never hit non-streaming proxy timeouts.
  */
 export async function callModel(env, payload) {
+  try {
+    return await callModelOnProvider(env, payload);
+  } catch (err) {
+    const fb = env?._fallbackProvider;
+    const failoverCodes = new Set(['model_rate_limited', 'model_quota_exhausted', 'model_upstream', 'model_auth']);
+    const failoverStatuses = new Set([402, 429, 502, 503, 504]);
+    if (
+      fb &&
+      fb.baseUrl &&
+      fb.apiKey &&
+      !env?._isFallbackAttempt &&
+      err?.code !== 'turn_stopped' &&
+      err?.code !== 'subrequest_limit' &&
+      (failoverCodes.has(err?.code) || failoverStatuses.has(err?.status))
+    ) {
+      const fbDiscovered = await loadDiscoveredSpecs(env, fb.baseUrl).catch(() => ({}));
+      const fallbackEnv = {
+        ...env,
+        MODEL_BASE_URL: fb.baseUrl,
+        MODEL_API_KEY: fb.apiKey,
+        MODEL_NAME: fb.defaultModel || '',
+        MODEL_FALLBACK: 'off',
+        _apiKeyPool: Array.isArray(fb.apiKeyPool) && fb.apiKeyPool.length > 1 ? fb.apiKeyPool : null,
+        _fallbackProvider: null,
+        _isFallbackAttempt: true,
+        _discoveredSpecs: fbDiscovered
+      };
+      try {
+        payload?.onDelta?.({ type: 'provider_failover', toBaseUrl: fb.baseUrl });
+      } catch { /* ignore */ }
+      return await callModelOnProvider(fallbackEnv, {
+        ...payload,
+        model: fb.defaultModel || ''
+      });
+    }
+    throw err;
+  }
+}
+
+async function callModelOnProvider(env, payload) {
   if (!env.MODEL_API_KEY) {
     fail('MODEL_API_KEY تنظیم نشده است. از بخش ⌁ API کلید سرویس خود را وارد کنید یا در Cloudflare Secrets قرار دهید.', 503, 'model_key_missing');
   }
+  const primaryKeyPool =
+    Array.isArray(env._apiKeyPool) && env._apiKeyPool.length > 1
+      ? env._apiKeyPool
+      : [env.MODEL_API_KEY];
+  let activeKeyIdx = 0;
   const endpoint = modelEndpoint(env);
   const baseUrl = endpoint.replace(/\/chat\/completions$/, '');
   const isTooken = isTookenUrl(baseUrl);
@@ -2936,6 +3007,8 @@ export async function callModel(env, payload) {
       if (!candidates.includes(candidate)) candidates.push(candidate);
       if (candidates.length >= 3) break;
     }
+  } else if (isOpenRouter && /:free$/i.test(requestedModel) && requestedModel !== 'openrouter/free') {
+    candidates.push('openrouter/free');
   }
 
   let activeMessages = payload.messages;
@@ -3008,7 +3081,7 @@ export async function callModel(env, payload) {
           redirect: 'manual',
           signal: combinedSignal,
           headers: {
-            Authorization: `Bearer ${env.MODEL_API_KEY}`,
+            Authorization: `Bearer ${primaryKeyPool[activeKeyIdx] || env.MODEL_API_KEY}`,
             'Content-Type': 'application/json',
             Accept: streamThisAttempt ? 'text/event-stream, application/json' : 'application/json',
             ...providerExtraHeaders(baseUrl)
@@ -3308,8 +3381,23 @@ export async function callModel(env, payload) {
         }
       }
 
+      // Multi-Key Pool Instant Rotation: if current key hit 429 / 402 / 401 and another key exists in pool, rotate immediately with 0 wait!
+      if ((status === 429 || status === 402 || status === 401 || status === 403) && activeKeyIdx + 1 < primaryKeyPool.length) {
+        activeKeyIdx += 1;
+        rateLimitRetries = 0;
+        statusRetries = 0;
+        continue;
+      }
+
+      const isDailyQuota429 =
+        status === 429 &&
+        /(free-models-per-day|requests[-_\s]*per[-_\s]*day|per[-_\s]*day|daily.*limit|quota.*exceeded|exceeded.*quota|add.*credits)/i.test(
+          errText
+        );
+
       // Smart multi-step 429 Rate-Limit backoff during live `/api/chat` streaming (`onDelta` active):
-      if (status === 429 && typeof payload.onDelta === 'function' && rateLimitRetries < 3 && cIndex === 0) {
+      // Skip pointless sleep retries when `isDailyQuota429` is true (50 req/day exhausted until tomorrow; fail over immediately if backup gateway exists!).
+      if (status === 429 && !isDailyQuota429 && typeof payload.onDelta === 'function' && rateLimitRetries < 3 && cIndex === 0) {
         const waitMs = computeRateLimitWaitMs(response.headers, rateLimitRetries, env);
         rateLimitRetries += 1;
         try {
@@ -3320,6 +3408,7 @@ export async function callModel(env, payload) {
       }
 
       if (
+        !isDailyQuota429 &&
         (status === 408 || status === 429 || status === 499 || status === 500 || status === 502 || status === 503 || status === 504) &&
         statusRetries === 0 &&
         rateLimitRetries === 0 &&
@@ -3330,7 +3419,7 @@ export async function callModel(env, payload) {
         continue;
       }
 
-      if ((status === 404 || status === 429 || status >= 500) && cIndex + 1 < candidates.length) {
+      if ((status === 404 || (status === 429 && !isDailyQuota429) || status >= 500) && cIndex + 1 < candidates.length) {
         break;
       }
 
@@ -3358,7 +3447,13 @@ export async function callModel(env, payload) {
         fail('حجم پیام ارسالی بیش از سقف مدل است؛ از دستور /compact یا گفتگوی جدید استفاده کنید.', 413, 'context_too_large');
       }
       if (status === 429) {
-        fail('سهمیه‌ی لحظه‌ای سرویس مدل پر شده است. چند ثانیه صبر کنید.', 429, 'model_rate_limited');
+        fail(
+          isDailyQuota429
+            ? 'سقف ۵۰ درخواست روزانه این کلید در OpenRouter پر شده است. از بخش ⌁ API درگاه پشتیبان خودکار (مثل Zro) یا چند کلید چرخشی اضافه کنید.'
+            : 'سهمیه‌ی لحظه‌ای سرویس مدل پر شده است. چند ثانیه صبر کنید.',
+          429,
+          'model_rate_limited'
+        );
       }
       if (status >= 400 && status < 500) {
         fail(

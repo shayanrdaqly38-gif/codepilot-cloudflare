@@ -154,6 +154,22 @@ async function writeUserSettingsObj(env, owner, settingsObj) {
     .run();
 }
 
+export function parseApiKeyPool(rawInput) {
+  if (typeof rawInput !== 'string') return [];
+  const parts = rawInput
+    .split(/[\r\n,|]+/)
+    .map((item) => cleanCredentialInput(item).replace(/^bearer\s+/i, '').trim())
+    .filter(Boolean);
+  const unique = [];
+  for (const key of parts) {
+    if (key.length > 2048 || /\s/.test(key)) {
+      fail('قالب کلید API معتبر نیست (فاصله اضافی را حذف کنید؛ برای چند کلید چرخشی با کاما یا خط جدید جدا کنید).', 400, 'bad_api_key');
+    }
+    if (!unique.includes(key)) unique.push(key);
+  }
+  return unique.slice(0, 12);
+}
+
 /**
  * Return safe, non-secret provider metadata for the UI.
  */
@@ -165,7 +181,11 @@ export async function getUserProviderSummary(env, owner) {
   const customBaseUrl = p?.baseUrl ? String(p.baseUrl) : '';
   const hasCustomKey = Boolean(p?.apiKeyEnc);
   const customDefaultModel = p?.defaultModel ? String(p.defaultModel) : '';
+  const fallbackBaseUrl = p?.fallbackBaseUrl ? String(p.fallbackBaseUrl) : '';
+  const hasFallbackKey = Boolean(p?.fallbackApiKeyEnc);
+  const fallbackModel = p?.fallbackModel ? String(p.fallbackModel) : '';
   const customActive = Boolean(customBaseUrl || hasCustomKey || customDefaultModel);
+  const fallbackActive = Boolean(fallbackBaseUrl && hasFallbackKey);
 
   const effectiveBase = customBaseUrl || serverBaseUrl;
   const fallbackDefModel = isOpenRouterUrl(effectiveBase)
@@ -180,9 +200,15 @@ export async function getUserProviderSummary(env, owner) {
     serverBaseUrl,
     hasCustomKey,
     keyHint: p?.keyHint ? String(p.keyHint) : '',
+    keyCount: Number(p?.keyCount) || (hasCustomKey ? 1 : 0),
     hasServerKey,
     defaultModel: customDefaultModel,
-    effectiveDefaultModel: customDefaultModel || fallbackDefModel
+    effectiveDefaultModel: customDefaultModel || fallbackDefModel,
+    fallbackActive,
+    fallbackBaseUrl,
+    hasFallbackKey,
+    fallbackKeyHint: p?.fallbackKeyHint ? String(p.fallbackKeyHint) : '',
+    fallbackModel
   };
 }
 
@@ -203,17 +229,17 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
 
   let apiKeyEnc = prev.apiKeyEnc || '';
   let keyHint = prev.keyHint || '';
+  let keyCount = Number(prev.keyCount) || (apiKeyEnc ? 1 : 0);
   if (input.clearKey) {
     apiKeyEnc = '';
     keyHint = '';
+    keyCount = 0;
   } else if (typeof input.apiKey === 'string') {
-    const cleanedKey = cleanCredentialInput(input.apiKey).replace(/^bearer\s+/i, '').trim();
-    if (cleanedKey) {
-      if (cleanedKey.length > 2048 || /\s/.test(cleanedKey)) {
-        fail('قالب کلید API معتبر نیست (فاصله یا کاراکتر اضافی را حذف کنید).', 400, 'bad_api_key');
-      }
-      apiKeyEnc = await encryptApiKey(env, cleanedKey);
-      keyHint = maskApiKey(cleanedKey);
+    const pool = parseApiKeyPool(input.apiKey);
+    if (pool.length) {
+      apiKeyEnc = await encryptApiKey(env, pool.join('\n'));
+      keyCount = pool.length;
+      keyHint = pool.length > 1 ? `${maskApiKey(pool[0])} (+${pool.length - 1} کلید)` : maskApiKey(pool[0]);
     }
   }
 
@@ -226,14 +252,47 @@ export async function saveUserProviderConfig(env, owner, input = {}) {
     defaultModel = candidate;
   }
 
-  if (!nextBaseUrl && !apiKeyEnc && !defaultModel) {
+  const fallbackBaseUrl =
+    input.fallbackBaseUrl !== undefined
+      ? normalizeProviderBaseUrl(input.fallbackBaseUrl)
+      : String(prev.fallbackBaseUrl || '');
+
+  let fallbackApiKeyEnc = prev.fallbackApiKeyEnc || '';
+  let fallbackKeyHint = prev.fallbackKeyHint || '';
+  if (input.clearFallbackKey || (input.fallbackBaseUrl !== undefined && !fallbackBaseUrl && !input.fallbackApiKey)) {
+    fallbackApiKeyEnc = '';
+    fallbackKeyHint = '';
+  } else if (typeof input.fallbackApiKey === 'string') {
+    const fbPool = parseApiKeyPool(input.fallbackApiKey);
+    if (fbPool.length) {
+      fallbackApiKeyEnc = await encryptApiKey(env, fbPool.join('\n'));
+      fallbackKeyHint =
+        fbPool.length > 1 ? `${maskApiKey(fbPool[0])} (+${fbPool.length - 1} کلید)` : maskApiKey(fbPool[0]);
+    }
+  }
+
+  let fallbackModel = prev.fallbackModel || '';
+  if (input.fallbackModel !== undefined) {
+    const fbModel = cleanCredentialInput(input.fallbackModel);
+    if (fbModel && !MODEL_ID_RE.test(fbModel)) {
+      fail('شناسه‌ی مدل درگاه پشتیبان معتبر نیست.', 400, 'bad_model');
+    }
+    fallbackModel = fbModel;
+  }
+
+  if (!nextBaseUrl && !apiKeyEnc && !defaultModel && !fallbackBaseUrl && !fallbackApiKeyEnc) {
     delete settings.provider;
   } else {
     settings.provider = {
       baseUrl: nextBaseUrl,
       apiKeyEnc,
       keyHint,
+      keyCount,
       defaultModel,
+      fallbackBaseUrl,
+      fallbackApiKeyEnc,
+      fallbackKeyHint,
+      fallbackModel,
       updatedAt: Date.now()
     };
   }
@@ -247,7 +306,7 @@ export const VALID_RESPONSE_STYLES = ['balanced', 'concise', 'explanatory', 'sen
 export const VALID_THEMES = ['claude-warm', 'claude-day', 'midnight'];
 export const VALID_POWER_LEVELS = ['low', 'medium', 'hard', 'very-hard', 'max', 'ultra-code'];
 export const VALID_SANDBOX_MODES = ['auto', 'cloud-url', 'local-termux'];
-export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max'];
+export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max', 'rpd'];
 
 /**
  * Validate and normalize a remote Cloud Runner URL (e.g. Hugging Face Spaces
@@ -610,10 +669,33 @@ export async function resolveEffectiveEnv(env, owner) {
   const sbCfg = settings.sandbox && typeof settings.sandbox === 'object' ? settings.sandbox : null;
   const agentConfig = normalizeAgentConfig(settings.agentConfig, DEFAULT_AGENT_CONFIG);
 
-  let customKey = '';
+  let primaryKeyPool = [];
   if (p?.apiKeyEnc) {
-    customKey = await decryptApiKey(env, p.apiKeyEnc);
+    const rawDecrypted = await decryptApiKey(env, p.apiKeyEnc);
+    primaryKeyPool = String(rawDecrypted || '')
+      .split(/[\r\n,|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
+  const customKey = primaryKeyPool[0] || '';
+
+  let fallbackProvider = null;
+  if (p?.fallbackBaseUrl && p?.fallbackApiKeyEnc) {
+    const rawFbDecrypted = await decryptApiKey(env, p.fallbackApiKeyEnc);
+    const fbPool = String(rawFbDecrypted || '')
+      .split(/[\r\n,|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (fbPool.length) {
+      fallbackProvider = {
+        baseUrl: String(p.fallbackBaseUrl),
+        apiKey: fbPool[0],
+        apiKeyPool: fbPool,
+        defaultModel: p?.fallbackModel ? String(p.fallbackModel) : ''
+      };
+    }
+  }
+
   let customSandboxToken = '';
   if (sbCfg?.tokenEnc) {
     customSandboxToken = await decryptApiKey(env, sbCfg.tokenEnc);
@@ -647,6 +729,8 @@ export async function resolveEffectiveEnv(env, owner) {
     CONTEXT_BUDGET_TOKENS:
       settings.agentConfig?.contextBudget ? String(agentConfig.contextBudget) : env.CONTEXT_BUDGET_TOKENS,
     _customProvider: hasCustom,
+    _apiKeyPool: primaryKeyPool.length > 1 ? primaryKeyPool : null,
+    _fallbackProvider: fallbackProvider,
     _customSandbox: useCustomCloudSandbox,
     _sandboxMode: VALID_SANDBOX_MODES.includes(sbCfg?.mode) ? sbCfg.mode : 'auto',
     _agentConfig: agentConfig,
