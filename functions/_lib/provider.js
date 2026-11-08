@@ -844,18 +844,34 @@ function normalizePowerLevel(val, fallback = 'medium') {
   return VALID_POWER_LEVELS.includes(val) ? val : fallback;
 }
 
+export function parseLocalizedNumber(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return NaN;
+  const ascii = value
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[,،_\s\u066c]/g, '')
+    .trim();
+  return ascii ? Number(ascii) : NaN;
+}
+
 export function normalizeAgentConfig(raw = {}, base = DEFAULT_AGENT_CONFIG) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const mode = VALID_AGENT_MODES.includes(src.mode) ? src.mode : base.mode;
   const responseStyle = VALID_RESPONSE_STYLES.includes(src.responseStyle) ? src.responseStyle : base.responseStyle;
   const theme = VALID_THEMES.includes(src.theme) ? src.theme : base.theme;
-  const tempNum = Number(src.temperature);
+  const tempNum = parseLocalizedNumber(src.temperature);
   const temperature = Number.isFinite(tempNum) ? Math.min(1.5, Math.max(0, Math.round(tempNum * 100) / 100)) : base.temperature;
-  const stepsNum = Math.floor(Number(src.maxSteps));
-  const maxSteps = Number.isFinite(stepsNum) && stepsNum >= 4 && stepsNum <= 96 ? stepsNum : base.maxSteps;
-  const budgetNum = Math.floor(Number(src.contextBudget));
+  const stepsNum = Math.floor(parseLocalizedNumber(src.maxSteps));
+  const maxSteps =
+    Number.isFinite(stepsNum) && stepsNum >= 4
+      ? Math.min(300, stepsNum)
+      : base.maxSteps;
+  const budgetNum = Math.floor(parseLocalizedNumber(src.contextBudget));
   const contextBudget =
-    Number.isFinite(budgetNum) && budgetNum >= 6_000 && budgetNum <= 160_000 ? budgetNum : base.contextBudget;
+    Number.isFinite(budgetNum) && budgetNum >= 6_000
+      ? Math.min(256_000, budgetNum)
+      : base.contextBudget;
 
   return {
     mode,
@@ -946,8 +962,16 @@ export function resolvePowerExecutionPlan(agentConfig = {}, reasoningEffort = nu
           ? Math.max(cfg.maxSteps || 20, 24)
           : cfg.maxSteps || 20;
 
+  const hasExplicitUserSteps =
+    agentConfig &&
+    agentConfig.maxSteps !== undefined &&
+    Number.isFinite(parseLocalizedNumber(agentConfig.maxSteps)) &&
+    cfg.maxSteps !== DEFAULT_AGENT_CONFIG.maxSteps;
+
   let maxSteps;
-  if (stamina === 'low') {
+  if (hasExplicitUserSteps && cfg.maxSteps > spec.stepCap) {
+    maxSteps = Math.min(cfg.maxSteps, 300);
+  } else if (stamina === 'low') {
     maxSteps = Math.min(baseMaxSteps, spec.stepCap);
   } else if (stamina === 'medium') {
     maxSteps = Math.min(Math.max(baseMaxSteps, 4), spec.stepCap);
@@ -979,7 +1003,7 @@ export function resolvePowerExecutionPlan(agentConfig = {}, reasoningEffort = nu
 
   return {
     maxSteps: Math.max(4, maxSteps),
-    maxFileEdits: marathonActive ? Math.max(spec.maxFileEdits, 140) : spec.maxFileEdits,
+    maxFileEdits: Math.max(marathonActive ? Math.max(spec.maxFileEdits, 140) : spec.maxFileEdits, maxSteps * 2),
     contextBudget: Math.max(cfg.contextBudget || 24_000, spec.contextFloor),
     maxTurnInputChars: spec.maxTurnInputChars,
     timeoutMs: Math.min(timeoutMs, 180_000),

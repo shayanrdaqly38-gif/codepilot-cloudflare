@@ -920,6 +920,21 @@ assert.ok(
   'Stopped partial thinking stays visible in #chat'
 );
 
+// Max Steps (200 / ۲۰۰) & Context Budget (50000 / ۵۰۰۰۰) persistence across #codexModal and #powerModal
+window.openCodexModal();
+$('cfgMaxSteps').value = '۲۰۰';
+$('cfgContextBudget').value = '۵۰,۰۰۰';
+await window.saveAgentConfigFromModal();
+window.openCodexModal();
+assert.equal($('cfgMaxSteps').value, '200', 'cfgMaxSteps persists 200 (including Persian digits ۲۰۰)');
+assert.equal($('cfgContextBudget').value, '50000', 'cfgContextBudget persists 50000 (including Persian digits ۵۰,۰۰۰)');
+window.closeModal('codexModal');
+window.openPowerModal();
+assert.equal($('powerMaxStepsInput').value, '200', 'Power modal syncs 200 maxSteps');
+assert.equal($('powerContextBudgetInput').value, '50000', 'Power modal syncs 50000 contextBudget');
+assert.ok($('powerMeterSpecs').textContent.includes('200') && $('powerMeterSpecs').textContent.includes('50K'), 'Power meter displays 200 steps · 50K ctx');
+window.closeModal('powerModal');
+
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);
 process.exit(0);
