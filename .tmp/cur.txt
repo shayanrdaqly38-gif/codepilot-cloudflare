@@ -1,0 +1,40 @@
+
+function extractReadableStrings(b64Sample, maxChars = 6000) {
+  if (!b64Sample) return '';
+  const capped = b64Sample.slice(0, Math.min(b64Sample.length, 160_000) & ~3);
+  let bin = '';
+  try {
+    bin = atob(capped);
+  } catch {
+    return '';
+  }
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  try {
+    const utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    if (!utf8.includes('\0')) return redactSecrets(utf8.slice(0, maxChars));
+  } catch {
+    // Not pure UTF-8; extract printable ASCII runs >= 6 chars (useful for PDFs/binaries).
+  }
+  const runs = [];
+  let current = '';
+  let total = 0;
+  for (let i = 0; i < bytes.length; i += 1) {
+    const b = bytes[i];
+    if ((b >= 32 && b <= 126) || b === 9 || b === 10 || b === 13) {
+      current += String.fromCharCode(b);
+    } else {
+      if (current.trim().length >= 6) {
+        const clean = current.trim();
+        runs.push(clean);
+        total += clean.length;
+        if (total >= maxChars) break;
+      }
+      current = '';
+    }
+  }
+  if (current.trim().length >= 6 && total < maxChars) runs.push(current.trim());
+  return runs.length ? redactSecrets(runs.join('\n').slice(0, maxChars)) : '';
+}
+
+export async function uploadAction(env, owner, data) {
