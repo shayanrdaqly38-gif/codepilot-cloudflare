@@ -9,6 +9,7 @@ import { accessToken, fakeJwks, makeEnv, req, ctx, rsaKeys } from './harness.mjs
 const root = new URL('../functions/', import.meta.url).pathname.replace(/\/$/, '');
 const auth = await import(`${root}/api/auth.js`);
 const stateApi = await import(`${root}/api/state/index.js`);
+const convDetailApi = await import(`${root}/api/state/conversations/[id].js`);
 const chat = await import(`${root}/api/chat.js`);
 const stopApi = await import(`${root}/api/chat/stop.js`);
 
@@ -114,8 +115,74 @@ test('stop endpoint aborts an in-flight turn and streams a "stopped" event', asy
     assert.equal(stopped.data.reason, 'user_stopped');
     assert.equal(stopped.data.resumable, true);
     assert.ok(String(stopped.data.partialContent || '').includes('part'), 'partial content should be preserved');
+
+    const detailRes = await convDetailApi.onRequestGet(
+      ctx(req(`/api/state/conversations/${conversationId}`, { headers: { Cookie: cookie } }), env, { id: conversationId })
+    );
+    const detail = await detailRes.json();
+    const lastAssistant = detail.messages.filter((m) => m.role === 'assistant').at(-1);
+    assert.ok(lastAssistant, 'stopped assistant message persisted in D1');
+    assert.ok(lastAssistant.content.includes('part'), 'persisted D1 message keeps streamed partial text');
   } finally {
     hanging.restore();
+  }
+});
+
+test('stopping mid-reasoning (thinking-only before content) still persists the assistant message in D1', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+    if (!String(url).includes('/chat/completions')) throw new Error('unexpected fetch ' + url);
+    const signal = init?.signal || null;
+    const encoder = new TextEncoder();
+    calls += 1;
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"در حال تحلیل کد پروژه..."}}]}\n\n')
+        );
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            try { controller.close(); } catch {}
+          }, { once: true });
+        }
+      },
+      pull(controller) {
+        controller.enqueue(encoder.encode(': kb\n\n'));
+      }
+    });
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+
+  try {
+    await signIn();
+    const turnPromise = chat.onRequestPost(
+      ctx(req('/api/chat', { method: 'POST', body: { conversationId, message: 'بررسی کن' }, headers: { Cookie: cookie } }), env)
+    );
+    for (let i = 0; i < 40 && calls === 0; i += 1) await sleep(50);
+    assert.ok(calls > 0, 'model call started');
+
+    const stopRes = await stopApi.onRequest(
+      ctx(req('/api/chat/stop', { method: 'POST', body: { id: conversationId }, headers: { Cookie: cookie } }), env)
+    );
+    assert.equal((await stopRes.json()).stopped, true);
+
+    const sseRes = await turnPromise;
+    const events = await parseSse(sseRes);
+    const stopped = events.find((e) => e.name === 'stopped');
+    assert.ok(stopped, 'stopped SSE emitted');
+
+    const detailRes = await convDetailApi.onRequestGet(
+      ctx(req(`/api/state/conversations/${conversationId}`, { headers: { Cookie: cookie } }), env, { id: conversationId })
+    );
+    const detail = await detailRes.json();
+    const lastAssistant = detail.messages.filter((m) => m.role === 'assistant').at(-1);
+    assert.ok(lastAssistant, 'reasoning-only stopped turn still saved an assistant message in D1');
+    assert.match(lastAssistant.content, /متوقف شد/, 'saved message notes stop in content');
+    assert.match(lastAssistant.reasoning || '', /در حال تحلیل کد پروژه/, 'saved message preserves streamed reasoning');
+  } finally {
+    globalThis.fetch = original;
   }
 });
 

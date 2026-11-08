@@ -150,6 +150,8 @@ export function buildSystemPrompt({
   user,
   sandbox = false,
   linuxRunner = false,
+  localTermux = false,
+  localTermuxInfo = null,
   thinking = false,
   agentConfig = null
 }) {
@@ -165,13 +167,24 @@ export function buildSystemPrompt({
     .slice(0, 60)
     .map((m) => `- [${m.scope}${m.project ? `:${m.project}` : ''}] ${m.key}: ${truncate(m.value, 400)}`);
 
+  const termuxEnvLabel =
+    localTermuxInfo && typeof localTermuxInfo === 'object'
+      ? [localTermuxInfo.runner || 'termux', localTermuxInfo.platform, localTermuxInfo.arch, localTermuxInfo.node ? `Node ${localTermuxInfo.node}` : '']
+          .filter(Boolean)
+          .join(' / ')
+      : 'Android Termux';
+
   const execRule = !shellOn
     ? '5. Shell (`run_command`) disabled.'
-    : sandbox
-      ? '5. `run_command` runs in persistent Linux sandbox; check exit code/stderr.'
-      : linuxRunner
-        ? '5. `run_command` runs in real Linux (bash, node, python3, gcc, go, rustc, sqlite3) with workspace mounted.'
-        : '5. `run_command` is VIRTUAL (help/ls/cat/touch/echo/rm only — never claim real subprocess ran).';
+    : localTermux
+      ? mode === 'plan' || mode === 'suggest'
+        ? `5. LIVE ANDROID TERMUX CONNECTED (\`127.0.0.1:8787\` · ${termuxEnvLabel}): The user's Android Termux IS connected! (In read-only ${mode.toUpperCase()} mode \`run_command\` is paused; tell user to switch to Auto-Edit/Full-Auto if they want live shell execution on Termux.)`
+        : `5. LIVE ANDROID TERMUX CONNECTED (\`127.0.0.1:8787\` · ${termuxEnvLabel}): The user HAS connected their real Android phone Termux shell! Calling \`run_command\` executes REAL bash/node/python/git/pkg commands directly inside their Termux device and syncs modified files back. NEVER say you lack access to Termux — call \`run_command\` (e.g. \`pwd && ls -la && uname -a\`) whenever asked to inspect or run on Termux.`
+      : sandbox
+        ? '5. `run_command` runs in persistent Linux sandbox; check exit code/stderr.'
+        : linuxRunner
+          ? '5. `run_command` runs in real Linux (bash, node, python3, gcc, go, rustc, sqlite3) with workspace mounted.'
+          : '5. `run_command` is VIRTUAL (help/ls/cat/touch/echo/rm only — never claim real subprocess ran).';
 
   const netRule = netOn
     ? '2. Web: Use `web_search` / `fetch_url` for live docs/APIs.'
@@ -221,6 +234,9 @@ export function buildSystemPrompt({
   }
 
   parts.push('## Workspace', currentClockLine(), `- Mode: ${mode}`);
+  if (localTermux && shellOn) {
+    parts.push(`- Termux Device Bridge: CONNECTED LIVE (127.0.0.1:8787 · ${termuxEnvLabel})`);
+  }
 
   if (repo?.owner && repo?.repo) {
     parts.push(
