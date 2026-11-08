@@ -5525,6 +5525,83 @@ function setupKeyboardShortcuts() {
   });
 }
 
+async function loadPrismAndHighlight() {
+  if (window.Prism) return;
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js';
+    script.onload = () => {
+      // Load common languages
+      const langs = ['javascript', 'typescript', 'python', 'rust', 'go', 'html', 'css', 'json', 'sql', 'markdown', 'bash', 'yaml', 'toml'];
+      let loaded = 0;
+      const checkDone = () => { loaded++; if (loaded === langs.length) resolve(); };
+      langs.forEach(lang => {
+        const s = document.createElement('script');
+        s.src = `https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-${lang}.min.js`;
+        s.onload = checkDone;
+        s.onerror = checkDone;
+        document.head.appendChild(s);
+      });
+      // Load theme
+      const theme = document.createElement('link');
+      theme.rel = 'stylesheet';
+      theme.href = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css';
+      document.head.appendChild(theme);
+    };
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
+function highlightCode(textarea) {
+  if (!window.Prism) return;
+  const highlightEl = $('codeHighlight');
+  if (!highlightEl) return;
+  const codeEl = highlightEl.querySelector('code');
+  if (!codeEl) return;
+  
+  const lang = detectLanguage(state.workspace.active || '') || 'javascript';
+  codeEl.className = `language-${lang}`;
+  codeEl.textContent = textarea.value;
+  Prism.highlightElement(codeEl);
+}
+
+function detectLanguage(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const map = {
+    js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+    py: 'python', rs: 'rust', go: 'go', html: 'html', htm: 'html',
+    css: 'css', json: 'json', sql: 'sql', md: 'markdown', markdown: 'markdown',
+    sh: 'bash', bash: 'bash', zsh: 'bash', yml: 'yaml', yaml: 'yaml',
+    toml: 'toml', xml: 'xml', svg: 'xml'
+  };
+  return map[ext] || 'plaintext';
+}
+
+function setupCodeHighlightObserver() {
+  const textarea = $('editor');
+  const highlightEl = $('codeHighlight');
+  if (!textarea || !highlightEl) return;
+  
+  // Sync scroll
+  textarea.addEventListener('scroll', () => {
+    highlightEl.scrollTop = textarea.scrollTop;
+    highlightEl.scrollLeft = textarea.scrollLeft;
+  });
+  
+  // Re-highlight on change
+  const observer = new MutationObserver(() => {
+    highlightCode(textarea);
+  });
+  observer.observe(textarea, { characterData: false, subtree: false, attributes: false });
+  
+  // Also listen for input
+  textarea.addEventListener('input', () => highlightCode(textarea));
+  
+  // Initial highlight
+  loadPrismAndHighlight().then(() => highlightCode(textarea));
+}
+
 function initMobileAndChatUxListeners() {
   if (chatUxBound) return;
   chatUxBound = true;
