@@ -54,14 +54,19 @@ t('provider: temperature clamp [0, 1.5] rounded 2dp', () => {
   assert.equal(normalizeAgentConfig({ temperature: 1.234 }).temperature, 1.23);
 });
 
-t('provider: maxSteps window [4, 96]', () => {
+t('provider: maxSteps window [4, 300] + Persian digits', () => {
   assert.equal(normalizeAgentConfig({ maxSteps: 50 }).maxSteps, 50);
-  assert.equal(normalizeAgentConfig({ maxSteps: 99 }).maxSteps, 20);
+  assert.equal(normalizeAgentConfig({ maxSteps: 200 }).maxSteps, 200);
+  assert.equal(normalizeAgentConfig({ maxSteps: '۲۰۰' }).maxSteps, 200);
+  assert.equal(normalizeAgentConfig({ maxSteps: 999 }).maxSteps, 300);
   assert.equal(normalizeAgentConfig({ maxSteps: 1 }).maxSteps, 20);
+  assert.equal(resolvePowerExecutionPlan({ workStamina: 'medium', maxSteps: 200 }).maxSteps, 200);
 });
 
-t('provider: contextBudget window [6000, 160000]', () => {
+t('provider: contextBudget window [6000, 256000] + Persian digits', () => {
   assert.equal(normalizeAgentConfig({ contextBudget: 50000 }).contextBudget, 50000);
+  assert.equal(normalizeAgentConfig({ contextBudget: '۵۰,۰۰۰' }).contextBudget, 50000);
+  assert.equal(normalizeAgentConfig({ contextBudget: 999999 }).contextBudget, 256000);
   assert.equal(normalizeAgentConfig({ contextBudget: 1000 }).contextBudget, 24000);
 });
 
