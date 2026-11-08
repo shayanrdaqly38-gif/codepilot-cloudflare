@@ -6,3 +6,7 @@ dist/
 out/
 *.log
 .DS_Store
+# Scratch space (benchmarks, probes, one-off patch scripts) — never ship.
+.tmp/
+# This repo pins devDeps via package.json ranges only; no lockfile is tracked.
+package-lock.json

@@ -1678,12 +1678,12 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <input class="field" type="range" id="cfgTemperature" min="0" max="1.2" step="0.05" value="0.25" oninput="document.getElementById('cfgTempVal').textContent=Number(this.value).toFixed(2)" style="padding:6px">
       </div>
       <div>
-        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps)</label>
-        <input class="field" type="number" id="cfgMaxSteps" min="4" max="96" step="2" value="16">
+        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps · ۴ تا ۳۰۰)</label>
+        <input class="field" type="text" inputmode="numeric" id="cfgMaxSteps" value="16" placeholder="مثلاً ۲۰۰ یا 200">
       </div>
       <div>
-        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن)</label>
-        <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
+        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن · ۶,۰۰۰ تا ۲۵۶,۰۰۰)</label>
+        <input class="field" type="text" inputmode="numeric" id="cfgContextBudget" value="24000" placeholder="مثلاً ۵۰,۰۰۰ یا 50000">
       </div>
       <div>
         <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز توکن و سقف درخواست (v3)</label>
@@ -1760,6 +1760,23 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
     </div>
 
     <div id="powerAxesContainer"></div>
+
+    <div class="power-axis-card" style="margin-top:10px">
+      <div class="power-axis-head">
+        <strong>🎛 سقف‌های عددی موتور</strong>
+        <span class="power-axis-sub">هماهنگ با تنظیمات عامل — هم‌زمان با تغییر، نمایشگر بالا به‌روز می‌شود</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <label style="flex:1;min-width:150px;font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px">
+          حداکثر گام‌های حلقه (۴ تا ۳۰۰)
+          <input class="field" type="text" inputmode="numeric" id="powerMaxStepsInput" style="min-height:36px;direction:ltr;text-align:left" placeholder="200" oninput="setPowerBudgetDraft('maxSteps', this.value)">
+        </label>
+        <label style="flex:1;min-width:150px;font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px">
+          بودجه زمینه توکن (۶,۰۰۰ تا ۲۵۶,۰۰۰)
+          <input class="field" type="text" inputmode="numeric" id="powerContextBudgetInput" style="min-height:36px;direction:ltr;text-align:left" placeholder="50000" oninput="setPowerBudgetDraft('contextBudget', this.value)">
+        </label>
+      </div>
+    </div>
 
     <div class="modal-actions" style="justify-content:space-between;margin-top:12px">
       <button type="button" onclick="resetPowerModalToDefault()">بازنشانی به متوسط</button>
@@ -2375,6 +2392,21 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+// Parse user-typed numbers the way the server does: Persian ۰-۹ / Arabic ٠-٩
+// digits, thousands separators (both , and ،) and stray spaces all accepted.
+function parseLocalizedNumber(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return NaN;
+  const ascii = value
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[,،_\s\u066c]/g, '')
+    .trim();
+  return ascii ? Number(ascii) : NaN;
+}
+// Server-side clamps mirrored in the UI (functions/_lib/provider.js).
+const clampMaxSteps = (n) => (Number.isFinite(n) ? Math.min(300, Math.max(4, Math.round(n))) : 16);
+const clampContextBudget = (n) => (Number.isFinite(n) ? Math.min(256_000, Math.max(6_000, Math.round(n))) : 24_000);
 const nowFa = (ts) => {
   if (!ts) return '';
   const diff = Date.now() - ts;
@@ -3530,6 +3562,16 @@ function renderPowerModalContent() {
   if (specsEl) specsEl.textContent = `تا ${summary.steps} گام · ${summary.ctxK}K ctx`;
   const fillEl = $('powerMeterFill');
   if (fillEl) fillEl.style.width = `${summary.avgPct}%`;
+  // Keep the numeric budget inputs in sync with the draft (without clobbering
+  // the field the user is currently typing in).
+  const stepsInput = $('powerMaxStepsInput');
+  if (stepsInput && document.activeElement !== stepsInput) {
+    stepsInput.value = String(draft.maxSteps || 16);
+  }
+  const ctxInput = $('powerContextBudgetInput');
+  if (ctxInput && document.activeElement !== ctxInput) {
+    ctxInput.value = String(draft.contextBudget || 24000);
+  }
 
   const effortEl = $('powerEffortReadout');
   if (effortEl) {
@@ -3583,6 +3625,15 @@ function setPowerAxisDraft(axisKey, level) {
   renderPowerModalContent();
 }
 
+// Live-editable numeric budgets inside the Power modal (Persian digits OK).
+function setPowerBudgetDraft(key, rawValue) {
+  if (!powerModalDraft) openPowerModal();
+  const num = Math.floor(parseLocalizedNumber(rawValue));
+  if (!Number.isFinite(num)) return;
+  powerModalDraft[key] = key === 'maxSteps' ? clampMaxSteps(num) : clampContextBudget(num);
+  renderPowerModalContent();
+}
+
 function applyPowerMasterPreset(level) {
   if (!POWER_LEVEL_META[level]) return;
   if (!powerModalDraft) powerModalDraft = {};
@@ -3599,11 +3650,15 @@ function resetPowerModalToDefault() {
 
 async function savePowerConfigFromModal() {
   if (!powerModalDraft) return closeModal('powerModal');
+  const typedSteps = Math.floor(parseLocalizedNumber($('powerMaxStepsInput')?.value));
+  const typedCtx = Math.floor(parseLocalizedNumber($('powerContextBudgetInput')?.value));
   const patch = {
     workStamina: powerModalDraft.workStamina || 'medium',
     detailThinking: powerModalDraft.detailThinking || 'medium',
     ambitionLevel: powerModalDraft.ambitionLevel || 'medium',
-    humanSensitivity: powerModalDraft.humanSensitivity || 'medium'
+    humanSensitivity: powerModalDraft.humanSensitivity || 'medium',
+    maxSteps: Number.isFinite(typedSteps) ? clampMaxSteps(typedSteps) : (powerModalDraft.maxSteps || 16),
+    contextBudget: Number.isFinite(typedCtx) ? clampContextBudget(typedCtx) : (powerModalDraft.contextBudget || 24000)
   };
   await persistAgentConfigPatch(patch, false);
   closeModal('powerModal');
@@ -3703,8 +3758,8 @@ async function saveAgentConfigFromModal() {
     readAgentsMd: Boolean($('cfgReadAgentsMd')?.checked),
     responseStyle: $('cfgResponseStyle')?.value || 'balanced',
     temperature: Math.min(Math.max(Number($('cfgTemperature')?.value ?? 0.25), 0), 1.5),
-    maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 96),
-    contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 160000),
+    maxSteps: clampMaxSteps(Math.floor(parseLocalizedNumber($('cfgMaxSteps')?.value))),
+    contextBudget: clampContextBudget(Math.floor(parseLocalizedNumber($('cfgContextBudget')?.value))),
     tokenSaver: $('cfgTokenSaver')?.value || 'max',
     goal: String($('cfgSessionGoal')?.value || '').trim().slice(0, 600),
     customInstructions: String($('cfgCustomInstructions')?.value || '').trim().slice(0, 4000),
@@ -5342,6 +5397,29 @@ function renderChat({ preserveScroll = false } = {}) {
     chat.insertAdjacentHTML('beforeend', renderCheckpointCardHtml(state.activeCheckpoint));
   }
   chat.scrollTop = preserveScroll ? prevTop : chat.scrollHeight;
+}
+
+// Keep a stopped turn's partial assistant answer (text + streamed thinking)
+// alive across re-renders: the optimistic bubble lives only in the DOM, so the
+// next renderChat() would wipe it before the D1 reload confirms the persisted
+// partial. Snapshot it into state.messages so it survives reloads.
+function preserveStoppedAssistantBubble(beforeCount, partialText, thinkingText = '') {
+  const keep = Math.max(0, Math.floor(Number(beforeCount) || 0));
+  const text = String(partialText || '').trim();
+  const think = String(thinkingText || '').trim();
+  if (!text && !think) return;
+  if (!Array.isArray(state.messages)) state.messages = [];
+  const committed = state.messages.slice(0, keep);
+  const rest = state.messages.slice(keep);
+  // Drop only previous stopped-bubble placeholders; committed history and any
+  // server-persisted turn messages (user prompt, tool groups) stay untouched.
+  const clean = rest.filter((m) => !(m && m.role === 'assistant' && m.stopped));
+  state.messages = [
+    ...committed,
+    ...clean,
+    { role: 'assistant', content: text, reasoning: think, stopped: true, created_at: Date.now() }
+  ];
+  renderChat({ preserveScroll: true });
 }
 
 const TOOL_LABELS = {
@@ -7251,6 +7329,13 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       if (preserved) {
         assistantText = preserved;
         textArea.innerHTML = renderMarkdownish(preserved);
+        // Snapshot the partial answer (plus streamed thinking) into state so
+        // the next renderChat() can't wipe it before the D1 reload lands.
+        preserveStoppedAssistantBubble(
+          state.messages.length,
+          preserved,
+          thinkArea?.textContent?.trim() || ''
+        );
       } else {
         textArea.innerHTML = '<span class="tiny" style="color:var(--claude-amber)">⏹ توسط شما متوقف شد — پیشرفت ذخیره شد</span>';
       }
@@ -8339,6 +8424,32 @@ async function probeLocalTermux() {
     const ms = Date.now() - started;
     if (out) {
       out.innerHTML = `<div class="notice ok">✔ <b>متصل شد!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code></div>`;
+    }
+    // Immediate activation: a live 127.0.0.1 health probe is proof enough —
+    // flip the mode right away (badge + terminal/run_command routing) instead
+    // of waiting for the user to press "ذخیره و فعال‌سازی", then persist it so
+    // the choice survives a page reload even if the modal is never saved.
+    state.sandboxConfig = { ...(state.sandboxConfig || {}), mode: 'local-termux', localUrl: baseUrl };
+    selectSandboxMode('local-termux');
+    syncShellBadge();
+    try {
+      const saved = await api(API.config, {
+        method: 'POST',
+        body: JSON.stringify({
+          sandboxConfig: {
+            mode: 'local-termux',
+            localUrl: baseUrl,
+            cloudUrl: cleanClientCredential($('sbModalCloudUrl')?.value || state.sandboxConfig?.cloudUrl || '')
+          }
+        })
+      });
+      if (saved?.sandboxConfig) {
+        state.sandboxConfig = { ...state.sandboxConfig, ...saved.sandboxConfig };
+      }
+      if (saved?.executionMode) state.executionMode = saved.executionMode;
+      syncShellBadge();
+    } catch {
+      // Best-effort persistence — the explicit Save button retries it anyway.
     }
   } catch (err) {
     if (out) {
