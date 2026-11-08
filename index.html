@@ -1652,12 +1652,12 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <input class="field" type="range" id="cfgTemperature" min="0" max="1.2" step="0.05" value="0.25" oninput="document.getElementById('cfgTempVal').textContent=Number(this.value).toFixed(2)" style="padding:6px">
       </div>
       <div>
-        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps · ۴ تا ۳۰۰)</label>
-        <input class="field" type="text" inputmode="numeric" id="cfgMaxSteps" style="direction:ltr;text-align:left" value="20" placeholder="مثلاً 200">
+        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps)</label>
+        <input class="field" type="number" id="cfgMaxSteps" min="4" max="96" step="2" value="16">
       </div>
       <div>
-        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن · ۶۰۰۰ تا ۲۵۶۰۰۰)</label>
-        <input class="field" type="text" inputmode="numeric" id="cfgContextBudget" style="direction:ltr;text-align:left" value="24000" placeholder="مثلاً 50000">
+        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن)</label>
+        <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
       </div>
       <div>
         <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز توکن و سقف درخواست (v3)</label>
@@ -1672,7 +1672,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="effort-keep-banner" style="margin-top:10px;margin-bottom:4px">
       <span>🔥 تنظیم ۴ محور قدرت، استقامت طولانی و «اولترا کد» در پنل اختصاصی موتور:</span>
-      <button type="button" onclick="openPowerModalFromCodex()">⚡ باز کردن موتور قدرت</button>
+      <button type="button" onclick="closeModal('codexModal');openPowerModal()">⚡ باز کردن موتور قدرت</button>
     </div>
 
     <label class="field-label" for="cfgSessionGoal">🎯 هدف فعال جلسه (Session Goal — اختیاری، معادل <code>/goal</code>)</label>
@@ -1734,17 +1734,6 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
     </div>
 
     <div id="powerAxesContainer"></div>
-
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:10px">
-      <div>
-        <label class="field-label" for="powerMaxStepsInput" style="margin-top:0">سقف گام‌های حلقه (Max Steps · ۴ تا ۳۰۰)</label>
-        <input class="field" type="text" inputmode="numeric" id="powerMaxStepsInput" style="direction:ltr;text-align:left" placeholder="مثلاً 200" oninput="onPowerNumericDraftChange()">
-      </div>
-      <div>
-        <label class="field-label" for="powerContextBudgetInput" style="margin-top:0">بودجه زمینه (توکن · ۶۰۰۰ تا ۲۵۶۰۰۰)</label>
-        <input class="field" type="text" inputmode="numeric" id="powerContextBudgetInput" style="direction:ltr;text-align:left" placeholder="مثلاً 50000" oninput="onPowerNumericDraftChange()">
-      </div>
-    </div>
 
     <div class="modal-actions" style="justify-content:space-between;margin-top:12px">
       <button type="button" onclick="resetPowerModalToDefault()">بازنشانی به متوسط</button>
@@ -2196,7 +2185,7 @@ const DEFAULT_CLIENT_AGENT_CONFIG = {
   readAgentsMd: true,
   responseStyle: 'balanced',
   temperature: 0.25,
-  maxSteps: 20,
+  maxSteps: 16,
   contextBudget: 24000,
   workStamina: 'medium',
   detailThinking: 'medium',
@@ -3460,18 +3449,6 @@ function syncAgentUi() {
 
 let powerModalDraft = null;
 
-function parseFlexInt(raw, fallback, min, max) {
-  if (raw === null || raw === undefined) return fallback;
-  const ascii = String(raw)
-    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
-    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
-    .replace(/[,،_\s\u066c]/g, '')
-    .trim();
-  const num = ascii ? Math.round(Number(ascii)) : NaN;
-  if (!Number.isFinite(num)) return fallback;
-  return Math.min(Math.max(num, min), max);
-}
-
 function computeClientPowerSummary(cfg) {
   const c = cfg || state.agentConfig || DEFAULT_CLIENT_AGENT_CONFIG;
   const axes = [
@@ -3486,17 +3463,13 @@ function computeClientPowerSummary(cfg) {
   const avgPct = Math.round(
     axes.reduce((s, lv) => s + (POWER_LEVEL_META[lv]?.pct ?? 26), 0) / axes.length
   );
-  const userSteps = parseFlexInt(c.maxSteps, 20, 4, 300);
-  const userBudget = parseFlexInt(c.contextBudget, 24000, 6000, 256000);
-  const stepMap = { low: 8, medium: Math.max(userSteps, 20), hard: 32, 'very-hard': 44, max: 60, 'ultra-code': 80 };
+  const stepMap = { low: 8, medium: Math.max(c.maxSteps || 20, 20), hard: 32, 'very-hard': 44, max: 60, 'ultra-code': 80 };
   const ctxMap = { low: 16, medium: 24, hard: 36, 'very-hard': 48, max: 64, 'ultra-code': 88 };
   const stamina = c.workStamina || 'medium';
-  const steps = userSteps !== 20 && userSteps > (stepMap[stamina] || 20)
-    ? userSteps
-    : Math.max(stepMap[stamina] || 20, stamina === 'low' ? 8 : userSteps);
-  const ctxK = Math.max(ctxMap[stamina] || 24, Math.round(userBudget / 1000));
+  const steps = Math.max(stepMap[stamina] || 20, stamina === 'low' ? 8 : (c.maxSteps || 16));
+  const ctxK = Math.max(ctxMap[stamina] || 24, Math.round((c.contextBudget || 24000) / 1000));
   const allSame = axes.every((lv) => lv === axes[0]) ? axes[0] : null;
-  return { topTier, avgPct, steps, ctxK, userSteps, userBudget, allSame, axes };
+  return { topTier, avgPct, steps, ctxK, allSame, axes };
 }
 
 function syncPowerUi() {
@@ -3570,25 +3543,11 @@ function openPowerModal() {
     detailThinking: cfg.detailThinking || 'medium',
     ambitionLevel: cfg.ambitionLevel || 'medium',
     humanSensitivity: cfg.humanSensitivity || 'medium',
-    maxSteps: parseFlexInt(cfg.maxSteps, 20, 4, 300),
-    contextBudget: parseFlexInt(cfg.contextBudget, 24000, 6000, 256000)
+    maxSteps: cfg.maxSteps || 16,
+    contextBudget: cfg.contextBudget || 24000
   };
-  if ($('powerMaxStepsInput')) $('powerMaxStepsInput').value = String(powerModalDraft.maxSteps);
-  if ($('powerContextBudgetInput')) $('powerContextBudgetInput').value = String(powerModalDraft.contextBudget);
   renderPowerModalContent();
   $('powerModal')?.classList.add('open');
-}
-
-function onPowerNumericDraftChange() {
-  if (!powerModalDraft) return;
-  powerModalDraft.maxSteps = parseFlexInt($('powerMaxStepsInput')?.value, powerModalDraft.maxSteps || 20, 4, 300);
-  powerModalDraft.contextBudget = parseFlexInt($('powerContextBudgetInput')?.value, powerModalDraft.contextBudget || 24000, 6000, 256000);
-  renderPowerModalContent();
-}
-
-async function openPowerModalFromCodex() {
-  await saveAgentConfigFromModal(true);
-  openPowerModal();
 }
 
 function setPowerAxisDraft(axisKey, level) {
@@ -3609,31 +3568,21 @@ function applyPowerMasterPreset(level) {
 }
 
 function resetPowerModalToDefault() {
-  if (powerModalDraft) {
-    powerModalDraft.maxSteps = 20;
-    powerModalDraft.contextBudget = 24000;
-    if ($('powerMaxStepsInput')) $('powerMaxStepsInput').value = '20';
-    if ($('powerContextBudgetInput')) $('powerContextBudgetInput').value = '24000';
-  }
   applyPowerMasterPreset('medium');
 }
 
 async function savePowerConfigFromModal() {
   if (!powerModalDraft) return closeModal('powerModal');
-  const nextSteps = parseFlexInt($('powerMaxStepsInput')?.value, powerModalDraft.maxSteps || state.agentConfig.maxSteps || 20, 4, 300);
-  const nextBudget = parseFlexInt($('powerContextBudgetInput')?.value, powerModalDraft.contextBudget || state.agentConfig.contextBudget || 24000, 6000, 256000);
   const patch = {
     workStamina: powerModalDraft.workStamina || 'medium',
     detailThinking: powerModalDraft.detailThinking || 'medium',
     ambitionLevel: powerModalDraft.ambitionLevel || 'medium',
-    humanSensitivity: powerModalDraft.humanSensitivity || 'medium',
-    maxSteps: nextSteps,
-    contextBudget: nextBudget
+    humanSensitivity: powerModalDraft.humanSensitivity || 'medium'
   };
   await persistAgentConfigPatch(patch, false);
   closeModal('powerModal');
   const sum = computeClientPowerSummary(state.agentConfig);
-  toast(`⚡ موتور قدرت ذخیره شد: ${POWER_LEVEL_META[sum.topTier]?.label} (تا ${faNum(sum.steps)} گام · بودجه ${faNum(state.agentConfig.contextBudget)} توکن)`);
+  toast(`⚡ موتور قدرت تنظیم شد: ${POWER_LEVEL_META[sum.topTier]?.label} (تا ${faNum(sum.steps)} گام)`);
   if ($('chat') && $('chat').querySelector('.welcome')) renderChat();
 }
 
@@ -3707,8 +3656,8 @@ function openCodexModal() {
     $('cfgTemperature').value = String(cfg.temperature ?? 0.25);
     if ($('cfgTempVal')) $('cfgTempVal').textContent = Number(cfg.temperature ?? 0.25).toFixed(2);
   }
-  if ($('cfgMaxSteps')) $('cfgMaxSteps').value = String(parseFlexInt(cfg.maxSteps, 20, 4, 300));
-  if ($('cfgContextBudget')) $('cfgContextBudget').value = String(parseFlexInt(cfg.contextBudget, 24000, 6000, 256000));
+  if ($('cfgMaxSteps')) $('cfgMaxSteps').value = String(cfg.maxSteps || 16);
+  if ($('cfgContextBudget')) $('cfgContextBudget').value = String(cfg.contextBudget || 24000);
   if ($('cfgTokenSaver')) $('cfgTokenSaver').value = cfg.tokenSaver || 'max';
   if ($('cfgSessionGoal')) $('cfgSessionGoal').value = cfg.goal || '';
   if ($('cfgCustomInstructions')) $('cfgCustomInstructions').value = cfg.customInstructions || '';
@@ -3717,10 +3666,8 @@ function openCodexModal() {
   $('codexModal').classList.add('open');
 }
 
-async function saveAgentConfigFromModal(silent = false) {
+async function saveAgentConfigFromModal() {
   const activeCard = document.querySelector('#codexModeCards .codex-mode-card.active');
-  const nextSteps = parseFlexInt($('cfgMaxSteps')?.value, state.agentConfig.maxSteps || 20, 4, 300);
-  const nextBudget = parseFlexInt($('cfgContextBudget')?.value, state.agentConfig.contextBudget || 24000, 6000, 256000);
   const patch = {
     mode: activeCard?.dataset?.agentMode || state.agentConfig.mode || 'auto-edit',
     networkAccess: Boolean($('cfgNetworkAccess')?.checked),
@@ -3730,18 +3677,15 @@ async function saveAgentConfigFromModal(silent = false) {
     readAgentsMd: Boolean($('cfgReadAgentsMd')?.checked),
     responseStyle: $('cfgResponseStyle')?.value || 'balanced',
     temperature: Math.min(Math.max(Number($('cfgTemperature')?.value ?? 0.25), 0), 1.5),
-    maxSteps: nextSteps,
-    contextBudget: nextBudget,
+    maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 96),
+    contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 160000),
     tokenSaver: $('cfgTokenSaver')?.value || 'max',
     goal: String($('cfgSessionGoal')?.value || '').trim().slice(0, 600),
     customInstructions: String($('cfgCustomInstructions')?.value || '').trim().slice(0, 4000),
     reducedMotion: Boolean($('cfgReducedMotion')?.checked),
     theme: state.agentConfig.theme || 'claude-warm'
   };
-  await persistAgentConfigPatch(patch, false);
-  if (!silent) {
-    toast(`✔ تنظیمات عامل ذخیره شد (سقف ${faNum(state.agentConfig.maxSteps)} گام · بودجه ${faNum(state.agentConfig.contextBudget)} توکن)`);
-  }
+  await persistAgentConfigPatch(patch, true);
   closeModal('codexModal');
 }
 
@@ -4078,32 +4022,24 @@ async function stopCurrentTurn(opts = {}) {
     persistMarathon({ paused: true });
     renderMarathonUI();
   }
-  const activeCtrl = state.chatAbortController;
+  if (state.chatAbortController) {
+    try { state.chatAbortController.abort(); } catch { /* ignore */ }
+  }
   if (convId && !String(convId).startsWith('pending-')) {
     try {
-      await Promise.race([
-        fetch(API.stop, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: convId })
-        }),
-        new Promise((r) => setTimeout(r, 400))
-      ]);
-      // Give the SSE reader a brief window (~180ms) to receive the server's `event: stopped` frame after D1 flush
-      if (state.chatAbortController === activeCtrl && activeCtrl && !activeCtrl.signal.aborted) {
-        await new Promise((r) => setTimeout(r, 180));
-      }
+      await fetch(API.stop, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: convId })
+      });
     } catch { /* ignore */ }
-  }
-  if (activeCtrl && !activeCtrl.signal.aborted) {
-    try { activeCtrl.abort(); } catch { /* ignore */ }
   }
   if (!opts.silentToast) {
     toast(
       pausedMarathonNow
         ? '⏹ اجرای فعلی متوقف و ماراتن موقتاً مکث شد (برای ادامه ▶ یا توقف کامل ⏹ را بزنید)'
-        : '⏹ اجرای پاسخ متوقف شد و متن تولیدشده حفظ گردید'
+        : '⏹ اجرای پاسخ متوقف شد و پیشرفت ذخیره گردید'
     );
   }
 }
@@ -5461,6 +5397,108 @@ function maybeAutoScrollChat() {
   }
 }
 
+function setupKeyboardShortcuts() {
+  if (window.__cpKeyboardShortcutsBound) return;
+  window.__cpKeyboardShortcutsBound = true;
+
+  document.addEventListener('keydown', (event) => {
+    const meta = event.ctrlKey || event.metaKey;
+    const shift = event.shiftKey;
+    const alt = event.altKey;
+    const target = event.target;
+    const tag = (target?.tagName || '').toLowerCase();
+    const isInput = tag === 'input' || tag === 'textarea' || target?.isContentEditable;
+
+    // Escape: close modals, palettes, sidebars, drawers
+    if (event.key === 'Escape') {
+      closeFloatingPalettes();
+      document.querySelectorAll('.modal.open').forEach((m) => m.classList.remove('open'));
+      if (document.querySelector('.sidebar.show')) toggleSidebar(false);
+      if ($('topDrawer')?.classList.contains('open')) toggleTopDrawer(false);
+      return;
+    }
+
+    // Ctrl/Cmd + Enter: Send message (from prompt textarea)
+    if (meta && event.key === 'Enter' && !shift && target?.id === 'prompt') {
+      event.preventDefault();
+      sendMessage();
+      return;
+    }
+
+    // Ctrl/Cmd + K: Quick Open (files palette)
+    if (meta && event.key.toLowerCase() === 'k' && !shift && !isInput) {
+      event.preventDefault();
+      openQuickOpen();
+      return;
+    }
+
+    // Ctrl/Cmd + P: Command Palette
+    if (meta && event.key.toLowerCase() === 'p' && !shift && !isInput) {
+      event.preventDefault();
+      openCommandPalette();
+      return;
+    }
+
+    // Ctrl/Cmd + Shift + T: Toggle Sidebar
+    if (meta && shift && event.key.toLowerCase() === 't' && !isInput) {
+      event.preventDefault();
+      toggleSidebar();
+      return;
+    }
+
+    // Ctrl/Cmd + /: Search in conversation
+    if (meta && event.key === '/' && !shift && !isInput) {
+      event.preventDefault();
+      openSearch();
+      return;
+    }
+
+    // Ctrl/Cmd + Shift + K: Stop current turn
+    if (meta && shift && event.key.toLowerCase() === 'k' && !isInput) {
+      event.preventDefault();
+      stopCurrentTurn();
+      return;
+    }
+
+    // Alt + R: Cycle reasoning effort (already exists at line ~3175)
+    // Alt + C: Toggle chat/terminal view
+    if (alt && event.key.toLowerCase() === 'c' && !isInput) {
+      event.preventDefault();
+      const current = $('topDrawer')?.classList.contains('open') ? 'terminal' : 'chat';
+      setWorkspaceView(current === 'chat' ? 'terminal' : 'chat');
+      return;
+    }
+
+    // Alt + N: New conversation
+    if (alt && event.key.toLowerCase() === 'n' && !isInput) {
+      event.preventDefault();
+      newConversation(true);
+      return;
+    }
+
+    // Alt + M: Toggle Marathon panel
+    if (alt && event.key.toLowerCase() === 'm' && !isInput) {
+      event.preventDefault();
+      openMarathonPanel();
+      return;
+    }
+
+    // Alt + S: Open Settings
+    if (alt && event.key.toLowerCase() === 's' && !isInput) {
+      event.preventDefault();
+      openSettings();
+      return;
+    }
+
+    // F1: Help / Keyboard shortcuts reference
+    if (event.key === 'F1' && !isInput) {
+      event.preventDefault();
+      openKeyboardShortcutsHelp();
+      return;
+    }
+  });
+}
+
 function initMobileAndChatUxListeners() {
   if (chatUxBound) return;
   chatUxBound = true;
@@ -6521,15 +6559,12 @@ async function sendMessage(overrideText, opts = {}) {
       networkAccess: state.agentConfig?.networkAccess !== false,
       shellAccess: state.agentConfig?.shellAccess !== false,
       temperature: state.agentConfig?.temperature ?? 0.25,
-      maxSteps: state.agentConfig?.maxSteps || 20,
-      contextBudget: state.agentConfig?.contextBudget || 24000,
       workStamina: state.agentConfig?.workStamina || 'medium',
       detailThinking: state.agentConfig?.detailThinking || 'medium',
       ambitionLevel: state.agentConfig?.ambitionLevel || 'medium',
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
       tokenSaver: state.agentConfig?.tokenSaver || 'max',
       localRunner: isLocalTermuxActive() && opts._forceCloudRunner !== true,
-      ...(isLocalTermuxActive() && getLocalTermuxInfo() ? { localTermuxInfo: getLocalTermuxInfo() } : {}),
       ...(Array.isArray(opts.localExecResults) ? { localExecResults: opts.localExecResults } : {}),
       ...(effectiveTurnMarathon ? { marathon: effectiveTurnMarathon } : {}),
       ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
@@ -6706,20 +6741,12 @@ async function sendMessage(overrideText, opts = {}) {
       }
     } else if (result.clientNetworkDropped && chatAbort.signal.aborted) {
       turnClean = false;
-      const keptText = String(result.text || bubble._streamedText || '').trim();
-      const keptThink = String(result.reasoning || bubble._streamedThink || '').trim();
-      // Give server D1 flush a brief 220ms window before reloading history, and preserve partial text if D1 didn't catch it!
-      await new Promise((r) => setTimeout(r, 220));
-      if (!isTurnCurrent()) return;
+      // User clicked Stop (`stopCurrentTurn`) — reload persisted checkpoint cleanly without treating as network drop!
       await reloadCurrentConversation({ syncWorkspace: true });
-      preserveStoppedAssistantBubble(msgCountBeforeTurn, keptText, keptThink);
       renderActiveCheckpointBanner();
     } else if (result.resumable) {
       turnClean = false;
-      const keptText = String(result.text || bubble._streamedText || '').trim();
-      const keptThink = String(result.reasoning || bubble._streamedThink || '').trim();
       await reloadCurrentConversation({ syncWorkspace: true });
-      preserveStoppedAssistantBubble(msgCountBeforeTurn, keptText, keptThink);
       const ckReason = state.activeCheckpoint?.reason || '';
       if (ckReason === 'wave_continue' && waveCount < 8) {
         nextWaveChainPayload = {
@@ -6752,12 +6779,7 @@ async function sendMessage(overrideText, opts = {}) {
     turnClean = false;
     if (!isTurnCurrent()) return;
     if (chatAbort.signal.aborted || error?.name === 'AbortError') {
-      const keptText = String(bubble._streamedText || '').trim();
-      const keptThink = String(bubble._streamedThink || '').trim();
-      await new Promise((r) => setTimeout(r, 220));
-      if (!isTurnCurrent()) return;
       await reloadCurrentConversation({ syncWorkspace: true });
-      preserveStoppedAssistantBubble(msgCountBeforeTurn, keptText, keptThink);
       renderActiveCheckpointBanner();
     } else {
       const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
@@ -6900,7 +6922,6 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
     } else if (event === 'thinking_delta') {
       streamedThink += String(data.text || '');
-      bubble._streamedThink = streamedThink;
       if (thinkArea) {
         let liveBox = thinkArea.querySelector('.live-think-stream');
         if (!liveBox) {
@@ -6922,7 +6943,6 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
     } else if (event === 'delta') {
       streamedDraft += String(data.text || '');
-      bubble._streamedText = streamedDraft;
       textArea.classList.add('stream-cursor');
       textArea.innerHTML = renderMarkdownish(streamedDraft);
       const verbEl = bubble.querySelector('.claude-verb');
@@ -7221,32 +7241,10 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
     userStopped,
     resumable: resumableStop,
     clientNetworkDropped,
-    text: assistantText || streamedDraft,
-    reasoning: streamedThink,
+    text: assistantText,
     touchedFiles,
     deletedFiles
   };
-}
-
-function preserveStoppedAssistantBubble(msgCountBeforeTurn, partialText = '', partialThink = '') {
-  const cleanText = String(partialText || '').trim();
-  const cleanThink = String(partialThink || '').trim();
-  if (!cleanText && !cleanThink) return false;
-  const alreadySavedInHistory =
-    Array.isArray(state.messages) &&
-    state.messages.length > msgCountBeforeTurn &&
-    state.messages.at(-1)?.role === 'assistant';
-  if (alreadySavedInHistory) return false;
-  const fallbackMsg = {
-    role: 'assistant',
-    content: cleanText || '⏹ *(تولید پاسخ در مرحلهٔ استدلال توسط شما متوقف شد)*',
-    ...(cleanThink ? { reasoning: cleanThink } : {}),
-    interrupted: true,
-    created_at: Date.now()
-  };
-  state.messages.push(fallbackMsg);
-  appendMessageElement(fallbackMsg);
-  return true;
 }
 
 function cssEscape(value) {
@@ -7926,40 +7924,7 @@ async function resetProviderConfig() {
    Personal Sandbox, 24/7 Cloud Runner & Direct Local Termux Bridge (127.0.0.1)
    ========================================================================= */
 const LOCAL_TERMUX_TOKEN_STORE = 'cp.localTermuxToken';
-const LOCAL_TERMUX_INFO_STORE = 'cp.localTermuxInfo';
 let sbDraftMode = 'auto';
-
-function getLocalTermuxInfo() {
-  if (state.localTermuxInfo && typeof state.localTermuxInfo === 'object') return state.localTermuxInfo;
-  try {
-    const raw = localStorage.getItem(LOCAL_TERMUX_INFO_STORE);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        state.localTermuxInfo = parsed;
-        return parsed;
-      }
-    }
-  } catch { /* ignore */ }
-  return null;
-}
-
-function setLocalTermuxInfo(info) {
-  const clean =
-    info && typeof info === 'object'
-      ? {
-          runner: String(info.runner || 'termux').slice(0, 40),
-          platform: String(info.platform || '').slice(0, 40),
-          arch: String(info.arch || '').slice(0, 40),
-          node: String(info.node || '').slice(0, 40)
-        }
-      : null;
-  state.localTermuxInfo = clean;
-  try {
-    if (clean) localStorage.setItem(LOCAL_TERMUX_INFO_STORE, JSON.stringify(clean));
-  } catch { /* ignore */ }
-  return clean;
-}
 
 function generateRandomCpToken() {
   const bytes = new Uint8Array(18);
@@ -8269,33 +8234,8 @@ async function probeLocalTermux() {
       return;
     }
     const ms = Date.now() - started;
-    setLocalTermuxInfo(info);
-    selectSandboxMode('local-termux');
-    state.sandboxConfig = { ...(state.sandboxConfig || {}), mode: 'local-termux', localUrl: baseUrl };
-    state.executionMode = 'local-termux';
-    if (state.agentConfig && state.agentConfig.shellAccess === false) {
-      state.agentConfig = { ...state.agentConfig, shellAccess: true };
-    }
-    syncShellBadge();
-    if (typeof syncAgentUi === 'function') syncAgentUi();
-    if ($('sbModalStatusBadge')) $('sbModalStatusBadge').textContent = '📱 پل Termux فعال';
-    try {
-      const saved = await api(API.config, {
-        method: 'POST',
-        body: JSON.stringify({
-          sandboxConfig: { mode: 'local-termux', localUrl: baseUrl },
-          ...(state.agentConfig?.shellAccess === true ? { agentConfig: { ...state.agentConfig, shellAccess: true } } : {})
-        })
-      });
-      if (saved?.sandboxConfig) state.sandboxConfig = { ...state.sandboxConfig, ...saved.sandboxConfig };
-      syncShellBadge();
-    } catch {}
-    const modeNote =
-      state.agentConfig?.mode === 'plan' || state.agentConfig?.mode === 'suggest'
-        ? `<br><span class="tiny" style="color:var(--warn)">⚠ حالت عامل فعلی شما «${esc(state.agentConfig.mode)}» (فقط خواندنی) است — برای اینکه هوش مصنوعی دستورها را در Termux اجرا کند، حالت عامل پایین چت را روی <b>Auto-Edit</b> بگذارید.</span>`
-        : '';
     if (out) {
-      out.innerHTML = `<div class="notice ok">✔ <b>متصل شد و فعال گردید!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code><br><span class="tiny">پل مستقیم Termux خودکار ذخیره شد — اکنون هوش مصنوعی مستقیماً روی Termux گوشی شما دستور اجرا می‌کند.</span>${modeNote}</div>`;
+      out.innerHTML = `<div class="notice ok">✔ <b>متصل شد!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code></div>`;
     }
   } catch (err) {
     if (out) {
