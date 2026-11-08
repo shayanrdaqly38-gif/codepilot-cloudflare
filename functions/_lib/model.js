@@ -1753,13 +1753,38 @@ export function normalizeReasoningEffort(rawEffort, modelId, legacyThinkingFlag,
  * Build pure OpenAI-compatible wire variants for `reasoning_effort`.
  * Never injects synthetic `thinking.budget_tokens` or inflates `max_tokens`.
  */
-export function buildReasoningWireVariants(modelId, effort, payload = {}) {
+export function buildReasoningWireVariants(modelId, effort, payload = {}, opts = {}) {
   const baseTemp = payload.temperature ?? 0.3;
   const explicitMaxTokens = Number(payload.max_tokens ?? payload.maxTokens) || 0;
   const maxTokPart = explicitMaxTokens ? { max_tokens: explicitMaxTokens } : {};
+  const isNvidiaNim = /\.api\.nvidia\.com/i.test(String(opts?.baseUrl || ''));
 
   if (!effort) {
     return [{ effort: null, params: { temperature: baseTemp, ...maxTokPart } }];
+  }
+
+  // NVIDIA NIM (`integrate.api.nvidia.com/v1`) controls thinking via `chat_template_kwargs` rather than `reasoning_effort`
+  // on DeepSeek v3/v4, GLM, Qwen 3/3.5, Nemotron-3, Kimi k2.6, and Gemma-4!
+  if (isNvidiaNim && !/^mistralai\/mistral-small-4/i.test(String(modelId || ''))) {
+    const enableThink = effort !== 'none' && effort !== 'minimal';
+    const mLow = String(modelId || '').toLowerCase();
+    const kw =
+      /deepseek-v4|kimi-k2\.6/.test(mLow)
+        ? { thinking: enableThink }
+        : /minimax-m3/.test(mLow)
+          ? { thinking_mode: enableThink ? 'enabled' : 'disabled' }
+          : { enable_thinking: enableThink };
+    return [
+      {
+        effort,
+        params: {
+          chat_template_kwargs: kw,
+          ...(!enableThink ? { temperature: baseTemp } : {}),
+          ...maxTokPart
+        }
+      },
+      { effort: null, params: { temperature: baseTemp, ...maxTokPart } }
+    ];
   }
 
   const variants = [
@@ -3304,7 +3329,7 @@ async function callModelOnProvider(env, payload) {
       payload.reasoningEffort !== undefined || payload.thinking !== undefined
         ? normalizeReasoningEffort(payload.reasoningEffort, model, payload.thinking, env)
         : null;
-    let wireVariants = buildReasoningWireVariants(model, modelEffort, payload);
+    let wireVariants = buildReasoningWireVariants(model, modelEffort, payload, { baseUrl });
     let variantIdx = 0;
     let netRetries = 0;
     let statusRetries = 0;
@@ -3312,6 +3337,9 @@ async function callModelOnProvider(env, payload) {
     let forceNonStreamFallback = false;
     let omitStreamOptions = false;
     let omitCacheControl = false;
+    let omitTools = false;
+    const isNvidiaNim = /\.api\.nvidia\.com/i.test(baseUrl);
+    const effectiveAttemptTimeout = isNvidiaNim && !env.MODEL_TIMEOUT_MS && !requestedTimeout ? 45_000 : timeout;
     const tokenSaverMode = payload.tokenSaver || env?._agentConfig?.tokenSaver || 'max';
     const gatewaySlot = Number(env?._gatewaySlot) || 1;
 
@@ -3336,7 +3364,7 @@ async function callModelOnProvider(env, payload) {
         ...(streamThisAttempt && !omitStreamOptions ? { stream_options: { include_usage: true } } : {}),
         ...currentVariant.params,
         messages: cacheWrapped.messages,
-        ...(cacheWrapped.tools && cacheWrapped.tools.length
+        ...(!omitTools && cacheWrapped.tools && cacheWrapped.tools.length
           ? { tools: cacheWrapped.tools, tool_choice: payload.tool_choice || 'auto' }
           : {})
       });
@@ -3353,8 +3381,8 @@ async function callModelOnProvider(env, payload) {
           env._subreq.count += 1;
         }
         const combinedSignal = payload.signal
-          ? AbortSignal.any([payload.signal, AbortSignal.timeout(timeout)])
-          : AbortSignal.timeout(timeout);
+          ? AbortSignal.any([payload.signal, AbortSignal.timeout(effectiveAttemptTimeout)])
+          : AbortSignal.timeout(effectiveAttemptTimeout);
         response = await fetch(endpoint, {
           method: 'POST',
           redirect: 'manual',
@@ -3382,7 +3410,8 @@ async function callModelOnProvider(env, payload) {
             'subrequest_limit'
           );
         }
-        if (netRetries === 0 && cIndex === 0 && !env?._hasNextGateway) {
+        const isTimeoutErr = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+        if (netRetries === 0 && cIndex === 0 && !env?._hasNextGateway && !isTimeoutErr) {
           netRetries += 1;
           await sleep(400);
           continue;
@@ -3588,6 +3617,20 @@ async function callModelOnProvider(env, payload) {
         /stream_options|include_usage/i.test(errText)
       ) {
         omitStreamOptions = true;
+        continue;
+      }
+
+      // Chat-only models (e.g. certain NVIDIA NIM / OpenRouter VLMs or reasoning endpoints with `supports_tools=False`)
+      // reject `tools` / `tool_choice` with 400/422 — retry cleanly without tools so chat still works!
+      if (
+        (status === 400 || status === 422) &&
+        !omitTools &&
+        payload?.tools?.length &&
+        /(?:tool|function)[_\s-]*(?:call|choice|use)?s?.*(?:not\s+supported|unsupported|not\s+allowed|disabled)|does\s+not\s+support\s+(?:tool|function)/i.test(
+          errText
+        )
+      ) {
+        omitTools = true;
         continue;
       }
 

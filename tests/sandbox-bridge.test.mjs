@@ -231,7 +231,16 @@ test('Method 2 (24/7 Cloud Sandbox) & Method 3 (Direct Local Termux 127.0.0.1 Br
         );
       }
       if (modelStep === 3) {
-        // Method 3 turn (Wave 1): model writes a script AND calls run_command for Local Termux Bridge
+        // Method 3 turn (Wave 1): model receives explicit LIVE ANDROID TERMUX awareness in system prompt
+        const sysMsg = body.messages[0];
+        assert.equal(sysMsg.role, 'system');
+        assert.match(sysMsg.content, /LIVE ANDROID TERMUX CONNECTED/, 'system prompt explicitly declares live Android Termux bridge');
+        assert.match(
+          sysMsg.content,
+          /Termux Device Bridge: CONNECTED LIVE \(127\.0\.0\.1:8787 · termux \/ android \/ arm64 \/ Node v25\.3\.1\)/,
+          'system prompt injects probed Termux OS/arch/Node metadata'
+        );
+        assert.doesNotMatch(sysMsg.content, /is VIRTUAL/, 'system prompt must never claim run_command is VIRTUAL when Termux is connected');
         return new Response(
           JSON.stringify({
             id: 'cmpl-m3-1',
@@ -385,7 +394,7 @@ test('Method 2 (24/7 Cloud Sandbox) & Method 3 (Direct Local Termux 127.0.0.1 Br
     );
     assert.equal((await saveLocalRes.json()).executionMode, 'local-termux');
 
-    // Wave 1: Chat request with `localRunner: true` -> executes `write_file('calc.js')` & hands off `run_command('node calc.js')`
+    // Wave 1: Chat request with D1-saved `local-termux` mode + `localTermuxInfo` -> executes `write_file('calc.js')` & hands off `run_command('node calc.js')`
     const chatM3Wave1 = await chatApi.onRequestPost(
       ctx(
         req('/api/chat', {
@@ -395,7 +404,7 @@ test('Method 2 (24/7 Cloud Sandbox) & Method 3 (Direct Local Termux 127.0.0.1 Br
             conversationId: convId,
             message: 'اسکریپت calc.js را بنویس و روی Termux اجرا کن',
             shellAccess: true,
-            localRunner: true
+            localTermuxInfo: { runner: 'termux', platform: 'android', arch: 'arm64', node: 'v25.3.1' }
           }
         }),
         env
