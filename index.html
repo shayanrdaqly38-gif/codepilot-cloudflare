@@ -77,6 +77,31 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .editor{display:flex;width:100%;overflow:auto;background:#0d1017}
 .nums{margin:0;padding:14px 12px 24px 10px;color:#555e70;text-align:right;user-select:none;border-right:1px solid #202531;line-height:1.75;white-space:pre;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;min-width:44px;height:max-content}
 .code{flex:1;min-height:100%;resize:none;border:0;outline:0;background:transparent;padding:14px 16px 30px;color:#d5dcf0;direction:ltr;text-align:left;white-space:pre;tab-size:2;line-height:1.75;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:hidden}
+.code-highlight{position:absolute;top:0;left:0;right:0;bottom:0;padding:14px 16px 30px;color:transparent;direction:ltr;text-align:left;white-space:pre;tab-size:2;line-height:1.75;font:13px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:hidden;pointer-events:none;z-index:1}
+.code-highlight code{color:#d5dcf0;background:transparent}
+.code-highlight .token.comment{color:#6a7a8d;font-style:italic}
+.code-highlight .token.keyword{color:#c792ea}
+.code-highlight .token.function{color:#82aaff}
+.code-highlight .token.string{color:#c3e88d}
+.code-highlight .token.number{color:#f78c6c}
+.code-highlight .token.operator{color:#89ddff}
+.code-highlight .token.punctuation{color:#a6b3cc}
+.code-highlight .token.class-name{color:#ffcb6b}
+.code-highlight .token.tag{color:#f07178}
+.code-highlight .token.attr-name{color:#ffcb6b}
+.code-highlight .token.attr-value{color:#c3e88d}
+.code-highlight .token.selector{color:#f07178}
+.code-highlight .token.property{color:#82aaff}
+.code-highlight .token.builtin{color:#82aaff}
+.code-highlight .token.constant{color:#f78c6c}
+.code-highlight .token.regex{color:#c3e88d}
+.code-highlight .token.url{color:#c3e88d}
+.code-highlight .token.variable{color:#ffcb6b}
+.code-highlight .token.symbol{color:#f78c6c}
+.code-highlight .token.deleted{color:#ff6b6b;background:#3a1a1a}
+.code-highlight .token.inserted{color:#6bcb77;background:#1a3a1a}
+.editor-wrap{position:relative;flex:1}
+.editor-wrap .nums{z-index:2}
 .empty-editor{flex:1;display:grid;place-items:center;color:#66708a;gap:10px;text-align:center;padding:20px}
 .bottom{height:190px;min-height:110px;border-top:1px solid var(--line);display:flex;flex-direction:column;background:#0c0f15;flex:none}
 .bottom-head{height:36px;display:flex;align-items:center;gap:18px;padding:0 13px;border-bottom:1px solid var(--line);color:var(--muted);flex:none}
@@ -1421,8 +1446,9 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
       </div>
     </div>
     <div class="editor-area">
-      <div class="editor" id="editorWrap">
+      <div class="editor-wrap" id="editorWrap">
         <pre class="nums" id="nums">1</pre>
+        <pre class="code-highlight" id="codeHighlight" aria-hidden="true"><code></code></pre>
         <textarea class="code" id="editor" spellcheck="false" aria-label="ویرایشگر کد" oninput="editorChanged()" onkeydown="editorKey(event)"></textarea>
       </div>
       <div class="diff-panel" id="diffPanel">
