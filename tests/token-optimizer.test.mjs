@@ -14,7 +14,7 @@ import {
 } from '../functions/_lib/token-optimizer.js';
 import { normalizeAgentConfig, saveUserProviderConfig, resolveEffectiveEnv } from '../functions/_lib/provider.js';
 import { buildWorkingContext, buildSystemPrompt } from '../functions/_lib/memory.js';
-import { callModel, parseProviderModelItem } from '../functions/_lib/model.js';
+import { callModel, parseProviderModelItem, buildReasoningWireVariants } from '../functions/_lib/model.js';
 import { accessToken, fakeJwks, makeEnv, req, ctx, rsaKeys } from './harness.mjs';
 import * as authApi from '../functions/api/auth.js';
 import * as configApi from '../functions/api/config.js';
@@ -585,9 +585,15 @@ test('OpenRouter 50-Req/Day Suite: 0-probe metadata, 1-shot fast-finish edit, mu
           );
         }
         assert.equal(authHeader, 'Bearer sk-or-v1-keyB22222222');
-        // Verify `think` tool was stripped & `index.html` was preloaded in Request #1!
+        // Verify `think` tool was stripped & `index.html` was preloaded in Request #1 inside system prompt (never inside user message)!
         assert.equal(bodyObj.tools.some((t) => t.function.name === 'think'), false);
         assert.match(JSON.stringify(bodyObj.messages), /Preloaded: index\.html/);
+        assert.match(bodyObj.messages[0].content, /Preloaded: index\.html/, 'Preloaded workspace context is in system prompt');
+        assert.doesNotMatch(
+          String(bodyObj.messages.at(-1).content),
+          /Preloaded:/,
+          'User message stays untampered so models never mistake preloaded context for prompt injection'
+        );
 
         return new Response(
           JSON.stringify({
@@ -1132,6 +1138,60 @@ test('True Runtime Model Identity + Honest Verified actualModel + Paid/Unavailab
     assert.match(upstreamCalls[1].sysText, /درگاه 2 \(`zro\.moonmath\.ai`\)/);
     assert.equal(failoverDone.data.actualModel, 'deepseek-v4.1-flash');
     assert.equal(failoverDone.data.modelMismatch, true, 'Alerts user that Gateway 2 answered with deepseek-v4.1-flash instead of qwen');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('NVIDIA NIM (integrate.api.nvidia.com/v1): native chat_template_kwargs thinking wire + automatic omitTools fallback', async () => {
+  const nvBase = { baseUrl: 'https://integrate.api.nvidia.com/v1' };
+
+  const dsV4Variants = buildReasoningWireVariants('deepseek-ai/deepseek-v4-flash', 'medium', {}, nvBase);
+  assert.deepEqual(dsV4Variants[0].params, { chat_template_kwargs: { thinking: true } });
+
+  const glm51Variants = buildReasoningWireVariants('z-ai/glm-5.1', 'high', {}, nvBase);
+  assert.deepEqual(glm51Variants[0].params, { chat_template_kwargs: { enable_thinking: true } });
+
+  const minimaxVariants = buildReasoningWireVariants('minimaxai/minimax-m3', 'low', {}, nvBase);
+  assert.deepEqual(minimaxVariants[0].params, { chat_template_kwargs: { thinking_mode: 'enabled' } });
+
+  const origFetch = globalThis.fetch;
+  const seenBodies = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body || '{}');
+    seenBodies.push(body);
+    if (body.tools) {
+      return new Response(
+        JSON.stringify({ detail: 'tool calling / function calling is not supported for this model' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        model: 'mistralai/mistral-large-3-675b-instruct-2512',
+        choices: [{ message: { role: 'assistant', content: 'پاسخ بدون نیاز به حذف دستی ابزارها' }, finish_reason: 'stop' }]
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  try {
+    const out = await callModel(
+      {
+        MODEL_BASE_URL: 'https://integrate.api.nvidia.com/v1',
+        MODEL_API_KEY: 'nvapi-test-key-123456',
+        DEFAULT_MODEL: 'mistralai/mistral-large-3-675b-instruct-2512'
+      },
+      {
+        model: 'mistralai/mistral-large-3-675b-instruct-2512',
+        messages: [{ role: 'user', content: 'سلام' }],
+        tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: {} } } }]
+      }
+    );
+    assert.equal(seenBodies.length, 2, 'automatically retried without tools when NIM container rejected tools');
+    assert.ok(Array.isArray(seenBodies[0].tools));
+    assert.equal(seenBodies[1].tools, undefined);
+    assert.match(out.message.content, /پاسخ بدون نیاز/);
   } finally {
     globalThis.fetch = origFetch;
   }

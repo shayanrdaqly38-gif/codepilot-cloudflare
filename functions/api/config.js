@@ -146,8 +146,9 @@ export async function onRequestPost({ request, env }) {
         agentConfig = await saveUserAgentConfig(env, identity.owner, data.agentConfig);
       }
       let sandboxConfig;
-      if (data?.sandboxConfig && typeof data.sandboxConfig === 'object') {
-        sandboxConfig = await saveUserSandboxConfig(env, identity.owner, data.sandboxConfig);
+      const incomingSandbox = data?.sandboxConfig || data?.sandbox;
+      if (incomingSandbox && typeof incomingSandbox === 'object') {
+        sandboxConfig = await saveUserSandboxConfig(env, identity.owner, incomingSandbox);
       }
       const touchesProvider =
         data?.reset !== undefined ||
