@@ -808,6 +808,8 @@ export async function onRequestPost(context) {
           ...(typeof data?.shellAccess === 'boolean' ? { shellAccess: data.shellAccess } : {}),
           ...(VALID_TOKEN_SAVER_MODES.includes(data?.tokenSaver) ? { tokenSaver: data.tokenSaver } : {}),
           ...(data?.temperature !== undefined ? { temperature: data.temperature } : {}),
+          ...(data?.maxSteps !== undefined ? { maxSteps: data.maxSteps } : {}),
+          ...(data?.contextBudget !== undefined ? { contextBudget: data.contextBudget } : {}),
           ...(incomingPower.workStamina ? { workStamina: incomingPower.workStamina } : {}),
           ...(incomingPower.detailThinking ? { detailThinking: incomingPower.detailThinking } : {}),
           ...(incomingPower.ambitionLevel ? { ambitionLevel: incomingPower.ambitionLevel } : {}),
@@ -841,8 +843,10 @@ export async function onRequestPost(context) {
       const thinking = Boolean(reasoningEffort && reasoningEffort !== 'none');
       const powerPlan = resolvePowerExecutionPlan(agentConfig, reasoningEffort);
       const maxSteps = powerPlan.maxSteps;
-      // Keep active rolling window lean (<= 32k tokens) even in Ultra-Code mode so Persian UTF-8 + JSON tool calls
-      // never trip reverse-proxy 512KB/1MB HTTP 413 limits; older turns summarize into durable rolling memory automatically!
+      if (data?.contextBudget !== undefined && agentConfig.contextBudget) {
+        effectiveEnv.CONTEXT_BUDGET_TOKENS = String(agentConfig.contextBudget);
+      }
+      // Keep automatic stamina-boosted floor lean (<= 32k tokens) unless the user explicitly configured a higher contextBudget:
       const cappedPowerContextBudget = Math.min(powerPlan.contextBudget, 32_000);
       if (
         agentConfig.workStamina &&
