@@ -817,6 +817,10 @@ window.fetch = async (u, init = {}) => {
 };
 await window.probeLocalTermux();
 assert.ok($('sbModalLocalProbeOut').textContent.includes('متصل شد'), 'local Termux health probe succeeds');
+assert.ok(
+  $('shellMode').textContent.includes('Termux'),
+  'probeLocalTermux() IMMEDIATELY activates and persists local-termux even before saveSandboxSettings()'
+);
 await window.saveSandboxSettings();
 assert.ok(!$('sandboxModal').classList.contains('open'), 'saveSandboxSettings closes modal');
 assert.ok($('shellMode').textContent.includes('Termux'), '#shellMode badge reflects active Local Termux bridge');
@@ -901,6 +905,20 @@ const mismatchBadge = window.renderVerifiedModelBadgeHtml({
 });
 assert.ok(mismatchBadge.includes('mismatch'), 'Mismatched model renders amber mismatch alert class');
 assert.ok(mismatchBadge.includes('⚠️ مدل واقعی اجراشده در سرور:'), 'Warns user clearly when server ran a different model than selected');
+
+// Stopped turn bubble preservation (`preserveStoppedAssistantBubble` keeps partial text & thinking visible after reload)
+window.eval(`
+  const beforeCount = Array.isArray(state.messages) ? state.messages.length : 0;
+  preserveStoppedAssistantBubble(beforeCount, 'متن نیمه‌کاره قبل از دکمه توقف', 'گام اول تفکر مدل');
+`);
+assert.ok(
+  $('chat').textContent.includes('متن نیمه‌کاره قبل از دکمه توقف'),
+  'Stopped partial assistant message stays visible in #chat and is never wiped'
+);
+assert.ok(
+  $('chat').textContent.includes('گام اول تفکر مدل'),
+  'Stopped partial thinking stays visible in #chat'
+);
 
 console.log('UI SMOKE TEST PASSED');
 console.log('network calls:', calls.length);

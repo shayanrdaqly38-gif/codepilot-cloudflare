@@ -98,7 +98,7 @@ t('memory: marathon injection on with goal + duration', () => {
     agentConfig: { marathon: { active: true, goal: 'تقویت محیط توسعه CodePilot', durationH: 2, startedAt: 1700000000000 } }
   });
   assert.ok(on.includes('MARATHON MODE IS ACTIVE'));
-  assert.ok(on.includes('بهبود بازی دوز'));
+  assert.ok(on.includes('تقویت محیط توسعه CodePilot'));
   assert.ok(on.includes('2 ساعت'));
 });
 

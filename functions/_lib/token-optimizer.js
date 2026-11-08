@@ -679,9 +679,9 @@ export function buildRequestSaverWorkspacePack(
   const directive =
     '[⚡ 50-REQ/DAY ULTRA-BATCH MODE: Minimize API round-trips! ' +
     (preloadedPaths.length
-      ? `Files (${preloadedPaths.join(', ')}) are ALREADY preloaded below — DO NOT call list_files or read_file on them. `
+      ? `Files (${preloadedPaths.join(', ')}) are ALREADY preloaded below by the system — DO NOT call list_files or read_file on them. `
       : 'Do NOT call think. ') +
-    'Execute ALL write_file/apply_patch edits together in ONE single parallel batch AND include your brief Persian explanation in `content` in the SAME response!]';
+    'If the user asks for code changes, execute ALL write_file/apply_patch edits together in ONE single parallel batch AND include your brief Persian explanation in `content` in the SAME response!]';
 
   return {
     injectedText: blocks.length ? `${directive}\n\n${blocks.join('\n\n')}` : directive,

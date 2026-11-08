@@ -921,7 +921,13 @@ export async function onRequestPost(context) {
         thinkToolLimit: powerPlan.thinkToolLimit
       };
 
-      const useLocalTermuxBridge = Boolean(data?.localRunner && agentConfig.shellAccess);
+      const useLocalTermuxBridge = Boolean(
+        data?.localRunner !== false &&
+          (data?.localRunner === true || effectiveEnv._sandboxMode === 'local-termux') &&
+          agentConfig.shellAccess
+      );
+      const localTermuxInfo =
+        data?.localTermuxInfo && typeof data.localTermuxInfo === 'object' ? data.localTermuxInfo : null;
       const linux = linuxRunnerEnabled(effectiveEnv) || useLocalTermuxBridge;
       const sb = sandboxEnabled(env);
       const turnReg = registerActiveTurn(identity.owner, conversation.id);
@@ -1121,6 +1127,8 @@ export async function onRequestPost(context) {
             user: { email: identity.email },
             sandbox: sb,
             linuxRunner: linux,
+            localTermux: useLocalTermuxBridge,
+            localTermuxInfo,
             thinking,
             agentConfig
           });
@@ -1134,39 +1142,31 @@ export async function onRequestPost(context) {
           await hydrateUploadParts(env, identity.owner, messages, { resilient: true });
 
           // Zero-roundtrip `@filepath` / `@filepath:start-end` pre-pinning + 50-RPD 1-Shot Workspace Preloading on fresh user turns:
+          // Placed inside `messages[0]` (`role: 'system'`) so LLMs never mistake preloaded workspace files for user prompt injection!
           if (!resumingFromCheckpoint && tokenSaver !== 'off') {
             const pinned = extractMentionedFileContext(userText, workspace.files, { tokenSaver });
-            let extraTurnContext = pinned.block || '';
+            let extraTurnContext = pinned.block ? pinned.block.trim() : '';
             if (pinned.savedRoundtripChars > 0) {
               turn.savedChars += pinned.savedRoundtripChars;
             }
             if (rpdSaverActive) {
               const rpdPack = buildRequestSaverWorkspacePack(workspace.files, workspace.active, userText, {
-                excludePaths: pinned.pinnedPaths || []
+                excludePaths: pinned.paths || pinned.pinnedPaths || []
               });
               if (rpdPack.injectedText) {
                 extraTurnContext = extraTurnContext
                   ? `${extraTurnContext}\n\n${rpdPack.injectedText}`
-                  : `\n\n${rpdPack.injectedText}`;
+                  : rpdPack.injectedText;
                 if (rpdPack.preloadedPaths.length) {
                   turn.savedRequests = (turn.savedRequests || 0) + 1;
                 }
               }
             }
-            if (extraTurnContext) {
-              for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
-                if (messages[mi]?.role === 'user') {
-                  if (typeof messages[mi].content === 'string') {
-                    messages[mi] = { ...messages[mi], content: `${messages[mi].content}${extraTurnContext}` };
-                  } else if (Array.isArray(messages[mi].content)) {
-                    messages[mi] = {
-                      ...messages[mi],
-                      content: [...messages[mi].content, { type: 'text', text: extraTurnContext }]
-                    };
-                  }
-                  break;
-                }
-              }
+            if (extraTurnContext && messages[0]?.role === 'system' && typeof messages[0].content === 'string') {
+              messages[0] = {
+                ...messages[0],
+                content: `${messages[0].content}\n\n## System-Provided Workspace Context\n${extraTurnContext}`
+              };
             }
           }
 
@@ -1972,10 +1972,13 @@ export async function onRequestPost(context) {
           let savedCheckpoint = null;
           try {
             const repairedPartial = repairToolGroups(newMessages);
-            if (partialContent) {
+            const effectiveStoppedText =
+              partialContent ||
+              (errCode === 'turn_stopped' && partialReasoning ? '⏹ *(تولید پاسخ در مرحلهٔ استدلال توسط کاربر متوقف شد)*' : '');
+            if (effectiveStoppedText) {
               repairedPartial.push({
                 role: 'assistant',
-                content: partialContent,
+                content: effectiveStoppedText,
                 ...(partialReasoning ? { reasoning: partialReasoning.slice(0, 10_000) } : {}),
                 created_at: Date.now()
               });

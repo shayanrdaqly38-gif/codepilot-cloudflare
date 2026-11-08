@@ -4022,24 +4022,32 @@ async function stopCurrentTurn(opts = {}) {
     persistMarathon({ paused: true });
     renderMarathonUI();
   }
-  if (state.chatAbortController) {
-    try { state.chatAbortController.abort(); } catch { /* ignore */ }
-  }
+  const activeCtrl = state.chatAbortController;
   if (convId && !String(convId).startsWith('pending-')) {
     try {
-      await fetch(API.stop, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: convId })
-      });
+      await Promise.race([
+        fetch(API.stop, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: convId })
+        }),
+        new Promise((r) => setTimeout(r, 400))
+      ]);
+      // Give the SSE reader a brief window (~180ms) to receive the server's `event: stopped` frame after D1 flush
+      if (state.chatAbortController === activeCtrl && activeCtrl && !activeCtrl.signal.aborted) {
+        await new Promise((r) => setTimeout(r, 180));
+      }
     } catch { /* ignore */ }
+  }
+  if (activeCtrl && !activeCtrl.signal.aborted) {
+    try { activeCtrl.abort(); } catch { /* ignore */ }
   }
   if (!opts.silentToast) {
     toast(
       pausedMarathonNow
         ? '⏹ اجرای فعلی متوقف و ماراتن موقتاً مکث شد (برای ادامه ▶ یا توقف کامل ⏹ را بزنید)'
-        : '⏹ اجرای پاسخ متوقف شد و پیشرفت ذخیره گردید'
+        : '⏹ اجرای پاسخ متوقف شد و متن تولیدشده حفظ گردید'
     );
   }
 }
@@ -6463,6 +6471,7 @@ async function sendMessage(overrideText, opts = {}) {
       humanSensitivity: state.agentConfig?.humanSensitivity || 'medium',
       tokenSaver: state.agentConfig?.tokenSaver || 'max',
       localRunner: isLocalTermuxActive() && opts._forceCloudRunner !== true,
+      ...(isLocalTermuxActive() && getLocalTermuxInfo() ? { localTermuxInfo: getLocalTermuxInfo() } : {}),
       ...(Array.isArray(opts.localExecResults) ? { localExecResults: opts.localExecResults } : {}),
       ...(effectiveTurnMarathon ? { marathon: effectiveTurnMarathon } : {}),
       ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
@@ -6639,12 +6648,20 @@ async function sendMessage(overrideText, opts = {}) {
       }
     } else if (result.clientNetworkDropped && chatAbort.signal.aborted) {
       turnClean = false;
-      // User clicked Stop (`stopCurrentTurn`) — reload persisted checkpoint cleanly without treating as network drop!
+      const keptText = String(result.text || bubble._streamedText || '').trim();
+      const keptThink = String(result.reasoning || bubble._streamedThink || '').trim();
+      // Give server D1 flush a brief 220ms window before reloading history, and preserve partial text if D1 didn't catch it!
+      await new Promise((r) => setTimeout(r, 220));
+      if (!isTurnCurrent()) return;
       await reloadCurrentConversation({ syncWorkspace: true });
+      preserveStoppedAssistantBubble(msgCountBeforeTurn, keptText, keptThink);
       renderActiveCheckpointBanner();
     } else if (result.resumable) {
       turnClean = false;
+      const keptText = String(result.text || bubble._streamedText || '').trim();
+      const keptThink = String(result.reasoning || bubble._streamedThink || '').trim();
       await reloadCurrentConversation({ syncWorkspace: true });
+      preserveStoppedAssistantBubble(msgCountBeforeTurn, keptText, keptThink);
       const ckReason = state.activeCheckpoint?.reason || '';
       if (ckReason === 'wave_continue' && waveCount < 8) {
         nextWaveChainPayload = {
@@ -6677,7 +6694,12 @@ async function sendMessage(overrideText, opts = {}) {
     turnClean = false;
     if (!isTurnCurrent()) return;
     if (chatAbort.signal.aborted || error?.name === 'AbortError') {
+      const keptText = String(bubble._streamedText || '').trim();
+      const keptThink = String(bubble._streamedThink || '').trim();
+      await new Promise((r) => setTimeout(r, 220));
+      if (!isTurnCurrent()) return;
       await reloadCurrentConversation({ syncWorkspace: true });
+      preserveStoppedAssistantBubble(msgCountBeforeTurn, keptText, keptThink);
       renderActiveCheckpointBanner();
     } else {
       const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
@@ -6820,6 +6842,7 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
     } else if (event === 'thinking_delta') {
       streamedThink += String(data.text || '');
+      bubble._streamedThink = streamedThink;
       if (thinkArea) {
         let liveBox = thinkArea.querySelector('.live-think-stream');
         if (!liveBox) {
@@ -6841,6 +6864,7 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       }
     } else if (event === 'delta') {
       streamedDraft += String(data.text || '');
+      bubble._streamedText = streamedDraft;
       textArea.classList.add('stream-cursor');
       textArea.innerHTML = renderMarkdownish(streamedDraft);
       const verbEl = bubble.querySelector('.claude-verb');
@@ -7139,10 +7163,32 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
     userStopped,
     resumable: resumableStop,
     clientNetworkDropped,
-    text: assistantText,
+    text: assistantText || streamedDraft,
+    reasoning: streamedThink,
     touchedFiles,
     deletedFiles
   };
+}
+
+function preserveStoppedAssistantBubble(msgCountBeforeTurn, partialText = '', partialThink = '') {
+  const cleanText = String(partialText || '').trim();
+  const cleanThink = String(partialThink || '').trim();
+  if (!cleanText && !cleanThink) return false;
+  const alreadySavedInHistory =
+    Array.isArray(state.messages) &&
+    state.messages.length > msgCountBeforeTurn &&
+    state.messages.at(-1)?.role === 'assistant';
+  if (alreadySavedInHistory) return false;
+  const fallbackMsg = {
+    role: 'assistant',
+    content: cleanText || '⏹ *(تولید پاسخ در مرحلهٔ استدلال توسط شما متوقف شد)*',
+    ...(cleanThink ? { reasoning: cleanThink } : {}),
+    interrupted: true,
+    created_at: Date.now()
+  };
+  state.messages.push(fallbackMsg);
+  appendMessageElement(fallbackMsg);
+  return true;
 }
 
 function cssEscape(value) {
@@ -7822,7 +7868,40 @@ async function resetProviderConfig() {
    Personal Sandbox, 24/7 Cloud Runner & Direct Local Termux Bridge (127.0.0.1)
    ========================================================================= */
 const LOCAL_TERMUX_TOKEN_STORE = 'cp.localTermuxToken';
+const LOCAL_TERMUX_INFO_STORE = 'cp.localTermuxInfo';
 let sbDraftMode = 'auto';
+
+function getLocalTermuxInfo() {
+  if (state.localTermuxInfo && typeof state.localTermuxInfo === 'object') return state.localTermuxInfo;
+  try {
+    const raw = localStorage.getItem(LOCAL_TERMUX_INFO_STORE);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        state.localTermuxInfo = parsed;
+        return parsed;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function setLocalTermuxInfo(info) {
+  const clean =
+    info && typeof info === 'object'
+      ? {
+          runner: String(info.runner || 'termux').slice(0, 40),
+          platform: String(info.platform || '').slice(0, 40),
+          arch: String(info.arch || '').slice(0, 40),
+          node: String(info.node || '').slice(0, 40)
+        }
+      : null;
+  state.localTermuxInfo = clean;
+  try {
+    if (clean) localStorage.setItem(LOCAL_TERMUX_INFO_STORE, JSON.stringify(clean));
+  } catch { /* ignore */ }
+  return clean;
+}
 
 function generateRandomCpToken() {
   const bytes = new Uint8Array(18);
@@ -8132,8 +8211,33 @@ async function probeLocalTermux() {
       return;
     }
     const ms = Date.now() - started;
+    setLocalTermuxInfo(info);
+    selectSandboxMode('local-termux');
+    state.sandboxConfig = { ...(state.sandboxConfig || {}), mode: 'local-termux', localUrl: baseUrl };
+    state.executionMode = 'local-termux';
+    if (state.agentConfig && state.agentConfig.shellAccess === false) {
+      state.agentConfig = { ...state.agentConfig, shellAccess: true };
+    }
+    syncShellBadge();
+    if (typeof syncAgentUi === 'function') syncAgentUi();
+    if ($('sbModalStatusBadge')) $('sbModalStatusBadge').textContent = '📱 پل Termux فعال';
+    try {
+      const saved = await api(API.config, {
+        method: 'POST',
+        body: JSON.stringify({
+          sandboxConfig: { mode: 'local-termux', localUrl: baseUrl },
+          ...(state.agentConfig?.shellAccess === true ? { agentConfig: { ...state.agentConfig, shellAccess: true } } : {})
+        })
+      });
+      if (saved?.sandboxConfig) state.sandboxConfig = { ...state.sandboxConfig, ...saved.sandboxConfig };
+      syncShellBadge();
+    } catch {}
+    const modeNote =
+      state.agentConfig?.mode === 'plan' || state.agentConfig?.mode === 'suggest'
+        ? `<br><span class="tiny" style="color:var(--warn)">⚠ حالت عامل فعلی شما «${esc(state.agentConfig.mode)}» (فقط خواندنی) است — برای اینکه هوش مصنوعی دستورها را در Termux اجرا کند، حالت عامل پایین چت را روی <b>Auto-Edit</b> بگذارید.</span>`
+        : '';
     if (out) {
-      out.innerHTML = `<div class="notice ok">✔ <b>متصل شد!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code></div>`;
+      out.innerHTML = `<div class="notice ok">✔ <b>متصل شد و فعال گردید!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code><br><span class="tiny">پل مستقیم Termux خودکار ذخیره شد — اکنون هوش مصنوعی مستقیماً روی Termux گوشی شما دستور اجرا می‌کند.</span>${modeNote}</div>`;
     }
   } catch (err) {
     if (out) {
