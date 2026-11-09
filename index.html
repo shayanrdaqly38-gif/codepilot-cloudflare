@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-09.3">
+<html lang="fa" dir="rtl" data-build="2026-11-09.4">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1605,7 +1605,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="notice" id="storageNotice" style="display:none"></div>
 
-    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.3</div>
+    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.4</div>
 
     <div class="modal-actions">
       <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
@@ -4122,14 +4122,34 @@ function putConvCache(id, entry) {
   }
 }
 
+/** Pause a marathon because the user navigated OUT of its own conversation.
+ *  Returns false (and leaves the state alone) during boot, when
+ *  state.conversationId is still null — otherwise the first openConversation()
+ *  looks like "leaving" and silently pauses the marathon the user left running.
+ *  Deliberately routes through persistMarathon (no toast) instead of
+ *  pauseMarathon(), which would also kill the running turn. */
+function pauseMarathonForNavigation() {
+  const before = getMarathonState();
+  if (!before.active || before.paused) return false;
+  if (!state.conversationId) return false;
+  if (before.conversationId && before.conversationId !== state.conversationId) return false;
+  persistMarathon({ paused: true });
+  renderMarathonUI();
+  return true;
+}
+
 function detachActiveTurnForNavigation() {
   // Parallel chats: navigating away must NEVER stop the turn. The server
   // keeps executing it headlessly (waitUntil) and persists progress to D1
   // incrementally — we just detach the reader and poll for progress.
   cancelMarathonAuto();
   const ms = getMarathonState();
-  if (ms.active && !ms.paused && ms.conversationId && ms.conversationId === state.conversationId && (state.busy || state.chatAbortController)) {
-    persistMarathon({ paused: true });
+  if (ms.active && !ms.paused && ms.conversationId && ms.conversationId === state.conversationId) {
+    // Always pause when leaving the marathon's conversation, not only while a
+    // turn is in flight. Otherwise the marathon stayed `active && !paused` in a
+    // conversation nobody is looking at, while the UI in the NEW conversation
+    // said "🔒 ثبت شده در گفتگوی دیگری" — i.e. the user believed it had stopped.
+    pauseMarathonForNavigation();
   }
   if (!state.busy && !state.chatAbortController) return;
   const prevConvId = state.conversationId;
@@ -4611,8 +4631,15 @@ async function openConversation(id, { fresh = false } = {}) {
     return;
   }
 
-  if (state.busy && id !== state.conversationId) {
-    detachActiveTurnForNavigation();
+  if (id !== state.conversationId) {
+    if (state.busy) {
+      detachActiveTurnForNavigation();
+    } else if (pauseMarathonForNavigation()) {
+      // Leaving an active marathon while idle: it must not keep running unseen
+      // in a conversation the user just walked away from. (No-op during boot,
+      // when state.conversationId is still null — that is not "leaving".)
+      cancelMarathonAuto();
+    }
   }
   if (state.openConvAbort) {
     try { state.openConvAbort.abort(); } catch { /* ignore */ }
@@ -9657,6 +9684,9 @@ function formatMarathonElapsed(ms) {
 }
 
 function getMarathonAutoEnabled() {
+  // Default ON is intentional for marathon (continuous work is the whole point)
+  // and the state is visible in the #marathonAuto checkbox; an explicit '0'
+  // from the user is always respected.
   return localStorage.getItem(MARATHON_AUTO_KEY) !== '0';
 }
 
@@ -9690,19 +9720,23 @@ function scheduleMarathonAutoContinue() {
     return;
   }
   const maxCycles = Math.max(1, Number(s.maxCycles) || MARATHON_AUTO_MAX);
-  if (marathonAutoTurnCount >= maxCycles) {
+  // Compare against the PERSISTED cycle, not the in-memory marathonAutoTurnCount:
+  // that counter resets to 0 on every page reload, which let a refreshed marathon
+  // run its whole budget again (8/10 → cycles 9…18 in practice).
+  const spentCycles = Math.max(Number(s.cycle) || 0, marathonAutoTurnCount);
+  if (spentCycles >= maxCycles) {
     stopMarathon('max-cycles');
     return;
   }
   if (state.busy || state.chatAbortController) return;
   const lastMsg = state.messages[state.messages.length - 1];
   if (!lastMsg || lastMsg.role !== 'assistant') return;
-  marathonAutoTurnCount += 1;
-  const nextCycle = Math.max(marathonAutoTurnCount + 1, (Number(s.cycle) || 1) + 1);
+  marathonAutoTurnCount = spentCycles + 1;
+  const nextCycle = spentCycles + 1;
   persistMarathon({ cycle: nextCycle });
   marathonAutoConvId = state.conversationId;
   const st = $('marathonStatus');
-  if (st) st.textContent = `⏳ ادامهٔ خودکار ${faNum(marathonAutoTurnCount)}/${faNum(maxCycles)}…`;
+  if (st) st.textContent = `⏳ ادامهٔ خودکار ${faNum(nextCycle)}/${faNum(maxCycles)}…`;
   const delayMs = (window.__CP_MARATHON_DELAY | 0) > 0 ? (window.__CP_MARATHON_DELAY | 0) : marathonAutoDelayMs;
   marathonAutoTimer = setTimeout(() => {
     marathonAutoTimer = null;
@@ -9794,7 +9828,9 @@ function renderMarathonUI() {
   if (!hereActive) {
     if (startBtn) {
       startBtn.hidden = false;
-      startBtn.textContent = otherConvActive ? '▶ انتقال و شروع در این گفتگو' : '▶ شروع ماراتن';
+      // "انتقال" was a lie: startMarathon resets the goal/cycle of the other
+      // conversation instead of moving it. Label it honestly.
+      startBtn.textContent = otherConvActive ? '▶ شروع ماراتن جدید در این گفتگو' : '▶ شروع ماراتن';
     }
     if (pauseBtn) pauseBtn.hidden = true;
     if (stopBtn) stopBtn.hidden = !otherConvActive;
@@ -9868,11 +9904,31 @@ function startMarathon(opts = {}) {
   const durationH = Number((durSel && durSel.value) || 0);
   const maxCycles = Math.max(1, Number((maxCycSel && maxCycSel.value) || MARATHON_AUTO_MAX));
 
+  // Guard against silently destroying a marathon that is running in ANOTHER
+  // conversation: the button used to say "▶ انتقال و شروع در این گفتگو" ("move
+  // and start here") while actually wiping the old goal/cycle and starting over
+  // from cycle 1 — with no confirmation at all.
+  const existing = getMarathonState();
+  const otherConvRunning =
+    existing.active &&
+    !existing.paused &&
+    Boolean(existing.conversationId) &&
+    existing.conversationId !== (state.conversationId || '');
+  if (otherConvRunning && !opts.forceReplace) {
+    const ok = confirm(
+      `یک ماراتن با هدف «${existing.goal || '—'}» در گفتگوی دیگری فعال است (چرخه ${existing.cycle} از ${existing.maxCycles}).\n\n` +
+        'با شروع در این گفتگو، آن ماراتن و پیشرفتش پاک می‌شود. ادامه می‌دهید؟'
+    );
+    if (!ok) {
+      toast('⏹ شروع ماراتن لغو شد — ماراتن گفتگوی قبلی دست‌نخورده ماند');
+      return null;
+    }
+  }
+
   syncMarathonGoalInputs(goal);
   marathonPanelOpen = true;
   marathonAutoTurnCount = 0;
   cancelMarathonAuto();
-  if (localStorage.getItem(MARATHON_AUTO_KEY) === null) persistMarathonAuto(true);
 
   if (state.agentConfig?.mode === 'plan' || state.agentConfig?.mode === 'suggest') {
     state.agentConfig.mode = 'full-auto';
@@ -9880,18 +9936,29 @@ function startMarathon(opts = {}) {
     persistAgentConfigPatch({ mode: 'full-auto' }).catch(() => {});
   }
 
-  const s = persistMarathon({
-    active: true,
-    paused: false,
-    goal,
-    durationH,
-    startedAt: Date.now(),
-    maxCycles,
-    cycle: 1,
-    conversationId: state.conversationId || '',
-    totalSteps: 0,
-    touchedFiles: []
-  });
+  // Write a COMPLETE record, not a merge over the previous run: persistMarathon()
+  // spreads the old state underneath, so a leftover `cycle: 9` used to survive
+  // the `cycle: 1` below whenever the patch key was shadowed, and a restarted
+  // marathon began already beyond its own cycle budget.
+  try {
+    localStorage.setItem(
+      MARATHON_KEY,
+      JSON.stringify({
+        ...DEFAULT_MARATHON,
+        active: true,
+        paused: false,
+        goal,
+        durationH,
+        startedAt: Date.now(),
+        maxCycles,
+        cycle: 1,
+        conversationId: state.conversationId || '',
+        totalSteps: 0,
+        touchedFiles: []
+      })
+    );
+  } catch { /* ignore */ }
+  const s = getMarathonState();
   renderMarathonUI();
   toast('🚀 ماراتن فعال شد: ' + goal);
   sendMessage(
@@ -9950,7 +10017,13 @@ function stopMarathon(reason = 'manual') {
     active: false,
     paused: false,
     startedAt: null,
-    cycle: 0
+    cycle: 0,
+    // Drop the finished run's counters/goal too: they used to survive forever
+    // (MARATHON_KEY is never removed), so the next marathon inherited stale
+    // totalSteps/touchedFiles and the badge maths read a leftover `goal`.
+    totalSteps: 0,
+    touchedFiles: [],
+    goal: ''
   });
   renderMarathonUI();
 
