@@ -492,6 +492,8 @@ body[data-theme="claude-day"] .pill{color:var(--claude-deep)}
   box-shadow:0 4px 14px rgba(232,123,82,.10);
 }
 .conv-mode-chip{margin-right:4px;font-size:11px;opacity:.85;vertical-align:middle}
+.conv-generating{display:inline-block;animation:convPulse 1.2s ease-in-out infinite}
+@keyframes convPulse{0%,100%{opacity:.35;transform:scale(.92)}50%{opacity:1;transform:scale(1.12)}}
 .new-conversation:hover:not(:disabled){
   background:linear-gradient(135deg,rgba(232,123,82,.34),rgba(244,178,102,.22));
   border-color:var(--claude-bright);box-shadow:0 6px 18px var(--claude-glow);
@@ -2390,6 +2392,10 @@ const state = {
   busy: false,
   activeTurnToken: 0,
   chatAbortController: null,
+  // Parallel chats: per-conversation turn tracking. state.busy only reflects
+  // the CURRENT view; busyConvs is the truth for every conversation with a
+  // live (client-streamed or server-headless) turn.
+  busyConvs: new Map(),
   openConvAbort: null,
   openConvSeq: 0,
   pendingCreatePromise: null,
@@ -3915,6 +3921,11 @@ async function boot() {
     state.memory = snapshot.memory || [];
     renderConversations();
     renderMemory();
+    // Conversations whose turn kept running server-side while the app was
+    // closed: re-attach a poller to each so their ⏳ progress streams in.
+    for (const conv of state.conversations) {
+      if (conv.turnActive) startTurnPolling(conv.id);
+    }
   } catch (error) {
     // Without D1 nothing can be saved, so the honest move is to stop here and
     // say exactly why instead of letting the user type into a dead composer.
@@ -4050,9 +4061,11 @@ function renderConversations() {
   for (const conv of state.conversations) {
     const row = document.createElement('div');
     row.className = 'conv' + (conv.id === state.conversationId ? ' active' : '');
+    const generating = state.busyConvs.has(conv.id) || conv.turnActive;
     row.innerHTML = `
       ${conv.pinned ? '<span class="pin">📌</span>' : ''}
       <span class="title">${esc(conv.title || 'گفتگوی جدید')}</span>
+      ${generating ? '<span class="conv-mode-chip conv-generating" title="در حال تولید پاسخ — حتی با بستن برنامه در سرور ادامه می‌یابد">⏳</span>' : ''}
       ${conv.mode === 'normal' ? '<span class="conv-mode-chip" title="حالت عادی — فضای کاری مستقل از GitHub (سقف ۱GB)">📦</span>' : ''}
       <span class="meta"><span>${faNum(conv.messageCount || 0)} پیام</span><span>${nowFa(conv.updatedAt)}</span></span>
       <div class="acts">
@@ -4106,6 +4119,9 @@ function putConvCache(id, entry) {
 }
 
 function detachActiveTurnForNavigation() {
+  // Parallel chats: navigating away must NEVER stop the turn. The server
+  // keeps executing it headlessly (waitUntil) and persists progress to D1
+  // incrementally — we just detach the reader and poll for progress.
   cancelMarathonAuto();
   const ms = getMarathonState();
   if (ms.active && !ms.paused && ms.conversationId && ms.conversationId === state.conversationId && (state.busy || state.chatAbortController)) {
@@ -4115,16 +4131,12 @@ function detachActiveTurnForNavigation() {
   const prevConvId = state.conversationId;
   state.activeTurnToken += 1;
   if (state.chatAbortController) {
+    // Abort only our READER — the server-side turn keeps running.
     try { state.chatAbortController.abort(); } catch { /* ignore */ }
     state.chatAbortController = null;
   }
   if (prevConvId && !String(prevConvId).startsWith('pending-')) {
-    fetch(API.stop, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: prevConvId })
-    }).catch(() => {});
+    startTurnPolling(prevConvId);
   }
   state.busy = false;
   document.body.classList.remove('is-working');
@@ -4133,6 +4145,126 @@ function detachActiveTurnForNavigation() {
   $('sendBtn').disabled = pendingAttachments.some((file) => file.status !== 'ready');
   $('sendBtn').textContent = 'ارسال ↑';
   $('composerHint').textContent = '';
+}
+
+/* ---- background turn polling (parallel chats + server-headless turns) ----
+   A turn keeps running on the SERVER even after we navigate away, refresh,
+   or close the app. These pollers re-attach the view to that progress:
+   new messages stream in every ~2.5s until the turn finishes. */
+const turnPollers = new Map();
+
+function startTurnPolling(convId) {
+  if (!convId || String(convId).startsWith('pending-') || turnPollers.has(convId)) return;
+  const entry = { timer: null, stopped: false, lastSeq: 0 };
+  turnPollers.set(convId, entry);
+  const poll = async () => {
+    if (entry.stopped) return;
+    let data = null;
+    try {
+      data = await api(
+        `/api/state/conversations/${encodeURIComponent(convId)}?lite=1&skipWorkspace=1&limit=80`
+      );
+    } catch {
+      // 404 (deleted conversation) ends the poller; transient errors retry.
+      if (!state.conversations.some((c) => c.id === convId)) stopTurnPolling(convId);
+      return;
+    }
+    if (entry.stopped) return;
+    const msgs = Array.isArray(data?.messages) ? data.messages : [];
+    for (const m of msgs) {
+      const seq = Number(m.seq) || 0;
+      if (seq > entry.lastSeq) entry.lastSeq = seq;
+    }
+    const conv = state.conversations.find((c) => c.id === convId);
+    if (conv && data?.conversation) {
+      Object.assign(conv, data.conversation);
+      conv.turnActive = Boolean(data.conversation.turnActive || data.turnActive);
+    }
+    const stillActive = Boolean(data?.turnActive || data?.conversation?.turnActive);
+    const isCurrent = state.conversationId === convId;
+    if (isCurrent && msgs.length) {
+      const fresh = msgs.filter((m) => !state.messages.some((x) => x.seq === m.seq));
+      if (fresh.length) {
+        state.messages.push(...fresh);
+        const bar = ensureLiveTurnBar();
+        fresh.forEach((m) => appendMessageElement(m));
+        $('chat').insertBefore(bar, null);
+        const nearBottom =
+          $('chat').scrollHeight - $('chat').scrollTop - $('chat').clientHeight < 220;
+        if (nearBottom) $('chat').scrollTop = $('chat').scrollHeight;
+      }
+    }
+    if (stillActive) {
+      renderConversations();
+      return;
+    }
+    // Turn finished (or never was): stop polling and settle the view.
+    stopTurnPolling(convId);
+    if (conv) conv.turnActive = false;
+    state.convCache.delete(convId);
+    renderConversations();
+    if (isCurrent) {
+      // Free the working surface for the SAME conversation (openConversation
+      // only detaches when switching to a different one).
+      state.busy = false;
+      document.body.classList.remove('is-working');
+      if ($('stopTurnBtn')) $('stopTurnBtn').hidden = true;
+      $('sendBtn').textContent = 'ارسال ↑';
+      $('sendBtn').disabled = pendingAttachments.some((f) => f.status !== 'ready');
+      removeLiveTurnBar();
+      await openConversation(convId, { fresh: true }).catch(() => {});
+    } else {
+      loadConversations().catch(() => {});
+    }
+  };
+  entry.timer = setInterval(poll, 2500);
+  poll();
+}
+
+function stopTurnPolling(convId) {
+  const entry = turnPollers.get(convId);
+  if (!entry) return;
+  entry.stopped = true;
+  clearInterval(entry.timer);
+  turnPollers.delete(convId);
+}
+
+function ensureLiveTurnBar() {
+  let bar = $('liveTurnBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'liveTurnBar';
+    bar.className = 'tiny';
+    bar.style.cssText = 'padding:8px 10px;text-align:center;color:var(--claude-bright)';
+    bar.textContent = '⏳ پاسخ در حال تولید است — حتی با بستن برنامه در سرور ادامه می‌یابد';
+    $('chat').appendChild(bar);
+  }
+  return bar;
+}
+
+function removeLiveTurnBar() {
+  $('liveTurnBar')?.remove();
+}
+
+/** Automatically continue interrupted turns that are safe to resume without
+ *  asking (wave boundaries / local-exec handoffs). User-stopped turns keep
+ *  the manual resume card — we never override an explicit stop. */
+const autoResumedCheckpoints = new Set();
+
+function maybeAutoResumeCheckpoint(checkpoint) {
+  if (!checkpoint || !checkpoint.active) return false;
+  const reason = String(checkpoint.reason || '');
+  const waveNum = Number(checkpoint.waveNumber || 0);
+  const canAuto =
+    (reason === 'wave_continue' && waveNum < 12) ||
+    (reason === 'local_exec_continue' && isLocalTermuxActive());
+  if (!canAuto) return false;
+  const dedupeKey = `${state.conversationId}:${reason}:${waveNum}`;
+  if (autoResumedCheckpoints.has(dedupeKey)) return false;
+  autoResumedCheckpoints.add(dedupeKey);
+  toast('🔄 ادامه‌ی خودکار از نقطه‌ی قطع…');
+  sendMessage('ادامه', { resumeCheckpoint: true, silentAutoResume: true });
+  return true;
 }
 
 async function stopCurrentTurn(opts = {}) {
@@ -4146,7 +4278,12 @@ async function stopCurrentTurn(opts = {}) {
   if (state.chatAbortController) {
     try { state.chatAbortController.abort(); } catch { /* ignore */ }
   }
+  // A headless turn (no live reader here) is stopped through the server —
+  // the D1 flag reaches whichever isolate is running it.
   if (convId && !String(convId).startsWith('pending-')) {
+    state.busyConvs.delete(convId);
+    stopTurnPolling(convId);
+    removeLiveTurnBar();
     try {
       await fetch(API.stop, {
         method: 'POST',
@@ -4192,6 +4329,24 @@ function applyOpenedConversationData(id, data, { preserveScroll = false } = {}) 
   state.turnNotices = null;
   updateContextMeter(data.conversation || {});
   renderMarathonUI();
+
+  // Re-attach to a still-running (server-headless) turn: show the working
+  // surface and stream progress in via the poller.
+  const turnActive = Boolean(data.turnActive || data.conversation?.turnActive);
+  if (conv) conv.turnActive = turnActive;
+  if (turnActive) {
+    state.busy = true;
+    document.body.classList.add('is-working');
+    if ($('stopTurnBtn')) $('stopTurnBtn').hidden = false;
+    $('sendBtn').disabled = true;
+    $('sendBtn').textContent = '✳…';
+    ensureLiveTurnBar();
+    startTurnPolling(id);
+  } else {
+    removeLiveTurnBar();
+    // No live turn — silently resume interrupted waves without asking.
+    maybeAutoResumeCheckpoint(data.checkpoint);
+  }
 }
 
 /* --------------------- new-conversation mode picker ---------------------- */
@@ -6831,6 +6986,12 @@ async function sendMessage(overrideText, opts = {}) {
   state.chatAbortController = chatAbort;
   const isTurnCurrent = () => state.activeTurnToken === turnToken && state.conversationId === turnConvId;
 
+  // Register the per-conversation turn BEFORE flipping view state so the ⏳
+  // badge appears immediately, even when this conversation later goes to the
+  // background while other chats keep generating in parallel.
+  state.busyConvs.set(turnConvId, { abort: chatAbort, startedAt: Date.now() });
+  stopTurnPolling(turnConvId);
+  renderConversations();
   state.busy = true;
   toggleTopDrawer(false);
   $('chat')?.querySelectorAll('.resume-checkpoint-card').forEach((el) => el.remove());
@@ -7161,7 +7322,16 @@ async function sendMessage(overrideText, opts = {}) {
   } finally {
     clearInterval(spinTimer);
     if (state.chatAbortController === chatAbort) state.chatAbortController = null;
-    if (!isTurnCurrent()) return;
+    state.busyConvs.delete(turnConvId);
+    if (!isTurnCurrent()) {
+      // We navigated away mid-turn: the server keeps running this turn
+      // headlessly — poll it for live progress instead of showing errors.
+      if (!String(turnConvId).startsWith('pending-')) startTurnPolling(turnConvId);
+      loadConversations().catch(() => {});
+      renderConversations();
+      return;
+    }
+    removeLiveTurnBar();
     bubble.querySelector('.claude-spinner-bar')?.remove();
     bubble.querySelector('.msg-text')?.classList.remove('stream-cursor');
     state.busy = false;
@@ -8417,7 +8587,10 @@ async function callLocalTermuxRunner(command, filesMap = {}, externalSignal = nu
         cmd: command,
         cwd: '/workspace',
         timeoutMs: 25_000,
-        files: filesMap
+        files: filesMap,
+        // Per-conversation isolated workspace on the runner: parallel chats
+        // each execute inside their own directory and never collide.
+        session: String(state.conversationId || '')
       })
     });
     const data = await res.json().catch(() => null);

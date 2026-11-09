@@ -65,6 +65,11 @@ import {
   workspaceLimits
 } from '../_lib/store.js';
 import { registerActiveTurn } from '../_lib/turn-registry.js';
+import {
+  markTurnActive,
+  heartbeatTurnActive,
+  clearTurnActive
+} from '../_lib/active-turn.js';
 import { envSecrets, fail, redactSecrets, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
@@ -1086,13 +1091,20 @@ export async function onRequestPost(context) {
       const linux = linuxRunnerEnabled(effectiveEnv) || useLocalTermuxBridge;
       const sb = sandboxEnabled(env);
       const turnReg = registerActiveTurn(identity.owner, conversation.id);
+      // Headless turns: a client disconnect (page refresh, app close, mobile
+      // backgrounding) must NOT kill the turn. The turn keeps running under
+      // waitUntil, persists everything to D1 incrementally, and the user
+      // re-attaches via polling (/api/state/conversations/:id → turnActive).
+      // Only an explicit stop (/api/chat/stop) aborts turnReg.
+      let headless = false;
       if (request?.signal) {
         if (request.signal.aborted) {
-          turnReg.controller.abort();
+          headless = true;
         } else {
-          request.signal.addEventListener('abort', () => turnReg.controller.abort(), { once: true });
+          request.signal.addEventListener('abort', () => { headless = true; }, { once: true });
         }
       }
+      await markTurnActive(env, identity.owner, conversation.id);
 
       const { stream, send, close } = sseStream();
       const headers = {
@@ -1104,6 +1116,23 @@ export async function onRequestPost(context) {
       if (setCookie) headers['Set-Cookie'] = setCookie;
 
       const newMessages = [];
+      // Incremental persistence: messages are flushed to D1 at every step
+      // boundary so (a) polling clients watch live progress, and (b) nothing
+      // is lost if the isolate is evicted mid-turn. Final flushes only append
+      // the not-yet-persisted tail to avoid double-writes.
+      let persistedMsgCount = 0;
+      const flushNewMessagesTail = async () => {
+        if (newMessages.length <= persistedMsgCount) return;
+        const tail = newMessages.slice(persistedMsgCount);
+        const repaired = repairToolGroups(tail);
+        if (repaired.length) {
+          await appendMessages(env, conversation, repaired);
+          await env.DB.prepare('UPDATE conversations SET last_message_at=?, updated_at=? WHERE id=? AND owner=?')
+            .bind(Date.now(), Date.now(), conversation.id, identity.owner)
+            .run();
+        }
+        persistedMsgCount += tail.length;
+      };
       let finalText = '';
       let usedModel = '';
       let requestedModelUsed = selectedModel || '';
@@ -1369,6 +1398,20 @@ export async function onRequestPost(context) {
               stopErr.status = 499;
               stopErr.code = 'turn_stopped';
               throw stopErr;
+            }
+            // Cross-isolate stop + liveness heartbeat (headless turns are
+            // stopped through the D1 flag when the stop request lands on a
+            // different isolate than the one running the turn).
+            if (steps > 0 && (await heartbeatTurnActive(env, identity.owner, conversation.id))) {
+              const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+              stopErr.status = 499;
+              stopErr.code = 'turn_stopped';
+              throw stopErr;
+            }
+            // Everything from previous steps forms complete tool groups by
+            // now — persist it so progress is visible to polling clients.
+            if (steps > 0) {
+              await flushNewMessagesTail().catch(() => {});
             }
             if (steps > 0 && subreqTracker.count >= safeSubreqCap) {
               hitWaveBoundary = true;
@@ -1948,8 +1991,7 @@ export async function onRequestPost(context) {
             }
           }
 
-          const repaired = repairToolGroups(newMessages);
-          if (repaired.length) await appendMessages(env, conversation, repaired);
+          await flushNewMessagesTail();
 
           const hasWorkspaceChanges = turn.touched.size > 0 || turn.deleted.size > 0 || turn.workspaceChanged;
           const stats = await messageStats(env, conversation.id);
@@ -2105,6 +2147,48 @@ export async function onRequestPost(context) {
               estimatedTokens: effectiveContextTokens
             }
           });
+
+          // Headless wave chaining: the client that normally re-posts
+          // "ادامه" at a wave boundary is gone (closed app / refresh). The
+          // turn keeps making progress by chaining itself — a fresh internal
+          // request gets a fresh subrequest budget. Bounded by the checkpoint
+          // waveNumber cap below; on failure the checkpoint remains and the
+          // next client visit auto-resumes it.
+          if (isWaveHandoff && headless && Number(savedCheckpoint?.waveNumber || 0) < 12) {
+            try {
+              const chainUrl = new URL(request.url).origin + '/api/chat';
+              const chainBody = JSON.stringify({
+                ...(data && typeof data === 'object' ? data : {}),
+                conversationId: conversation.id,
+                message: 'ادامه',
+                silentAutoResume: true,
+                resumeCheckpoint: true
+              });
+              const cookie = request.headers.get('Cookie');
+              const chainHeaders = { 'Content-Type': 'application/json' };
+              if (cookie) chainHeaders.Cookie = cookie;
+              const chainCtrl = new AbortController();
+              const chainPromise = fetch(chainUrl, {
+                method: 'POST',
+                headers: chainHeaders,
+                body: chainBody,
+                signal: chainCtrl.signal
+              })
+                .then((res) => {
+                  // Detach immediately: aborting our side makes the chained
+                  // turn headless, so IT keeps running under its own
+                  // waitUntil and self-chains further waves by itself.
+                  chainCtrl.abort();
+                  try { res.body?.cancel?.(); } catch { /* ignore */ }
+                })
+                .catch(() => {});
+              if (typeof waitUntil === 'function') {
+                try { waitUntil(chainPromise); } catch { /* ignore */ }
+              }
+            } catch {
+              /* checkpoint survives for client-side auto-resume */
+            }
+          }
         } catch (error) {
           const partialContent = stripSecrets(
             String((healedTextCarry || '') + (error?.partialContent || stepStreamedContent || '')).trim(),
@@ -2138,20 +2222,21 @@ export async function onRequestPost(context) {
 
           let savedCheckpoint = null;
           try {
-            const repairedPartial = repairToolGroups(newMessages);
+            // Persist complete groups from the not-yet-flushed tail (earlier
+            // steps were already flushed incrementally — never re-append them).
+            await flushNewMessagesTail().catch(() => {});
             const effectiveStoppedText =
               partialContent ||
               (errCode === 'turn_stopped' && partialReasoning ? '⏹ *(تولید پاسخ در مرحلهٔ استدلال توسط کاربر متوقف شد)*' : '');
             if (effectiveStoppedText) {
-              repairedPartial.push({
-                role: 'assistant',
-                content: effectiveStoppedText,
-                ...(partialReasoning ? { reasoning: partialReasoning.slice(0, 10_000) } : {}),
-                created_at: Date.now()
-              });
-            }
-            if (repairedPartial.length) {
-              await appendMessages(env, conversation, repairedPartial);
+              await appendMessages(env, conversation, [
+                {
+                  role: 'assistant',
+                  content: effectiveStoppedText,
+                  ...(partialReasoning ? { reasoning: partialReasoning.slice(0, 10_000) } : {}),
+                  created_at: Date.now()
+                }
+              ]);
               const statsNow = await messageStats(env, conversation.id);
               await env.DB.prepare('UPDATE conversations SET message_count=?, last_message_at=?, updated_at=? WHERE id=? AND owner=?')
                 .bind(statsNow.count, Date.now(), Date.now(), conversation.id, identity.owner)
@@ -2208,6 +2293,7 @@ export async function onRequestPost(context) {
           }
         } finally {
           turnReg.release();
+          await clearTurnActive(env, identity.owner, conversation.id);
           close();
         }
       })();

@@ -183,11 +183,18 @@ function mockFetch(url, init = {}) {
     });
   }
   if (path.startsWith('/api/state/conversations/')) {
+    const wantedId = String(path).split('/api/state/conversations/')[1]?.split('?')[0];
+    const wantedConv = db.conversations.find((c) => c.id === wantedId) || db.conversations[0];
     return jsonResponse({
       ok: true,
-      conversation: db.conversations[0],
-      messages: db.messages,
-      workspace: db.workspace
+      conversation: {
+        ...wantedConv,
+        ...(db.convTurnActive ? { turnActive: true } : {})
+      },
+      messages: [...db.messages, ...(db.pollMessages || [])],
+      workspace: db.workspace,
+      ...(db.convTurnActive ? { turnActive: true } : {}),
+      ...(db.mockCheckpoint ? { checkpoint: db.mockCheckpoint } : {})
     });
   }
   if (path.startsWith('/api/state/workspace-file') && (!init.method || init.method === 'GET')) {
@@ -666,6 +673,58 @@ await window.openConversation('c-1');
 assert.equal($('sendBtn').disabled, false, 'switching conversations unlocks composer immediately');
 assert.ok($('chat').textContent.includes('چه بسازیم؟'), 'switches back to c-1 messages');
 
+// --- Parallel chats: navigating away NEVER stops the turn (it keeps running server-side)
+window.eval(`
+  state.busy = true;
+  state.chatAbortController = new AbortController();
+  state.busyConvs.set('c-1', { abort: state.chatAbortController, startedAt: Date.now() });
+  renderConversations();
+`);
+assert.ok(window.document.querySelector('#convList .conv-generating'), 'busy conversation shows the ⏳ badge');
+const navCallsBefore = calls.length;
+await window.openConversation('c-new');
+const stopAfterNav = calls.slice(navCallsBefore).filter((c) => String(c.url).endsWith('/api/chat/stop'));
+assert.equal(stopAfterNav.length, 0, 'switching conversations must NOT post /api/chat/stop anymore');
+await wait(250);
+const pollAfterNav = calls
+  .slice(navCallsBefore)
+  .filter((c) => String(c.url).includes('/api/state/conversations/c-1') && String(c.url).includes('lite=1'));
+assert.ok(pollAfterNav.length >= 1, 'background progress poller attached to the left conversation');
+assert.equal($('sendBtn').disabled, false, 'composer free for the NEW conversation while the old one keeps working');
+window.eval("state.busyConvs.delete('c-1'); state.busy = false; renderConversations();");
+
+// --- Re-attaching to a server-side running turn: live progress streams in via polling
+db.convTurnActive = true;
+db.pollMessages = [{ role: 'assistant', content: 'پیشرفت پس‌زمینه از سرور رسید', seq: 99, created_at: Date.now() }];
+await window.openConversation('c-1');
+assert.equal($('sendBtn').textContent, '✳…', 'opening a running conversation shows the working surface');
+assert.equal($('stopTurnBtn').hidden, false, 'stop button visible for the running turn');
+assert.ok($('liveTurnBar'), 'live turn indicator shown');
+await wait(350);
+assert.ok($('chat').textContent.includes('پیشرفت پس‌زمینه از سرور رسید'), 'polled progress appended live to the open view');
+assert.ok(window.document.querySelector('#convList .conv-generating'), '⏳ badge while the server turn runs');
+// Turn finishes on the server -> poller settles the conversation and frees the composer
+db.convTurnActive = false;
+db.pollMessages = [];
+await wait(3100);
+assert.equal(window.eval('turnPollers.size'), 0, 'poller stopped once the turn finished');
+assert.equal($('liveTurnBar'), null, 'live indicator removed after completion');
+assert.equal($('sendBtn').textContent, 'ارسال ↑', 'composer freed after the turn finished');
+
+// --- Auto-resume: interrupted wave checkpoints continue silently on open (no user action)
+db.mockCheckpoint = { active: true, reason: 'wave_continue', waveNumber: 2 };
+await window.openConversation('c-1', { fresh: true });
+await wait(400);
+const resumeCall = calls
+  .slice()
+  .reverse()
+  .find((c) => String(c.url).endsWith('/api/chat') && c.init.method === 'POST');
+const resumeBody = JSON.parse(resumeCall.init.body || '{}');
+assert.equal(resumeBody.resumeCheckpoint, true, 'auto-resume posts with resumeCheckpoint');
+assert.equal(resumeBody.silentAutoResume, true, 'auto-resume is silent (no duplicate user bubble)');
+db.mockCheckpoint = null;
+await wait(1200);
+
 // --- New Conversation Mode Picker (#newChatModal): 🧑‍💻 developer vs 📦 normal modes
 // Build marker: <html data-build="…"> must exist so stale deploys are detectable
 assert.ok(window.document.documentElement.dataset.build, 'html root carries a data-build marker');
@@ -877,6 +936,7 @@ window.fetch = async (u, init = {}) => {
   }
   if (s === 'http://127.0.0.1:8787/run') {
     const payload = JSON.parse(init.body || '{}');
+    db.lastTermuxPayload = payload;
     return jsonResponse({
       ok: true,
       runner: 'termux',
@@ -907,6 +967,10 @@ await new Promise((r) => setTimeout(r, 40));
 assert.ok($('terminal').textContent.includes('TERMUX_UI_OK: uname -a'), 'terminal printed live Termux output');
 window.openFile('from-termux.txt');
 assert.equal($('editor').value, 'synced from android!', 'changedFiles from Local Termux synced directly into workspace editor');
+assert.ok(
+  db.lastTermuxPayload && String(db.lastTermuxPayload.session || '').length > 0,
+  'Termux /run carries the per-conversation session id (isolated workspaces)'
+);
 await window.resetSandboxSettings();
 window.fetch = prevUiFetch;
 

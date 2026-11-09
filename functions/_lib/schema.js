@@ -4,7 +4,7 @@ import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 const CREATE = [
   `CREATE TABLE IF NOT EXISTS generated_images (
@@ -49,6 +49,17 @@ const CREATE = [
     data TEXT NOT NULL,
     PRIMARY KEY (conversation_id, path, part)
   )`,
+  // Cross-isolate visibility of in-flight turns: a turn keeps running after
+  // the client disconnects (headless mode), so any isolate must be able to
+  // (a) see that a conversation is busy, (b) request a graceful stop.
+  `CREATE TABLE IF NOT EXISTS active_turns (
+    conversation_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    stop_requested INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS active_turns_owner ON active_turns(owner, started_at)`,
   `CREATE TABLE IF NOT EXISTS uploads (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
     size INTEGER NOT NULL, chunks INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0,

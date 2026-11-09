@@ -65,13 +65,24 @@ function verifyAuth(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function isSafeRelPath(rel) {
+function isSafeRelPath(rel, root = WORKSPACE_ROOT) {
   if (typeof rel !== 'string' || !rel || rel.length > 220) return false;
   if (rel.startsWith('/') || rel.includes('\\') || rel.includes('\0')) return false;
   const parts = rel.split('/');
   if (parts.some((p) => !p || p === '.' || p === '..' || IGNORED_DIRS.has(p))) return false;
-  const resolved = path.resolve(WORKSPACE_ROOT, rel);
-  return resolved.startsWith(WORKSPACE_ROOT + path.sep);
+  const resolved = path.resolve(root, rel);
+  return resolved.startsWith(root + path.sep);
+}
+
+// Per-conversation isolated workspaces: parallel CodePilot chats each get
+// their own directory so simultaneous `run_command`s never trample each
+// other's files. No `session` → the shared root (backward compatible).
+const SESSIONS_ROOT = path.join(WORKSPACE_ROOT, 'sessions');
+
+function sessionWorkdir(session) {
+  const raw = String(session || '').trim();
+  if (!raw || !/^[A-Za-z0-9_-]{1,64}$/.test(raw)) return WORKSPACE_ROOT;
+  return path.join(SESSIONS_ROOT, raw);
 }
 
 async function snapshotTextFiles(dir, relPrefix = '', out = new Map(), budget = { files: 0, bytes: 0 }) {
@@ -115,7 +126,7 @@ function detectShell() {
   return '/bin/bash';
 }
 
-function execShellCommand(cmd, timeoutMs) {
+function execShellCommand(cmd, timeoutMs, cwd = WORKSPACE_ROOT) {
   return new Promise((resolve) => {
     const shell = detectShell();
     const started = Date.now();
@@ -124,7 +135,7 @@ function execShellCommand(cmd, timeoutMs) {
     let killedByTimeout = false;
 
     const child = spawn(shell, ['-c', cmd], {
-      cwd: WORKSPACE_ROOT,
+      cwd,
       env: { ...process.env, HOME: os.homedir(), TERM: 'xterm-256color' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -181,8 +192,9 @@ const server = http.createServer(async (req, res) => {
     return sendJson(req, res, 200, {
       ok: true,
       service: 'codepilot-runner',
-      version: '2.2.0',
+      version: '2.3.0',
       runner: IS_TERMUX ? 'termux' : 'cloud-linux',
+      sessions: true,
       authRequired: Boolean(TOKEN),
       platform: os.platform(),
       arch: os.arch(),
@@ -223,20 +235,22 @@ const server = http.createServer(async (req, res) => {
       return sendJson(req, res, 400, { ok: false, error: 'دستور خالی است.' });
     }
 
-    await mkdir(WORKSPACE_ROOT, { recursive: true });
+    // Isolated per-conversation workspace (parallel chats never collide).
+    const workDir = sessionWorkdir(body.session);
+    await mkdir(workDir, { recursive: true });
     if (body.files && typeof body.files === 'object') {
       for (const [rel, content] of Object.entries(body.files)) {
-        if (!isSafeRelPath(rel)) continue;
-        const full = path.resolve(WORKSPACE_ROOT, rel);
+        if (!isSafeRelPath(rel, workDir)) continue;
+        const full = path.resolve(workDir, rel);
         await mkdir(path.dirname(full), { recursive: true });
         await writeFile(full, String(content ?? ''), 'utf8');
       }
     }
 
-    const beforeMap = await snapshotTextFiles(WORKSPACE_ROOT);
+    const beforeMap = await snapshotTextFiles(workDir);
     const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || 30_000, 2_000), 90_000);
-    const execRes = await execShellCommand(cmd, timeoutMs);
-    const afterMap = await snapshotTextFiles(WORKSPACE_ROOT);
+    const execRes = await execShellCommand(cmd, timeoutMs, workDir);
+    const afterMap = await snapshotTextFiles(workDir);
 
     const changedFiles = {};
     const deletedFiles = [];

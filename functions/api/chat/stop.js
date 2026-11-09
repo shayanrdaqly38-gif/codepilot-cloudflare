@@ -1,9 +1,12 @@
 // POST /api/chat/stop { id } -> aborts an in-flight turn in the current isolate
 // so the turn persists partial progress + durable checkpoint and exits cleanly.
+// Headless turns (client gone, turn alive via waitUntil) may live in another
+// isolate — the D1 stop flag reaches them at the next step boundary.
 
 import { route, methodNotAllowed } from '../../_lib/api.js';
 import { fail } from '../../_lib/util.js';
 import { abortActiveTurn } from '../../_lib/turn-registry.js';
+import { requestTurnStop } from '../../_lib/active-turn.js';
 
 export async function onRequestPost({ request, env }) {
   return route(
@@ -15,6 +18,7 @@ export async function onRequestPost({ request, env }) {
         fail('شناسه‌ی گفتگو معتبر نیست.', 400, 'bad_id');
       }
       const stopped = abortActiveTurn(identity.owner, id);
+      await requestTurnStop(env, identity.owner, id);
       return { ok: true, id, stopped };
     },
     { write: true, body: 4096 }
