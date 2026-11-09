@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-09.5">
+<html lang="fa" dir="rtl" data-build="2026-11-09.7">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1166,6 +1166,20 @@ body[data-theme="claude-day"] .msg.user .user-msg-acts button{background:rgba(0,
 }
 body[data-theme="claude-day"] .gen-img-btn.dl{color:var(--claude-deep)}
 
+.img-pipe-tools{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+.img-pipe-tools .gen-img-btn{justify-content:flex-start;text-align:right;width:100%}
+.img-pipe-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.img-pipe-list li{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);transition:color .2s ease}
+.img-pipe-dot{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line);flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-size:9px;transition:all .2s ease}
+.img-pipe-list li[data-status="active"]{color:var(--claude-bright);font-weight:700}
+.img-pipe-list li[data-status="active"] .img-pipe-dot{border-color:var(--claude-bright);box-shadow:0 0 0 3px var(--claude-tint);animation:imgPipePulse 1.1s ease-in-out infinite}
+.img-pipe-list li[data-status="done"]{color:var(--text-soft)}
+.img-pipe-list li[data-status="done"] .img-pipe-dot{background:var(--claude-bright);border-color:var(--claude-bright);color:#fff}
+.img-pipe-list li[data-status="done"] .img-pipe-dot::before{content:"✓"}
+.img-pipe-list li[data-status="error"]{color:var(--danger,#e5484d)}
+.img-pipe-list li[data-status="error"] .img-pipe-dot{border-color:var(--danger,#e5484d);color:var(--danger,#e5484d)}
+.img-pipe-list li[data-status="error"] .img-pipe-dot::before{content:"!"}
+@keyframes imgPipePulse{0%,100%{box-shadow:0 0 0 2px var(--claude-tint)}50%{box-shadow:0 0 0 5px var(--claude-tint)}}
 .img-chip-grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .img-chip{
   min-height:32px!important;padding:4px 10px!important;border-radius:10px!important;
@@ -1614,7 +1628,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="notice" id="storageNotice" style="display:none"></div>
 
-    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.5</div>
+    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.7</div>
 
     <div class="modal-actions">
       <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
@@ -2003,8 +2017,68 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
     </label>
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-      <button type="button" class="primary" id="imgStudioSubmitBtn" onclick="submitDirectStudioImage()" style="flex:1;min-width:190px;justify-content:center">✨ ساخت فوری و رایگان</button>
+      <button type="button" class="primary" id="imgStudioSubmitBtn" onclick="startImagePipeline()" style="flex:1;min-width:190px;justify-content:center">🎨 شروع ساخت تصویر</button>
       <button type="button" id="imgStudioAgentBtn" onclick="delegateStudioImageToAgent()" style="justify-content:center" title="سپردن به هوش مصنوعی تا چند ایده بسازد یا در کد پروژه استفاده کند">🤖 سپردن به هوش مصنوعی</button>
+    </div>
+
+    <!-- زنجیره‌ی ۹ مرحله‌ای: دریافت پرامپت ← تقویت ← تولید ← مشاهده ← تایید ← ذخیره ← دانلود ← ارسال -->
+    <div id="imgPipeline" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)" hidden>
+      <div class="tiny" style="color:var(--muted);margin-bottom:8px;font-weight:700">مراحل ساخت تصویر</div>
+      <ol class="img-pipe-list" id="imgPipeList">
+        <li data-stage="prompt"><span class="img-pipe-dot"></span><span class="img-pipe-text">۱. دریافت پرامپت</span></li>
+        <li data-stage="enhance"><span class="img-pipe-dot"></span><span class="img-pipe-text">۲. تقویت پرامپت</span></li>
+        <li data-stage="generate"><span class="img-pipe-dot"></span><span class="img-pipe-text">۳. تولید تصویر</span></li>
+        <li data-stage="view"><span class="img-pipe-dot"></span><span class="img-pipe-text">۴. مشاهده</span></li>
+        <li data-stage="approve"><span class="img-pipe-dot"></span><span class="img-pipe-text">۵. تایید</span></li>
+        <li data-stage="save"><span class="img-pipe-dot"></span><span class="img-pipe-text">۶. ذخیره در پروژه</span></li>
+        <li data-stage="download"><span class="img-pipe-dot"></span><span class="img-pipe-text">۷. دانلود</span></li>
+        <li data-stage="send"><span class="img-pipe-dot"></span><span class="img-pipe-text">۸. ارسال برای من</span></li>
+        <li data-stage="toolbox"><span class="img-pipe-dot"></span><span class="img-pipe-text">۹. استفاده، ذخیره و هر کار دیگر</span></li>
+      </ol>
+
+      <div id="imgPipeEnhancedWrap" hidden style="margin-top:10px">
+        <label class="field-label" for="imgPipeEnhanced">پرامپت تقویت‌شده (قابل ویرایش)</label>
+        <textarea class="field" id="imgPipeEnhanced" rows="3" style="resize:vertical;line-height:1.6;direction:ltr;text-align:left"></textarea>
+        <div class="tiny" style="color:var(--muted);margin-top:4px">می‌توانید قبل از تولید اصلاح کنید.</div>
+      </div>
+
+      <div id="imgPipePreviewWrap" hidden style="margin-top:10px">
+        <img id="imgPipePreview" alt="پیش‌نمایش تصویر تولیدشده" style="width:100%;border-radius:12px;border:1px solid var(--line);display:block">
+        <div id="imgPipeVariantRow" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button type="button" class="gen-img-btn" onclick="imgPipeRegenerate()">🔄 ساخت نسخه‌ی دیگر</button>
+          <button type="button" class="gen-img-btn" onclick="imgPipeZoom()">🔍 بزرگ‌نمایی</button>
+          <button type="button" class="gen-img-btn" id="imgPipeApproveBtn" onclick="imgPipeApprove()">✅ تایید تصویر</button>
+        </div>
+      </div>
+
+      <div id="imgPipeActions" hidden style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button type="button" class="gen-img-btn" id="imgPipeSaveBtn" onclick="imgPipeSave()">💾 ذخیره در پروژه</button>
+        <a class="gen-img-btn dl" id="imgPipeDownloadBtn" href="#" download onclick="imgPipeMarkDownloaded()">⬇ دانلود</a>
+        <button type="button" class="gen-img-btn" id="imgPipeSendBtn" onclick="imgPipeSendToChat()">📨 ارسال برای من</button>
+      </div>
+
+      <!-- ۹. جعبه‌ابزار تصویر: هر کاری که با یک تصویر می‌شود انجام داد -->
+      <div id="imgPipeToolbox" hidden style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)">
+        <div class="tiny" style="color:var(--muted);font-weight:700;margin-bottom:8px">🧰 کارهای دیگر با این تصویر</div>
+        <div class="img-pipe-tools" id="imgPipeToolGrid">
+          <button type="button" class="gen-img-btn" data-tool="copy-link" onclick="imgPipeTool('copy-link')">📋 کپی لینک</button>
+          <button type="button" class="gen-img-btn" data-tool="copy-md" onclick="imgPipeTool('copy-md')">📝 کپی Markdown</button>
+          <button type="button" class="gen-img-btn" data-tool="copy-html" onclick="imgPipeTool('copy-html')">💻 کپی HTML</button>
+          <button type="button" class="gen-img-btn" data-tool="copy-css" onclick="imgPipeTool('copy-css')">🎨 کپی CSS</button>
+          <button type="button" class="gen-img-btn" data-tool="insert-file" onclick="imgPipeTool('insert-file')">📥 درج در فایل</button>
+          <button type="button" class="gen-img-btn" data-tool="insert-html" onclick="imgPipeTool('insert-html')">🧩 درج در index.html</button>
+          <button type="button" class="gen-img-btn" data-tool="open-tab" onclick="imgPipeTool('open-tab')">🪟 باز کردن در تب جدید</button>
+          <button type="button" class="gen-img-btn" data-tool="share" onclick="imgPipeTool('share')">🔗 اشتراک‌گذاری</button>
+          <button type="button" class="gen-img-btn" data-tool="variant" onclick="imgPipeTool('variant')">🔄 ساخت نسخه‌ی دیگر</button>
+          <button type="button" class="gen-img-btn" data-tool="reference" onclick="imgPipeTool('reference')">🎯 ارجاع در گفتگو</button>
+          <button type="button" class="gen-img-btn" data-tool="manifest" onclick="imgPipeTool('manifest')">🗂 افزودن به images.json</button>
+          <button type="button" class="gen-img-btn" data-tool="delete" onclick="imgPipeTool('delete')">🗑 حذف تصویر</button>
+        </div>
+        <div class="tiny" style="color:var(--muted);margin-top:6px;line-height:1.7">
+          تصویر شما در D1 ذخیره است و در همه‌ی دستگاه‌ها با همان حساب در دسترس است.
+        </div>
+      </div>
+      <div class="tiny" id="imgPipeHint" style="color:var(--muted);margin-top:8px;line-height:1.7"></div>
     </div>
 
     <div id="imgStudioGalleryWrap" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)" hidden>
@@ -6331,6 +6405,15 @@ function initMobileAndChatUxListeners() {
           navigator.clipboard?.writeText(imgUrl);
           toast('آدرس تصویر کپی شد (' + imgUrl + ')');
         }
+        return;
+      }
+
+      const saveImgBtn = event.target?.closest?.('[data-role="save-gen-img"]');
+      if (saveImgBtn) {
+        const card = saveImgBtn.closest('.gen-image-card');
+        const imgUrl = card?.getAttribute('data-img-url');
+        const title = card?.querySelector('.gen-image-caption')?.textContent || '';
+        if (imgUrl) saveGeneratedImageToWorkspace(imgUrl, title, saveImgBtn);
       }
     });
   }
@@ -6573,6 +6656,60 @@ function toolLineHtml(id, name, detail, done) {
   return `<div class="tool-line ${done ? 'done' : ''}" data-tool-id="${esc(id)}">${label}<span style="color:#6f7d92">·</span><span style="overflow:hidden;text-overflow:ellipsis">${esc(short)}</span></div>`;
 }
 
+/**
+ * Persist a generated image as a REAL workspace file (not just an /api/images id),
+ * so it can be opened, committed and shipped. The bytes come straight from the
+ * authenticated delivery endpoint, so no CORS/base64 gymnastics are needed.
+ */
+async function saveGeneratedImageToWorkspace(imgUrl, title, btn) {
+  // فقط مسیرهای داخلی مجازند؛ هیچ URL دلخواهی fetch نمی‌شود.
+  const cleanUrl = String(imgUrl || '').split('?')[0];
+  if (!/^\/api\/images\/[A-Za-z0-9_-]{1,64}$/.test(cleanUrl)) return toast('آدرس تصویر معتبر نیست');
+  const suggested = String(title || 'image')
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 60) || 'image';
+  const target = prompt('مسیر ذخیره در پروژه:', `assets/${suggested}.png`);
+  if (!target) return;
+  const previous = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ …'; }
+  try {
+    const res = await fetch(imgUrl, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('دریافت تصویر ناموفق بود (' + res.status + ')');
+    const buffer = await res.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    if (!bytes.length) throw new Error('تصویر خالی بود');
+    // دسته‌بندی‌شده تا برای فایل‌های چند مگابایتی هم پشته سرریز نکند
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + 0x8000));
+    }
+    const mime = res.headers.get('Content-Type') || 'image/png';
+    const dataUrl = `data:${mime.split(';')[0]};base64,${btoa(binary)}`;
+    await api(API.state, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'write-file',
+        id: state.conversationId,
+        path: target,
+        content: dataUrl
+      })
+    });
+    state.workspace = normalizeWorkspace(state.workspace || {});
+    state.workspace.files[target] = dataUrl;
+    state.workspace.active = target;
+    renderTree();
+    renderEditor();
+    toast('💾 تصویر در پروژه ذخیره شد: ' + target);
+    return target;
+  } catch (error) {
+    toast('ذخیره ناموفق: ' + (error?.message || 'نامشخص'));
+    return '';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = previous || '💾 در پروژه'; }
+  }
+}
+
 function renderGeneratedImageCardHtml({ url, escapedTitle }) {
   const safeUrl = /^\/api\/images\/[a-zA-Z0-9_-]{8,64}$/.test(String(url || '')) ? String(url) : '';
   if (!safeUrl) return '';
@@ -6586,6 +6723,7 @@ function renderGeneratedImageCardHtml({ url, escapedTitle }) {
     `<span class="gen-image-caption">${label}</span>` +
     `<div class="gen-image-actions">` +
     `<a href="${safeUrl}?download=1" download class="gen-img-btn dl" title="دانلود فایل اصلی با کیفیت کامل">⬇ دانلود</a>` +
+    `<button type="button" class="gen-img-btn" data-role="save-gen-img" data-img-src="${safeUrl}" title="ذخیره‌ی تصویر به‌عنوان فایل واقعی در پروژه">💾 در پروژه</button>` +
     `<button type="button" class="gen-img-btn" data-role="zoom-gen-img" title="مشاهده تمام‌صفحه">🔍 بزرگ‌نمایی</button>` +
     `<button type="button" class="gen-img-btn" data-role="copy-img-url" title="کپی مسیر تصویر برای استفاده در HTML/CSS">📋 لینک</button>` +
     `</div>` +
@@ -10537,6 +10675,415 @@ async function generateDirectImageInChat({ prompt, aspectRatio = '1:1', style = 
       submitBtn.disabled = false;
       submitBtn.textContent = '✨ ساخت فوری و رایگان';
     }
+  }
+}
+
+/* ============================================================================
+ * استودیو تصویر — زنجیره‌ی کامل و قابل‌دیدن
+ * دریافت پرامپت ← تقویت پرامپت ← تولید تصویر ← مشاهده ← تایید
+ * ← ذخیره در پروژه ← دانلود ← ارسال به گفتگو ← مالکیت کاربر
+ * ========================================================================== */
+
+const imgPipe = {
+  stage: 'idle',
+  rawPrompt: '',
+  aspectRatio: '1:1',
+  style: 'auto',
+  enhance: true,
+  image: null,
+  approved: false,
+  savedPath: '',
+  stuck: false
+};
+
+const IMG_PIPE_STAGES = ['prompt', 'enhance', 'generate', 'view', 'approve', 'save', 'download', 'send', 'toolbox'];
+
+// Exposed so tests (and the console) can drive the pipeline without a live model.
+window.imgPipe = imgPipe;
+window.imgPipeTool = imgPipeTool;
+
+function imgPipeSetStage(stage, status = 'active') {
+  const list = $('imgPipeList');
+  if (!list) return;
+  const idx = IMG_PIPE_STAGES.indexOf(stage);
+  if (idx < 0) return;
+  imgPipe.stage = stage;
+  Array.from(list.children).forEach((li, i) => {
+    if (i < idx) li.setAttribute('data-status', 'done');
+    else if (i === idx) li.setAttribute('data-status', status);
+    else li.removeAttribute('data-status');
+  });
+  const hint = $('imgPipeHint');
+  if (hint) hint.textContent = imgPipeHintText(stage, status);
+}
+
+function imgPipeHintText(stage, status) {
+  if (status === 'error') return '⚠️ این مرحله ناموفق بود. دوباره تلاش کنید.';
+  const map = {
+    prompt: 'پرامپت شما ثبت شد؛ در حال تقویت…',
+    enhance: 'پرامپت در حال تقویت به یک توصیف دقیق انگلیسی است…',
+    generate: 'موتور تصویر در حال ساخت تصویر است (ممکن است تا ۳۰ ثانیه طول بکشد)…',
+    view: 'تصویر آماده شد — آن را بررسی کنید. اگر مناسب نیست، «ساخت نسخه‌ی دیگر» را بزنید.',
+    approve: 'اگر تصویر را پسندیدید، «تایید تصویر» را بزنید تا مراحل ذخیره و دانلود فعال شوند.',
+    save: 'تصویر در پروژه ذخیره شد و به‌عنوان فایل واقعی قابل استفاده است.',
+    download: 'می‌توانید فایل اصلی را با کیفیت کامل دانلود کنید.',
+    send: 'تصویر برای شما ارسال شد و در گفتگو ثبت شد.',
+    toolbox: 'همه‌چیز آماده است — از جعبه‌ابزار پایین هر کاری با تصویر می‌توانید بکنید.'
+  };
+  return map[stage] || '';
+}
+
+function imgPipeReset() {
+  imgPipe.stage = 'idle';
+  imgPipe.image = null;
+  imgPipe.approved = false;
+  imgPipe.savedPath = '';
+  imgPipe.stuck = false;
+  const prev = $('imgPipePreviewWrap');
+  if (prev) prev.hidden = true;
+  const acts = $('imgPipeActions');
+  if (acts) acts.hidden = true;
+  const box = $('imgPipeToolbox');
+  if (box) box.hidden = true;
+  const enh = $('imgPipeEnhancedWrap');
+  if (enh) enh.hidden = true;
+  const pic = $('imgPipePreview');
+  if (pic) pic.removeAttribute('src');
+  const list = $('imgPipeList');
+  if (list) Array.from(list.children).forEach((li) => li.removeAttribute('data-status'));
+  ['imgPipeSaveBtn', 'imgPipeSendBtn'].forEach((id) => { const b = $(id); if (b) b.disabled = true; });
+  const dl = $('imgPipeDownloadBtn');
+  if (dl) { dl.setAttribute('href', '#'); dl.classList.add('is-disabled'); dl.setAttribute('aria-disabled', 'true'); }
+  const hint = $('imgPipeHint');
+  if (hint) hint.textContent = '';
+}
+
+/** مرحله ۱ و ۲ — دریافت پرامپت و تقویت آن (بدون مصرف توکن گفتگو) */
+async function startImagePipeline() {
+  const promptField = $('imgStudioPrompt');
+  const raw = String(promptField?.value || '').trim();
+  if (!raw) {
+    promptField?.focus();
+    return toast('ابتدا توضیح تصویر را بنویسید');
+  }
+  if (imgStudioBusy || state.busy) return toast('در حال پردازش درخواست قبلی…');
+  if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
+
+  imgPipeReset();
+  imgPipe.rawPrompt = raw;
+  imgPipe.aspectRatio = imgStudioAspect;
+  imgPipe.style = imgStudioStyle;
+  imgPipe.enhance = $('imgStudioEnhanceChk') ? $('imgStudioEnhanceChk').checked : true;
+
+  const wrap = $('imgPipeline');
+  if (wrap) wrap.hidden = false;
+
+  // ۱. دریافت پرامپت
+  imgPipeSetStage('prompt');
+  const submitBtn = $('imgStudioSubmitBtn');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ در حال کار…'; }
+  imgStudioBusy = true;
+
+  try {
+    // ۲. تقویت پرامپت — اگر کاربر خواسته باشد
+    imgPipeSetStage('enhance');
+    let enhancedText = raw;
+    if (imgPipe.enhance) {
+      try {
+        const res = await api(API.images + '/enhance', {
+          method: 'POST',
+          body: JSON.stringify({ prompt: raw, style: imgPipe.style })
+        });
+        if (res?.prompt) enhancedText = String(res.prompt);
+      } catch {
+        // تقویت اختیاری است؛ هرگز تولید را متوقف نمی‌کند
+        enhancedText = raw;
+      }
+    }
+    imgPipe.enhancedPrompt = enhancedText;
+    const enhWrap = $('imgPipeEnhancedWrap');
+    const enhField = $('imgPipeEnhanced');
+    if (enhField) enhField.value = enhancedText;
+    if (enhWrap) enhWrap.hidden = false;
+
+    // ۳. تولید تصویر
+    await imgPipeGenerate(enhancedText);
+  } catch (err) {
+    imgPipeSetStage('generate', 'error');
+    toast('خطا در ساخت تصویر: ' + (err?.message || 'نامشخص'));
+  } finally {
+    imgStudioBusy = false;
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '🎨 شروع ساخت تصویر'; }
+  }
+}
+
+/** مرحله ۳ — تولید واقعی تصویر */
+async function imgPipeGenerate(promptText) {
+  imgPipeSetStage('generate');
+  const effectivePrompt = String(promptText || imgPipe.enhancedPrompt || imgPipe.rawPrompt).trim();
+  const res = await api(API.images, {
+    method: 'POST',
+    body: JSON.stringify({
+      prompt: effectivePrompt,
+      aspectRatio: imgPipe.aspectRatio,
+      style: imgPipe.style,
+      enhance: false,
+      title: imgPipe.rawPrompt.slice(0, 80),
+      conversationId: state.conversationId || ''
+    })
+  });
+  const img = res?.image;
+  if (!img?.url) throw new Error('تصویری از سرور دریافت نشد');
+  imgPipe.image = img;
+  imgPipe.approved = false;
+  imgPipe.savedPath = '';
+
+  // ۴. مشاهده
+  const pic = $('imgPipePreview');
+  if (pic) pic.src = img.url;
+  const prevWrap = $('imgPipePreviewWrap');
+  if (prevWrap) prevWrap.hidden = false;
+  imgPipeSetStage('view');
+
+  // ۵. منتظر تایید کاربر بمان
+  imgPipeSetStage('approve');
+  const dl = $('imgPipeDownloadBtn');
+  if (dl) { dl.setAttribute('href', img.downloadUrl || img.url + '?download=1'); dl.classList.remove('is-disabled'); dl.removeAttribute('aria-disabled'); }
+  const hint = $('imgPipeHint');
+  if (hint) hint.textContent = imgPipeHintText('approve');
+  return img;
+}
+
+/** تولید نسخه‌ی دیگر با همان پرامپت */
+async function imgPipeRegenerate() {
+  if (imgStudioBusy) return;
+  imgStudioBusy = true;
+  try {
+    const field = $('imgPipeEnhanced');
+    const promptText = String(field?.value || '').trim() || imgPipe.enhancedPrompt || imgPipe.rawPrompt;
+    await imgPipeGenerate(promptText);
+    toast('🔄 نسخه‌ی جدید ساخته شد — دوباره بررسی کنید');
+  } catch (err) {
+    imgPipeSetStage('generate', 'error');
+    toast('خطا در ساخت نسخه‌ی جدید: ' + (err?.message || 'نامشخص'));
+  } finally {
+    imgStudioBusy = false;
+  }
+}
+
+function imgPipeZoom() {
+  if (!imgPipe.image?.url) return;
+  openImageLightbox(imgPipe.image.url, imgPipe.image.title || 'تصویر تولیدشده');
+}
+
+/** مرحله ۵ — تایید کاربر، سپس باز شدن مراحل ذخیره/دانلود/ارسال */
+function imgPipeApprove() {
+  if (!imgPipe.image?.url) return toast('ابتدا تصویر را بسازید');
+  imgPipe.approved = true;
+  imgPipeSetStage('approve', 'done');
+  const acts = $('imgPipeActions');
+  if (acts) acts.hidden = false;
+  ['imgPipeSaveBtn', 'imgPipeSendBtn'].forEach((id) => { const b = $(id); if (b) b.disabled = false; });
+  const list = $('imgPipeList');
+  if (list) {
+    Array.from(list.children).forEach((li, i) => {
+      if (i < IMG_PIPE_STAGES.indexOf('approve')) li.setAttribute('data-status', 'done');
+      else if (i === IMG_PIPE_STAGES.indexOf('approve')) li.setAttribute('data-status', 'done');
+    });
+  }
+  const box = $('imgPipeToolbox');
+  if (box) box.hidden = false;
+  const hint = $('imgPipeHint');
+  if (hint) hint.textContent = '✅ تایید شد. اکنون می‌توانید ذخیره، دانلود، ارسال یا هر کار دیگری با تصویر بکنید.';
+  toast('✅ تصویر تایید شد');
+}
+
+/** مرحله ۶ — ذخیره در پروژه به‌عنوان فایل واقعی */
+async function imgPipeSave() {
+  if (!imgPipe.image?.url) return toast('ابتدا تصویر را بسازید');
+  if (!imgPipe.approved) return toast('ابتدا تصویر را تایید کنید');
+  const btn = $('imgPipeSaveBtn');
+  const saved = await saveGeneratedImageToWorkspace(imgPipe.image.url, imgPipe.image.title, btn);
+  if (saved) {
+    imgPipe.savedPath = saved;
+    imgPipeSetStage('save', 'done');
+    const hint = $('imgPipeHint');
+    if (hint) hint.textContent = '✅ در پروژه ذخیره شد: ' + saved + ' — اکنون می‌توانید دانلود کنید یا به گفتگو بفرستید.';
+  }
+}
+
+/** مرحله ۷ — دانلود: از لینک آماده استفاده می‌شود، این فقط تأیید مرحله است */
+function imgPipeMarkDownloaded() {
+  if (!imgPipe.image?.url || !imgPipe.approved) return;
+  // فقط جلو برو؛ اگر مرحله‌ی بعدی (ارسال) قبلاً انجام شده، عقب نرو
+  if (imgPipe.stage === 'send' || imgPipe.stage === 'mine') return;
+  imgPipeSetStage('download', 'done');
+  imgPipe.stage = 'download';
+}
+
+/** مرحله ۸ — ارسال به گفتگو تا مدل هم تصویر را ببیند و ارجاع دهد */
+async function imgPipeSendToChat() {
+  if (!imgPipe.image?.url) return toast('ابتدا تصویر را بسازید');
+  if (!imgPipe.approved) return toast('ابتدا تصویر را تایید کنید');
+  const btn = $('imgPipeSendBtn');
+  if (btn) btn.disabled = true;
+  try {
+    imgPipeSetStage('send');
+    const title = String(imgPipe.image.title || 'تصویر تولیدشده').replace(/[\[\]\r\n]/g, ' ').trim();
+    const url = imgPipe.image.url;
+    const saveNote = imgPipe.savedPath ? `\n\nفایل پروژه: \`${imgPipe.savedPath}\`` : '';
+    const content =
+      `${url}\n\n` +
+      `**${title}** · \`${imgPipe.image.width}×${imgPipe.image.height}\`` +
+      saveNote +
+      `\n\nاین تصویر تایید، ذخیره و دانلود شد. لطفاً آن را به‌عنوان مرجع در ادامه‌ی کار در نظر بگیر.`;
+    closeModal('imageStudioModal');
+    setWorkspaceView('chat');
+    // از مسیر واقعی گفتگو می‌رود تا تصویر به‌صورت چندرسانه‌ای به مدل برسد
+    await sendMessage(content);
+    imgPipeSetStage('send', 'done');
+    imgPipeSetStage('toolbox');
+    const box = $('imgPipeToolbox');
+    if (box) box.hidden = false;
+    toast('📨 تصویر برای شما ارسال شد');
+  } catch (err) {
+    imgPipeSetStage('send', 'error');
+    toast('ارسال ناموفق: ' + (err?.message || 'نامشخص'));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/** جعبه‌ابزار: هر کاری که می‌شود با یک تصویر کرد */
+async function imgPipeTool(tool) {
+  const img = imgPipe.image;
+  if (!img?.url) return toast('ابتدا تصویر را بسازید');
+  if (!imgPipe.approved) return toast('ابتدا تصویر را تایید کنید');
+
+  const fullUrl = new URL(img.url, location.origin).href;
+  const title = String(img.title || 'تصویر تولیدشده').replace(/[\[\]\r\n]/g, ' ').trim();
+  const md = `![${title}](${img.url})`;
+  const htmlTag = `<img src="${img.url}" alt="${title.replace(/"/g, '&quot;')}" width="${img.width}" height="${img.height}" loading="lazy">`;
+  const cssRule = `.generated-image {\n  background-image: url("${img.url}");\n  background-size: cover;\n  background-position: center;\n}`;
+
+  const copy = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('📋 ' + label + ' کپی شد');
+    } catch {
+      toast('کپی نشد — لینک: ' + text);
+    }
+  };
+
+  switch (tool) {
+    case 'copy-link':
+      return copy(fullUrl, 'لینک تصویر');
+    case 'copy-md':
+      return copy(md, 'Markdown');
+    case 'copy-html':
+      return copy(htmlTag, 'کد HTML');
+    case 'copy-css':
+      return copy(cssRule, 'کد CSS');
+
+    case 'open-tab':
+      window.open(img.url, '_blank', 'noopener');
+      return;
+
+    case 'share': {
+      try {
+        if (navigator.share) {
+          await navigator.share({ title, url: fullUrl });
+          return;
+        }
+      } catch { /* کاربر لغو کرد */ }
+      return copy(fullUrl, 'لینک اشتراک‌گذاری');
+    }
+
+    case 'variant':
+      return imgPipeRegenerate();
+
+    case 'insert-file':
+    case 'insert-html': {
+      const target =
+        tool === 'insert-html'
+          ? 'index.html'
+          : String(prompt('مسیر فایلی که تصویر در آن درج شود:', state.workspace?.active || 'index.html') || '').trim();
+      if (!target) return;
+      const existing = String(state.workspace?.files?.[target] || '');
+      if (!existing) return toast('فایل «' + target + '» در پروژه نیست');
+      const updated = /<\/body>/i.test(existing) ? existing.replace(/<\/body>/i, `${htmlTag}\n</body>`) : existing + '\n' + htmlTag;
+      const saved = await saveGeneratedImageToWorkspace(img.url, img.title, null);
+      if (!saved) return;
+      try {
+        await api(API.state, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'write-file', id: state.conversationId, path: target, content: updated })
+        });
+        state.workspace = normalizeWorkspace(state.workspace || {});
+        state.workspace.files[target] = updated;
+        state.workspace.active = target;
+        renderTree();
+        renderEditor();
+        toast('🧩 تصویر در «' + target + '» درج شد');
+      } catch (error) {
+        toast('درج ناموفق: ' + (error?.message || 'نامشخص'));
+      }
+      return;
+    }
+
+    case 'reference': {
+      // به گفتگو می‌رود تا مدل خودِ تصویر را ببیند، نه فقط یک لینک متن.
+      closeModal('imageStudioModal');
+      setWorkspaceView('chat');
+      await sendMessage(`${img.url}\n\nاین تصویر را به‌عنوان مرجع در نظر بگیر و در ادامه‌ی کار از آن استفاده کن. عنوان: ${title}`);
+      return toast('🎯 تصویر به‌عنوان مرجع برای مدل ارسال شد');
+    }
+
+    case 'manifest': {
+      const saved = await saveGeneratedImageToWorkspace(img.url, img.title, null);
+      if (!saved) return;
+      try {
+        const previous = String(state.workspace?.files?.['images.json'] || '[]');
+        let list = [];
+        try { list = JSON.parse(previous); } catch { list = []; }
+        if (!Array.isArray(list)) list = [];
+        list.push({ path: saved, url: img.url, title, prompt: imgPipe.enhancedPrompt || imgPipe.rawPrompt, width: img.width, height: img.height });
+        const next = JSON.stringify(list, null, 2);
+        await api(API.state, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'write-file', id: state.conversationId, path: 'images.json', content: next })
+        });
+        state.workspace = normalizeWorkspace(state.workspace || {});
+        state.workspace.files['images.json'] = next;
+        renderTree();
+        toast('🗂 به images.json افزوده شد (' + list.length + ' تصویر)');
+      } catch (error) {
+        toast('افزودن ناموفق: ' + (error?.message || 'نامشخص'));
+      }
+      return;
+    }
+
+    case 'delete': {
+      if (!confirm('این تصویر برای همیشه حذف شود؟')) return;
+      try {
+        await api('/api/images/' + img.id, { method: 'DELETE' });
+        imgPipe.image = null;
+        imgPipe.approved = false;
+        const prev = $('imgPipePreviewWrap');
+        if (prev) prev.hidden = true;
+        const box = $('imgPipeToolbox');
+        if (box) box.hidden = true;
+        const acts = $('imgPipeActions');
+        if (acts) acts.hidden = true;
+        toast('🗑 تصویر حذف شد');
+      } catch (error) {
+        toast('حذف ناموفق: ' + (error?.message || 'نامشخص'));
+      }
+      return;
+    }
+
+    default:
+      return;
   }
 }
 
