@@ -97,6 +97,17 @@ t('memory: marathon injection off by default', () => {
   assert.ok(!off.includes('MARATHON MODE IS ACTIVE'));
 });
 
+t('memory: long-task background protocol injected for every real execution mode', () => {
+  for (const exec of [{ localTermux: true }, { linuxRunner: true }, { sandbox: true }]) {
+    const p = buildSystemPrompt({ ...base, ...exec });
+    assert.ok(p.includes('nohup'), `nohup guidance present for ${JSON.stringify(exec)}`);
+    assert.ok(p.includes('/tmp/cp-task.log'), `poll-log guidance present for ${JSON.stringify(exec)}`);
+  }
+  // Virtual shell (no real execution) must NOT promise background execution.
+  const virt = buildSystemPrompt({ ...base });
+  assert.ok(!virt.includes('nohup'), 'virtual shell gets no nohup guidance');
+});
+
 t('memory: marathon injection on with goal + duration', () => {
   const on = buildSystemPrompt({
     ...base,

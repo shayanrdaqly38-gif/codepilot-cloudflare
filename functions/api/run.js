@@ -43,7 +43,7 @@ export async function onRequestPost({ request, env }) {
         workspace = await hydrateConversationWorkspace(env, conv);
       }
 
-      const result = await runCommand(effectiveEnv, { command, workspace });
+      const result = await runCommand(effectiveEnv, { command, workspace, conversationId: data?.conversationId });
       const touchedFiles = Array.isArray(result.touchedFiles) ? result.touchedFiles : [];
       const deletedFiles = Array.isArray(result.deletedFiles) ? result.deletedFiles : [];
       if (data?.conversationId && (touchedFiles.length > 0 || deletedFiles.length > 0)) {

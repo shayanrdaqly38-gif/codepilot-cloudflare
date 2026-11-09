@@ -2084,13 +2084,13 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <!-- Panel 2: 24/7 Cloud Docker Runner (Method 2) -->
     <div class="sb-panel" id="sbModalPanelCloud" hidden>
-      <strong style="font-size:13px;color:var(--claude-bright);display:block;margin-bottom:6px">☁️ سرور لینوکس ابری ۲۴ ساعته (Hugging Face Docker / VPS / Tunnel)</strong>
+      <strong style="font-size:13px;color:var(--claude-bright);display:block;margin-bottom:6px">☁️ سرور لینوکس ابری ۲۴ ساعته (Render رایگان / HF PRO / VPS / Tunnel)</strong>
       <p class="tiny" style="margin:0 0 10px;line-height:1.75;color:var(--muted)">
-        آدرس HTTPS سرور رانر خود را وارد کنید؛ توکن با رمزنگاری <b>AES-GCM</b> در پایگاه‌داده‌ی D1 حساب شما ذخیره می‌شود و سرور کلودفلر مستقیماً به آن متصل می‌گردد (۲ گیگابایت واقعی RAM با ۱۶ گیگابایت در پلن رایگان Hugging Face Spaces!).
+        آدرس HTTPS سرور رانر خود را وارد کنید؛ توکن با رمزنگاری <b>AES-GCM</b> در پایگاه‌داده‌ی D1 حساب شما ذخیره می‌شود و سرور کلودفلر مستقیماً به آن متصل می‌گردد — حتی وقتی برنامه‌ی شما بسته باشد، اجرای دستورها ادامه می‌یابد.
       </p>
       <label class="field">
         <span>آدرس HTTPS رانر ابری</span>
-        <input id="sbModalCloudUrl" dir="ltr" placeholder="https://username-codepilot-runner.hf.space">
+        <input id="sbModalCloudUrl" dir="ltr" placeholder="https://codepilot-runner.onrender.com">
       </label>
       <label class="field">
         <span>توکن امنیتی رانر (Secret <code>CP_TOKEN</code>)</span>
@@ -2104,12 +2104,16 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
       <div class="sb-probe-out" id="sbModalCloudProbeOut"></div>
 
       <details style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
-        <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-soft)">📘 راهنمای ۲ دقیقه‌ای ساخت سرور رایگان ۲۴ ساعته در Hugging Face Spaces</summary>
+        <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-soft)">📘 راهنمای ۲ دقیقه‌ای ساخت سرور ابری (Render رایگان / HF PRO / VPS)</summary>
         <div class="tiny" style="margin-top:8px;line-height:1.85;color:var(--muted)">
-          ۱. وارد <code>huggingface.co/new-space</code> شوید، یک Space با SDK از نوع <b>Docker (Blank)</b> و حالت <b>Public</b> بسازید (رایگان: 2 vCPU و 16GB RAM!).<br>
-          ۲. دو فایل آماده <code>runner-kit/Dockerfile</code> و <code>runner-kit/server.mjs</code> موجود در مخزن گیت‌هاب این پروژه را در Space آپلود کنید.<br>
-          ۳. در بخش <b>Settings → Variables and secrets → New secret</b> متغیر <code>CP_TOKEN</code> را با توکن دلخواه بسازید.<br>
-          ۴. لینک مستقیم Space (مثلاً <code>https://yourname-space.hf.space</code>) و همان <code>CP_TOKEN</code> را در کادر بالا وارد و ذخیره کنید!
+          <b>گزینه‌ی رایگان پیشنهادی — Render.com:</b><br>
+          ۱. در گیت‌هاب یک ریپوی عمومی بسازید و دو فایل <code>runner-kit/server.mjs</code> و یک <code>package.json</code> با خط <code>"scripts": {"start": "node server.mjs"}</code> در آن بگذارید.<br>
+          ۲. در <code>render.com</code> با همان اکانت گیت‌هاب ثبت‌نام کنید ← <b>New + → Web Service</b> ← ریپو را وصل کنید ← پلن <b>Free</b>.<br>
+          ۳. در <b>Environment</b> متغیر <code>CP_TOKEN</code> را با توکن دلخواه بسازید.<br>
+          ۴. لینک سرویس (مثل <code>https://codepilot-runner.onrender.com</code>) و همان توکن را در کادر بالا وارد کنید.<br>
+          <span style="color:var(--yellow)">نکته: سرویس رایگان بعد از ۱۵ دقیقه بی‌کاری می‌خوابد (~۱ دقیقه بیدار شدن).</span><br><br>
+          <b>Hugging Face Spaces (نیازمند اشتراک PRO):</b> در <code>huggingface.co/new-space</code> با SDK از نوع <b>Docker (Blank)</b> و حالت Public بسازید (اکانت رایگان فقط ZeroGPU می‌دهد که برای رانر مناسب نیست)، فایل‌های <code>runner-kit/Dockerfile</code> و <code>runner-kit/server.mjs</code> مخزن را آپلود کنید و Secret با نام <code>CP_TOKEN</code> بسازید.<br><br>
+          <b>VPS / سرور شخصی:</b> همین <code>runner-kit/Dockerfile</code> را روی هر میزبان داکری اجرا کنید و پورت ۷۸۶۰ را منتشر کنید.
         </div>
       </details>
     </div>
@@ -8569,7 +8573,9 @@ async function callLocalTermuxRunner(command, filesMap = {}, externalSignal = nu
   const baseUrl = getLocalTermuxEndpoint();
   const tok = getLocalTermuxToken();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), 28_000);
+  // 92s guard > 85s exec budget: long tasks (installs, builds) get a real
+  // chance to finish instead of dying at the old 25s.
+  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), 92_000);
   if (externalSignal) {
     if (externalSignal.aborted) ctrl.abort();
     else externalSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
@@ -8586,7 +8592,7 @@ async function callLocalTermuxRunner(command, filesMap = {}, externalSignal = nu
       body: JSON.stringify({
         cmd: command,
         cwd: '/workspace',
-        timeoutMs: 25_000,
+        timeoutMs: 85_000,
         files: filesMap,
         // Per-conversation isolated workspace on the runner: parallel chats
         // each execute inside their own directory and never collide.
