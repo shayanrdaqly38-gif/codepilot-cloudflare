@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-09.2">
+<html lang="fa" dir="rtl" data-build="2026-11-09.3">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1605,7 +1605,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="notice" id="storageNotice" style="display:none"></div>
 
-    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.2</div>
+    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.3</div>
 
     <div class="modal-actions">
       <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
@@ -4385,10 +4385,14 @@ function selectNewChatMode(mode) {
 async function startNewConversationFromModal() {
   const mode = newChatDraftMode;
   closeModal('newChatModal');
+  let createdId = null;
   try {
-    await newConversation(true, mode);
+    createdId = await newConversation(true, mode);
   } catch { /* newConversation reports its own errors */ }
-  if (mode === 'normal') {
+  // Only announce the mode when the conversation actually exists — otherwise a
+  // failed create showed a green "normal mode active" toast on top of the
+  // red failure toast.
+  if (mode === 'normal' && createdId) {
     toast('📦 حالت عادی فعال شد — فضای کاری خالی و مستقل از GitHub (سقف ۱ گیگابایت)');
   }
 }
@@ -4396,12 +4400,32 @@ async function startNewConversationFromModal() {
 async function newConversation(open = true, mode = 'developer') {
   const convMode = mode === 'normal' ? 'normal' : 'developer';
   const prevId = state.conversationId;
+  // Snapshot everything the optimistic pre-render below replaces, so a failed
+  // create can roll the user back to the conversation they were actually in
+  // (instead of leaving them on a blank ghost conversation).
+  const prevSnapshot = {
+    conversationId: prevId,
+    messages: state.messages,
+    hasOlderMessages: state.hasOlderMessages,
+    oldestSeq: state.oldestSeq,
+    activeCheckpoint: state.activeCheckpoint,
+    contextTokens: state.contextTokens,
+    turnNotices: state.turnNotices,
+    workspace: state.workspace,
+    dirtyFiles: new Set(state.dirtyFiles)
+  };
   // Normal ("arena") mode always starts from a completely EMPTY workspace —
   // no server-side clone and no carry-over from the previous conversation —
   // and it is never tied to the GitHub repo.
-  const canCopyServerSide =
-    convMode === 'developer' &&
-    Boolean(prevId && !String(prevId).startsWith('pending-') && state.dirtyFiles.size === 0);
+  // The clone shortcut still works across modes, but the SERVER then hydrates
+  // the source and re-validates it against the destination caps (a 1.5MB arena
+  // file is dropped instead of leaking into a developer chat whose per-file
+  // ceiling is 900K, and a GitHub pointer never enters a normal workspace).
+  // Using it cross-mode also avoids re-uploading a multi-MB arena workspace over
+  // a mobile connection just for the server to drop most of it.
+  const canCopyServerSide = Boolean(
+    prevId && !String(prevId).startsWith('pending-') && state.dirtyFiles.size === 0
+  );
 
   if (open) {
     if (state.openConvAbort) {
@@ -4418,6 +4442,42 @@ async function newConversation(open = true, mode = 'developer') {
   if (open && tempId) {
     if (convMode === 'normal') {
       state.workspace = { files: {}, active: '', lazy: {}, totalBytes: 0, mode: 'normal' };
+      state.dirtyFiles.clear();
+    } else {
+      // Switching INTO developer mode must also drop the arena mode marker the
+      // previous conversation left behind. Otherwise `workspace.mode` stays
+      // 'normal' and currentConvMode()/isGithubSyncEnabled() keep reporting a
+      // GitHub-free arena for a developer conversation (repo line and the 1GB
+      // usage meter both lie).
+      // Files are pre-filtered with the SAME developer caps the server applies,
+      // so an oversized arena file disappears from the tree right away instead
+      // of surviving as a "ghost" the server has already dropped (it would then
+      // come back as a 404 on click and be silently re-dropped on every save).
+      const devLimits = { maxFiles: 200, maxFileChars: 900_000, maxTotalChars: 8_000_000 };
+      const keptFiles = {};
+      const lazyFiles = state.workspace?.lazy && typeof state.workspace.lazy === 'object' ? state.workspace.lazy : {};
+      let approxChars = 64;
+      for (const [path, content] of Object.entries(state.workspace?.files || {})) {
+        if (Object.keys(keptFiles).length >= devLimits.maxFiles) break;
+        if (content === null) {
+          // Lazy arena placeholder: it stays in memory as `null`, so only keep
+          // it when the server says it fits the developer per-file ceiling.
+          const knownBytes = Number(lazyFiles[path]) || 0;
+          if (knownBytes > devLimits.maxFileChars) continue;
+          keptFiles[path] = null;
+          continue;
+        }
+        if (typeof content !== 'string' || content.length > devLimits.maxFileChars) continue;
+        approxChars += path.length + content.length + 8;
+        if (approxChars > devLimits.maxTotalChars) continue;
+        keptFiles[path] = content;
+      }
+      const nextActive = keptFiles[state.workspace?.active] !== undefined
+        ? state.workspace.active
+        : Object.keys(keptFiles)[0] || '';
+      state.workspace = { files: keptFiles, active: nextActive };
+      // Dirty flags belong to the previous conversation only; a brand-new
+      // conversation starts clean so autosave never tries to flush them.
       state.dirtyFiles.clear();
     }
     const optimisticConv = {
@@ -4480,7 +4540,15 @@ async function newConversation(open = true, mode = 'developer') {
           persistMarathon({ conversationId: result.id });
         }
       } else {
+        // Non-optimistic create (`open === false`). This is the path used on a
+        // brand-new account (boot with zero conversations) and by sendMessage()
+        // when state.conversationId is still null. Without this assignment the
+        // caller received a valid id while state.conversationId stayed null —
+        // the very next /api/chat went out with `conversationId: null` and the
+        // server answered 400 bad_id, minting a new empty conversation per try.
         state.conversations.unshift(realConv);
+        state.conversationId = result.id;
+        try { localStorage.setItem('cp-last-conversation', result.id); } catch { /* ignore */ }
         state.activeCheckpoint = null;
         state.contextTokens = 0;
         renderTopTokenBadge();
@@ -4500,7 +4568,26 @@ async function newConversation(open = true, mode = 'developer') {
       if (tempId) {
         state.conversations = state.conversations.filter((c) => c.id !== tempId);
         if (state.conversationId === tempId) {
-          state.conversationId = prevId || state.conversations[0]?.id || null;
+          // Restore the conversation AND its view state that the optimistic
+          // pre-render wiped above. Falling back to `conversations[0]` alone
+          // could even point at the temp row we just removed.
+          const fallbackId =
+            (prevSnapshot.conversationId && state.conversations.some((c) => c.id === prevSnapshot.conversationId)
+              ? prevSnapshot.conversationId
+              : state.conversations[0]?.id) || null;
+          state.conversationId = fallbackId;
+          state.messages = Array.isArray(prevSnapshot.messages) ? prevSnapshot.messages : [];
+          state.hasOlderMessages = prevSnapshot.hasOlderMessages;
+          state.oldestSeq = prevSnapshot.oldestSeq;
+          state.activeCheckpoint = prevSnapshot.activeCheckpoint;
+          state.contextTokens = prevSnapshot.contextTokens;
+          state.turnNotices = prevSnapshot.turnNotices;
+          state.workspace = prevSnapshot.workspace;
+          state.dirtyFiles = prevSnapshot.dirtyFiles;
+          renderChat();
+          renderTree();
+          renderEditor();
+          updateContextMeter({});
         }
         renderConversations();
       }

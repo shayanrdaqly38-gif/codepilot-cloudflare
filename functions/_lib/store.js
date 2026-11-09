@@ -97,8 +97,11 @@ export async function listConversations(env, owner, { archived = null, limit = 2
 
 export async function createConversation(env, owner, { title = 'گفتگوی جدید', workspace = {}, copyWorkspaceFrom = '', mode = 'developer' } = {}) {
   const database = await db(env);
+  // Archived conversations are invisible in the UI (there is no archive view and
+  // no un-archive action), so counting them would trap the user at the quota
+  // with no way out. Only live conversations count toward the ceiling.
   const count = await database
-    .prepare('SELECT COUNT(*) AS n FROM conversations WHERE owner=?')
+    .prepare('SELECT COUNT(*) AS n FROM conversations WHERE owner=? AND archived=0')
     .bind(owner)
     .first();
   if ((count?.n || 0) >= MAX_CONVERSATIONS_PER_USER) {
@@ -114,10 +117,10 @@ export async function createConversation(env, owner, { title = 'گفتگوی ج�
   // Chunks are cloned too, so a forked arena workspace keeps its big files.
   if (typeof copyWorkspaceFrom === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(copyWorkspaceFrom)) {
     const src = await database
-      .prepare('SELECT id, workspace FROM conversations WHERE id=? AND owner=?')
+      .prepare('SELECT id, mode, workspace FROM conversations WHERE id=? AND owner=?')
       .bind(copyWorkspaceFrom, owner)
       .first();
-    if (src) {
+    if (src && normalizeWorkspaceMode(src.mode) === convMode) {
       await database.batch([
         database
           .prepare(
@@ -139,6 +142,14 @@ export async function createConversation(env, owner, { title = 'گفتگوی ج�
           .bind(id, src.id)
       ]);
       return id;
+    }
+    if (src) {
+      // Mode changed (developer ⇄ normal): a raw row copy would carry a
+      // 1.5MB arena file into a developer workspace whose per-file ceiling is
+      // 900K, or keep a GitHub repo pointer inside a GitHub-free workspace.
+      // Hydrate the source and re-validate it against the DESTINATION limits,
+      // then fall through to the normal insert paths below.
+      workspace = await hydrateConversationWorkspace(env, src, { byteBudget: INLINE_WORKSPACE_MAX_BYTES });
     }
   }
 
