@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-build="2026-11-09.2">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1602,6 +1602,8 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
     <div id="memList" style="margin-top:12px"></div>
 
     <div class="notice" id="storageNotice" style="display:none"></div>
+
+    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.2</div>
 
     <div class="modal-actions">
       <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
@@ -3821,6 +3823,10 @@ async function scaffoldAgentsMdFile() {
 }
 
 async function boot() {
+  // Build marker: instantly answer "is the new code actually deployed?" —
+  // visible in view-source (<html data-build="…">), in the browser console,
+  // and at the bottom of the settings modal.
+  console.info('[CodePilot] build:', document.documentElement.dataset.build || 'unknown');
   try {
     const savedTheme = localStorage.getItem(THEME_STORE);
     const savedAgentCfg = localStorage.getItem(AGENT_CFG_STORE);
@@ -4202,7 +4208,9 @@ function isGithubSyncEnabled() {
 }
 
 function openNewConversationModal() {
-  if (state.busy) return toast('صبر کنید پاسخ فعلی تمام شود');
+  // No busy guard here on purpose: picking a mode has no side effects, and
+  // starting the conversation while a turn is streaming detaches it exactly
+  // like the pre-modal "＋ گفتگوی جدید" button did (non-blocking switch).
   toggleSidebar(false);
   // Pick a sensible default: stay in normal mode when the current conversation is normal.
   selectNewChatMode(currentConvMode() === 'normal' ? 'normal' : 'developer');
