@@ -667,8 +667,13 @@ assert.equal($('sendBtn').disabled, false, 'switching conversations unlocks comp
 assert.ok($('chat').textContent.includes('چه بسازیم؟'), 'switches back to c-1 messages');
 
 // --- New Conversation Mode Picker (#newChatModal): 🧑‍💻 developer vs 📦 normal modes
+// Build marker: <html data-build="…"> must exist so stale deploys are detectable
+assert.ok(window.document.documentElement.dataset.build, 'html root carries a data-build marker');
+assert.match(window.document.documentElement.dataset.build, /^\d{4}-\d{2}-\d{2}/, 'build marker is date-versioned');
 // "+ گفتگوی جدید" opens the mode picker instead of instantly creating a conversation
 const modeCallsBefore = calls.length;
+window.document.querySelector('.new-conversation').click();
+assert.ok($('newChatModal').classList.contains('open'), 'real button click opens the mode picker');
 window.openNewConversationModal();
 assert.ok($('newChatModal').classList.contains('open'), 'mode picker opens for new conversations');
 assert.equal(window.document.querySelectorAll('#newChatModal .codex-mode-card').length, 2, 'exactly two mode cards rendered');
