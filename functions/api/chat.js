@@ -56,10 +56,13 @@ import {
   isSafePath,
   listMemories,
   listMessages,
+  loadWorkspaceFile,
   messageStats,
+  normalizeWorkspaceMode,
   persistConversationWorkspace,
   recordUsage,
-  safeWorkspace
+  safeWorkspace,
+  workspaceLimits
 } from '../_lib/store.js';
 import { registerActiveTurn } from '../_lib/turn-registry.js';
 import { envSecrets, fail, redactSecrets, stripSecrets } from '../_lib/util.js';
@@ -96,6 +99,13 @@ const MAX_THINKING_LOOP_STEPS = 24;
 const MAX_TURN_INPUT_CHARS = 260_000;
 const MAX_FILE_CHARS = 900_000;
 const MAX_TOOL_LOOPS_PER_FILE = 12;
+// Normal ("arena") mode: bigger single writes are fine because storage is
+// chunked; editing files larger than this in place would risk isolate memory.
+const NORMAL_MAX_FILE_CHARS = 32_000_000;
+const NORMAL_MAX_EDITABLE_BYTES = 24_000_000;
+const NORMAL_READ_SLICE_BYTES = 2_000_000;
+const utf8Encoder = new TextEncoder();
+const utf8Bytes = (s) => utf8Encoder.encode(String(s ?? '')).byteLength;
 
 export const TOOLS = [
   {
@@ -408,6 +418,39 @@ function fileIndex(workspace) {
   return Object.keys(workspace.files || {}).sort();
 }
 
+/** Load a lazy (not-yet-hydrated) workspace file into memory on demand.
+ *  `slice` caps how many bytes may be pulled for bounded reads. Returns
+ *  { content, truncated, bytes } or null when the file cannot be loaded. */
+async function ensureFileLoaded(env, conversation, workspace, path, { slice = 0, forEdit = false } = {}) {
+  if (workspace.files?.[path] !== null) return { content: workspace.files?.[path] };
+  const lazyBytes = Number(workspace.lazy?.[path] || 0);
+  if (forEdit && lazyBytes > NORMAL_MAX_EDITABLE_BYTES) {
+    return {
+      tooLargeToEdit: true,
+      bytes: lazyBytes
+    };
+  }
+  const loaded = await loadWorkspaceFile(env, conversation, path, { maxBytes: slice > 0 ? slice : 0 }).catch(() => null);
+  if (!loaded) return { loadFailed: true };
+  if (slice > 0 && loaded.bytes > slice) {
+    // Keep the placeholder lazy; give the caller a bounded slice only.
+    return { content: loaded.content, truncated: true, bytes: loaded.bytes };
+  }
+  workspace.files[path] = loaded.content;
+  if (workspace.lazy) delete workspace.lazy[path];
+  return { content: loaded.content, bytes: loaded.bytes };
+}
+
+/** Files actually present in memory as strings (lazy nulls excluded). */
+function loadedFilesMap(workspace) {
+  if (!workspace.lazy || !Object.keys(workspace.lazy).length) return workspace.files || {};
+  const out = {};
+  for (const [p, v] of Object.entries(workspace.files || {})) {
+    if (typeof v === 'string') out[p] = v;
+  }
+  return out;
+}
+
 function computeTurnDiff(before, after, path) {
   const diff = unifiedDiff(before, after, { path });
   const stats = diff ? diffSummary(diff.split('\n')) : { added: 0, removed: 0 };
@@ -467,9 +510,14 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
 
     case 'list_files': {
       const files = workspace.files || {};
+      const lazy = workspace.lazy || {};
       const lines = Object.entries(files)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([path, content]) => `${path} (${String(content).length} chars)`);
+        .map(([path, content]) =>
+          lazy[path]
+            ? `${path} (${Math.round(lazy[path] / 1000)}KB on disk — use read_file to load)`
+            : `${path} (${String(content).length} chars)`
+        );
       return {
         ok: true,
         text: lines.length ? lines.join('\n') : '(empty workspace)'
@@ -481,6 +529,34 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       if (workspace.files?.[path] === undefined) {
         const available = fileIndex(workspace).slice(0, 50).join(', ');
         return { ok: false, text: `Error: file not found: ${path}. Available: ${available || '(none)'}` };
+      }
+      if (workspace.files[path] === null) {
+        // Lazy large file: pull a bounded slice from D1 instead of the whole thing.
+        const loaded = await ensureFileLoaded(env, conversation, workspace, path, { slice: NORMAL_READ_SLICE_BYTES });
+        if (loaded.loadFailed) {
+          return { ok: false, text: `Error: could not load ${path} from storage.` };
+        }
+        if (loaded.tooLargeToEdit) {
+          return {
+            ok: false,
+            text: `Error: ${path} is ${Math.round(loaded.bytes / 1_000_000)}MB — too large to read at once. Read it in parts with run_command (head/tail/grep) or recreate it in smaller pieces.`
+          };
+        }
+        const smart = buildSmartFileRead(path, String(loaded.content || ''), {
+          startLine: args.startLine,
+          endLine: args.endLine,
+          query: args.query,
+          tokenSaver: turn.tokenSaver || 'max'
+        });
+        if (smart.savedChars > 0) {
+          turn.savedChars = (turn.savedChars || 0) + smart.savedChars;
+        }
+        return {
+          ok: true,
+          text: loaded.truncated
+            ? `${smart.text}\n\n[TRUNCATED: showing the first ${Math.round(NORMAL_READ_SLICE_BYTES / 1000)}KB of a ${Math.round(loaded.bytes / 1000)}KB file — ask for specific sections with run_command/grep.]`
+            : smart.text
+        };
       }
       const smart = buildSmartFileRead(path, String(workspace.files[path]), {
         startLine: args.startLine,
@@ -495,16 +571,20 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
     }
 
     case 'search_code': {
-      const result = searchWorkspace(workspace.files, args.query, {
+      const result = searchWorkspace(loadedFilesMap(workspace), args.query, {
         regex: Boolean(args.regex),
         caseSensitive: Boolean(args.caseSensitive),
         pathFilter: String(args.pathFilter || '')
       });
-      return { ok: true, text: formatSearchHits(result) };
+      const lazyCount = Object.keys(workspace.lazy || {}).length;
+      const lazyNote = lazyCount
+        ? `\n(${lazyCount} very large file(s) were skipped by search — use read_file on them directly.)`
+        : '';
+      return { ok: true, text: formatSearchHits(result) + lazyNote };
     }
 
     case 'list_symbols': {
-      const symbols = listSymbols(workspace.files, { query: String(args.query || '') });
+      const symbols = listSymbols(loadedFilesMap(workspace), { query: String(args.query || '') });
       return { ok: true, text: formatSymbols(symbols) };
     }
 
@@ -512,6 +592,16 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const path = assertSafePath(args.path);
       if (workspace.files[path] === undefined) {
         return { ok: false, text: `Error: file not found: ${path}. Use write_file to create it.` };
+      }
+      if (workspace.files[path] === null) {
+        const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
+        if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };
+        if (loaded.tooLargeToEdit) {
+          return {
+            ok: false,
+            text: `Error: ${path} is ${Math.round(loaded.bytes / 1_000_000)}MB — too large to patch in place. Recreate it via write_file in smaller pieces or edit it with run_command.`
+          };
+        }
       }
       const before = String(workspace.files[path]);
       let applied;
@@ -564,10 +654,43 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
     case 'write_file': {
       const path = assertSafePath(args.path);
       const content = String(args.content ?? '');
-      if (content.length > MAX_FILE_CHARS) return { ok: false, text: 'Error: file too large (max 900k chars).' };
+      const convMode = normalizeWorkspaceMode(conversation?.mode);
+      const maxChars = convMode === 'normal' ? NORMAL_MAX_FILE_CHARS : MAX_FILE_CHARS;
+      if (content.length > maxChars) {
+        return {
+          ok: false,
+          text:
+            convMode === 'normal'
+              ? `Error: file too large (max ${Math.round(NORMAL_MAX_FILE_CHARS / 1_000_000)}M chars per write in this workspace).`
+              : 'Error: file too large (max 900k chars).'
+        };
+      }
       const existed = workspace.files[path] !== undefined;
+      if (workspace.files[path] === null) {
+        const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
+        if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };
+        if (loaded.tooLargeToEdit) {
+          return {
+            ok: false,
+            text: `Error: ${path} is ${Math.round(loaded.bytes / 1_000_000)}MB — rewriting it wholesale is disabled to protect memory. Delete it first, then write the new content in parts.`
+          };
+        }
+      }
       const before = existed ? String(workspace.files[path]) : '';
       if (existed && before === content) return { ok: false, text: 'No change: content is identical.' };
+      if (convMode === 'normal') {
+        // Real 1GB workspace ceiling, checked BEFORE the write lands.
+        const limits = workspaceLimits(env).normal;
+        const projected =
+          (workspace.totalBytes || 0) - (existed ? utf8Bytes(before) : 0) + utf8Bytes(content);
+        if (projected > limits.maxTotalBytes) {
+          return {
+            ok: false,
+            text: `Error: this write would push the workspace past its ${Math.round(limits.maxTotalBytes / 1_000_000_000)}GB cap (projected ${Math.round(projected / 1_000_000)}MB). Delete or shrink other files first.`
+          };
+        }
+        workspace.totalBytes = projected;
+      }
       await recordVersion(env, owner, conversation, {
         path,
         content: before,
@@ -601,6 +724,28 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       if (Object.keys(workspace.files).length < 2) {
         return { ok: false, text: 'Error: refusing to delete the last remaining file in the workspace.' };
       }
+      if (workspace.files[path] === null) {
+        const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
+        if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };
+        if (loaded.tooLargeToEdit) {
+          // Huge file: freeing it is the whole point — but a >900KB snapshot
+          // cannot be versioned in one D1 row, so undo is simply unavailable.
+          delete workspace.files[path];
+          if (workspace.lazy) delete workspace.lazy[path];
+          if (workspace.active === path) {
+            workspace.active = Object.keys(workspace.files)[0] || '';
+          }
+          turn.diffs.push({ path, diff: `--- a/${path}\n+++ /dev/null`, added: 0, removed: 0 });
+          turn.deleted.add(path);
+          turn.touched.delete(path);
+          turn.workspaceChanged = true;
+          turn.editCount += 1;
+          return {
+            ok: true,
+            text: `Deleted ${path} (large file, ~${Math.round(loaded.bytes / 1_000_000)}MB freed). Note: undo is not available for files this large.`
+          };
+        }
+      }
       const before = String(workspace.files[path]);
       const versionId = await recordVersion(env, owner, conversation, {
         path,
@@ -610,6 +755,9 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       delete workspace.files[path];
       if (workspace.active === path) {
         workspace.active = Object.keys(workspace.files)[0] || '';
+      }
+      if (normalizeWorkspaceMode(conversation?.mode) === 'normal') {
+        workspace.totalBytes = Math.max(0, (workspace.totalBytes || 0) - utf8Bytes(before));
       }
       const { diff, stats } = computeTurnDiff(before, '', path);
       turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
@@ -636,11 +784,14 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       }
       if (!target) return { ok: false, text: `No saved version for ${path}.` };
 
-      const current = String(workspace.files[path] ?? '');
-      if (workspace.files[path] !== undefined && target.content === current) {
+      const lazyCurrent = workspace.files[path] === null;
+      const current = lazyCurrent ? '' : String(workspace.files[path] ?? '');
+      if (workspace.files[path] !== undefined && !lazyCurrent && target.content === current) {
         return { ok: false, text: 'Already at that version.' };
       }
-      await recordVersion(env, owner, conversation, { path, content: current, reason: 'before-undo' });
+      if (!lazyCurrent) {
+        await recordVersion(env, owner, conversation, { path, content: current, reason: 'before-undo' });
+      }
       workspace.files[path] = target.content;
       workspace.active = path;
       turn.deleted.delete(path);
@@ -1068,7 +1219,10 @@ export async function onRequestPost(context) {
               }
             }
             if (turn.workspaceChanged) {
-              await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
+              await persistConversationWorkspace(env, identity.owner, conversation.id, workspace, {
+              touched: [...turn.touched],
+              deleted: [...turn.deleted]
+            }).catch(() => {});
             }
             existingCheckpoint = {
               ...existingCheckpoint,
@@ -1509,7 +1663,10 @@ export async function onRequestPost(context) {
                 }
 
                 if (stepMutatedWorkspace) {
-                  await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
+                  await persistConversationWorkspace(env, identity.owner, conversation.id, workspace, {
+              touched: [...turn.touched],
+              deleted: [...turn.deleted]
+            }).catch(() => {});
                 }
 
                 pendingLocalExecPayload = {
@@ -1609,7 +1766,10 @@ export async function onRequestPost(context) {
 
               // Persist workspace to D1 immediately after every mutating step so zero file edits can ever be lost!
               if (stepMutatedWorkspace) {
-                await persistConversationWorkspace(env, identity.owner, conversation.id, workspace).catch(() => {});
+                await persistConversationWorkspace(env, identity.owner, conversation.id, workspace, {
+              touched: [...turn.touched],
+              deleted: [...turn.deleted]
+            }).catch(() => {});
               }
               let hasAnyValidationError = false;
               for (const p of turn.touched) {
@@ -1794,7 +1954,10 @@ export async function onRequestPost(context) {
           const hasWorkspaceChanges = turn.touched.size > 0 || turn.deleted.size > 0 || turn.workspaceChanged;
           const stats = await messageStats(env, conversation.id);
           if (hasWorkspaceChanges) {
-            await persistConversationWorkspace(env, identity.owner, conversation.id, workspace);
+            await persistConversationWorkspace(env, identity.owner, conversation.id, workspace, {
+              touched: [...turn.touched],
+              deleted: [...turn.deleted]
+            });
           }
 
           let savedCheckpoint = null;
@@ -1995,7 +2158,10 @@ export async function onRequestPost(context) {
                 .run();
             }
             if (hasChanges) {
-              await persistConversationWorkspace(env, identity.owner, conversation.id, workspace);
+              await persistConversationWorkspace(env, identity.owner, conversation.id, workspace, {
+              touched: [...turn.touched],
+              deleted: [...turn.deleted]
+            });
             }
             savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,

@@ -1,11 +1,11 @@
--- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 8).
+-- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 9).
 --
 -- OPTIONAL: the app bootstraps and migrates this schema automatically on the
 -- first request (ensureSchema), so running this file is not required. It exists
 -- for transparency and for review: `npm run db:schema` executes it explicitly.
 --
 -- The CREATE statements are idempotent (IF NOT EXISTS), and the columns that
--- older deployments gained through migrations (v1 → v8) are already inlined
+-- older deployments gained through migrations (v1 → v9) are already inlined
 -- here, so a fresh database ends up identical to a fully-migrated one.
 
 -- ---------------------------------------------------------------- users -----
@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS conversations (
    pinned INTEGER NOT NULL DEFAULT 0,
    message_count INTEGER NOT NULL DEFAULT 0,
    last_message_at INTEGER NOT NULL DEFAULT 0,
-   last_model TEXT NOT NULL DEFAULT ''
+   last_model TEXT NOT NULL DEFAULT '',
+   -- 'developer' = GitHub-linked workspace with legacy caps;
+   -- 'normal'    = independent 1GB arena workspace, never synced to GitHub.
+   mode TEXT NOT NULL DEFAULT 'developer'
 );
 CREATE INDEX IF NOT EXISTS conversations_owner_updated
    ON conversations(owner, archived, updated_at DESC);
@@ -105,7 +108,23 @@ CREATE TABLE IF NOT EXISTS workspace_files (
    path TEXT NOT NULL,
    content TEXT NOT NULL,
    updated_at INTEGER NOT NULL,
+   -- Exact UTF-8 size of the stored file (content + chunks) for budget checks.
+   bytes INTEGER NOT NULL DEFAULT 0,
+   -- 1 = real content lives in workspace_file_chunks, content column is ''.
+   chunked INTEGER NOT NULL DEFAULT 0,
    PRIMARY KEY (conversation_id, path)
+);
+
+-- ------------------------------------------------- workspace_file_chunks --
+-- Chunked overflow storage: any file whose UTF-8 payload exceeds a single safe
+-- D1 row (~1MB cap) is split into ≤700KB parts here so normal-mode workspaces
+-- can grow to a real 1GB total. Reassembled by loadWorkspaceFile().
+CREATE TABLE IF NOT EXISTS workspace_file_chunks (
+   conversation_id TEXT NOT NULL,
+   path TEXT NOT NULL,
+   part INTEGER NOT NULL,
+   data TEXT NOT NULL,
+   PRIMARY KEY (conversation_id, path, part)
 );
 
 -- -------------------------------------------------------------- uploads ----
@@ -160,5 +179,5 @@ CREATE TABLE IF NOT EXISTS meta (
    key TEXT PRIMARY KEY,
    value TEXT NOT NULL
 );
-INSERT INTO meta(key, value) VALUES ('schema_version', '8')
+INSERT INTO meta(key, value) VALUES ('schema_version', '9')
    ON CONFLICT(key) DO UPDATE SET value = excluded.value;

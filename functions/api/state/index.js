@@ -75,9 +75,10 @@ export async function onRequestPost({ request, env }) {
           const id = await createConversation(env, owner, {
             title: data.title ? String(data.title) : 'گفتگوی جدید',
             workspace: data.workspace || {},
-            copyWorkspaceFrom: typeof data.copyWorkspaceFrom === 'string' ? data.copyWorkspaceFrom : ''
+            copyWorkspaceFrom: typeof data.copyWorkspaceFrom === 'string' ? data.copyWorkspaceFrom : '',
+            mode: data.mode === 'normal' ? 'normal' : 'developer'
           });
-          return { ok: true, id };
+          return { ok: true, id, mode: data.mode === 'normal' ? 'normal' : 'developer' };
         }
 
         case 'rename': {
@@ -179,7 +180,8 @@ export async function onRequestPost({ request, env }) {
           const forkTitle = String(data.title || `⑂ ${src.title || 'گفتگو'}`).slice(0, 120);
           const newId = await createConversation(env, owner, {
             title: forkTitle,
-            copyWorkspaceFrom: src.id
+            copyWorkspaceFrom: src.id,
+            mode: src.mode
           });
           if (srcMessages.length) {
             const newConv = await getConversation(env, owner, newId);
