@@ -47,7 +47,10 @@ export async function onRequestPost({ request, env }) {
       const touchedFiles = Array.isArray(result.touchedFiles) ? result.touchedFiles : [];
       const deletedFiles = Array.isArray(result.deletedFiles) ? result.deletedFiles : [];
       if (data?.conversationId && (touchedFiles.length > 0 || deletedFiles.length > 0)) {
-        await persistConversationWorkspace(env, identity.owner, String(data.conversationId), workspace).catch(() => {});
+        await persistConversationWorkspace(env, identity.owner, String(data.conversationId), workspace, {
+          touched: touchedFiles,
+          deleted: deletedFiles
+        }).catch(() => {});
       }
 
       const changedFiles = {};

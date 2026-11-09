@@ -491,6 +491,7 @@ body[data-theme="claude-day"] .pill{color:var(--claude-deep)}
   border:1px solid rgba(232,123,82,.52);color:var(--text);font-weight:700;
   box-shadow:0 4px 14px rgba(232,123,82,.10);
 }
+.conv-mode-chip{margin-right:4px;font-size:11px;opacity:.85;vertical-align:middle}
 .new-conversation:hover:not(:disabled){
   background:linear-gradient(135deg,rgba(232,123,82,.34),rgba(244,178,102,.22));
   border-color:var(--claude-bright);box-shadow:0 6px 18px var(--claude-glow);
@@ -1287,7 +1288,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 <header class="top">
   <div class="top-start">
     <button class="mobile-files icon-pill" id="sidebarToggle" aria-controls="workspaceSidebar" aria-expanded="false" onclick="toggleSidebar()" title="تاریخچه و فایل‌ها" aria-label="تاریخچه و فایل‌ها">☰</button>
-    <button type="button" class="quick-new-btn" id="quickNewChatBtn" onclick="newConversation()" title="گفتگوی جدید فوری" aria-label="گفتگوی جدید">＋</button>
+    <button type="button" class="quick-new-btn" id="quickNewChatBtn" onclick="openNewConversationModal()" title="گفتگوی جدید" aria-label="گفتگوی جدید" aria-haspopup="dialog">＋</button>
     <button type="button" class="icon-pill fs-top-btn" id="topFullscreenBtn" onclick="toggleFullscreen()" title="تمام‌صفحه کامل (مخفی‌سازی نوار پایین گوشی)" aria-label="تمام‌صفحه" aria-pressed="false">⛶</button>
     <div class="brand">
       <div class="logo">✳</div>
@@ -1361,7 +1362,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 <main class="layout">
   <aside class="sidebar" id="workspaceSidebar" aria-label="تاریخچه گفتگوها و فایل‌های پروژه">
     <div class="sidebar-head"><span>تاریخچه گفتگوها</span><span class="tiny" id="convCount">۰</span><button class="drawer-close ghost" onclick="toggleSidebar(false)" aria-label="بستن نوار کناری">×</button></div>
-    <button class="new-conversation" onclick="newConversation()">＋ گفتگوی جدید</button>
+    <button class="new-conversation" onclick="openNewConversationModal()" aria-haspopup="dialog">＋ گفتگوی جدید</button>
     <div class="scroll">
       <div id="convList" class="conv-list"></div>
       <div class="progress" title="حجم تقریبی زمینه‌ی ارسالی به مدل">
@@ -1370,6 +1371,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
       </div>
       <div class="section-title">فایل‌های پروژه</div>
       <div class="project" id="repoLine">⌂ مخزن متصل نیست</div>
+      <div class="project" id="workspaceMeter" hidden style="color:var(--claude-bright);font-size:11px">📦 ۰ بایت از ۱ گیگابایت</div>
       <div id="tree" class="tree"></div>
     </div>
     <div class="marathon-card" id="marathonCard">
@@ -1612,6 +1614,37 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 </div>
 
 <!-- GPT Codex & Claude Code Agent Capabilities & Appearance Modal -->
+<!-- New Conversation Mode Picker (Developer vs Normal/Arena) -->
+<div class="modal" id="newChatModal" onclick="if(event.target===this)closeModal('newChatModal')" role="dialog" aria-modal="true" aria-labelledby="newChatModalTitle">
+  <div class="modal-card" style="max-width:560px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <h2 style="margin:0;font-size:17px" id="newChatModalTitle">＋ گفتگوی جدید — حالت را انتخاب کنید</h2>
+      <button type="button" class="icon-btn" onclick="closeModal('newChatModal')" aria-label="بستن" style="min-height:32px;min-width:32px">✕</button>
+    </div>
+    <p style="margin:8px 0 4px;font-size:12px;color:var(--muted)">هر گفتگو حالت خودش را مستقل نگه می‌دارد و بعداً هم قابل تغییر نیست؛ در هر لحظه فقط گفتگوی فعال ملاک است.</p>
+    <div style="display:grid;gap:10px;margin-top:10px">
+      <button type="button" class="codex-mode-card active" id="newChatModeDeveloper" onclick="selectNewChatMode('developer')" style="text-align:right;display:block;width:100%">
+        <strong style="font-size:14px">👨‍💻 حالت توسعه‌دهنده</strong>
+        <span style="display:block;margin-top:4px;font-size:12px;color:var(--muted);line-height:1.8">
+          همان حالت فعلی: فضای کاری به <b>مخزن GitHub</b> متصل است — فایل‌ها همگام‌سازی و به‌صورت اتمیک کامیت می‌شوند
+          (سقف: ۲۰۰ فایل · ۸M کاراکتر · هر فایل تا ۹۰۰K).
+        </span>
+      </button>
+      <button type="button" class="codex-mode-card" id="newChatModeNormal" onclick="selectNewChatMode('normal')" style="text-align:right;display:block;width:100%">
+        <strong style="font-size:14px">📦 حالت عادی (Arena)</strong>
+        <span style="display:block;margin-top:4px;font-size:12px;color:var(--muted);line-height:1.8">
+          فضای کاری <b>کاملاً خالی و مستقل از GitHub</b> — مشابه محیط Arena؛ بدون کامیت و بدون همگام‌سازی مخزن.
+          سقف واقعی <b>۱ گیگابایت</b> با ذخیره‌سازی قطعه‌بندی‌شده (فایل‌های بزرگ‌تر از ۱ مگابایت خودکار تکه‌تکه ذخیره می‌شوند تا سقف ردیف D1 نخورد).
+        </span>
+      </button>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between;margin-top:14px">
+      <button type="button" onclick="closeModal('newChatModal')">انصراف</button>
+      <button type="button" class="primary" id="newChatStartBtn" onclick="startNewConversationFromModal()">🚀 شروع گفتگو</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="codexModal">
   <div class="modal-card" style="width:min(620px,100%)">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -1678,12 +1711,12 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
         <input class="field" type="range" id="cfgTemperature" min="0" max="1.2" step="0.05" value="0.25" oninput="document.getElementById('cfgTempVal').textContent=Number(this.value).toFixed(2)" style="padding:6px">
       </div>
       <div>
-        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps)</label>
-        <input class="field" type="number" id="cfgMaxSteps" min="4" max="96" step="2" value="16">
+        <label class="field-label" for="cfgMaxSteps" style="margin-top:0">سقف گام‌های حلقه (Max Steps · ۴ تا ۳۰۰)</label>
+        <input class="field" type="text" inputmode="numeric" id="cfgMaxSteps" value="16" placeholder="مثلاً ۲۰۰ یا 200">
       </div>
       <div>
-        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن)</label>
-        <input class="field" type="number" id="cfgContextBudget" min="8000" max="160000" step="4000" value="24000">
+        <label class="field-label" for="cfgContextBudget" style="margin-top:0">بودجه زمینه (توکن · ۶,۰۰۰ تا ۲۵۶,۰۰۰)</label>
+        <input class="field" type="text" inputmode="numeric" id="cfgContextBudget" value="24000" placeholder="مثلاً ۵۰,۰۰۰ یا 50000">
       </div>
       <div>
         <label class="field-label" for="cfgTokenSaver" style="margin-top:0">⚡ بهینه‌ساز توکن و سقف درخواست (v3)</label>
@@ -1760,6 +1793,23 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
     </div>
 
     <div id="powerAxesContainer"></div>
+
+    <div class="power-axis-card" style="margin-top:10px">
+      <div class="power-axis-head">
+        <strong>🎛 سقف‌های عددی موتور</strong>
+        <span class="power-axis-sub">هماهنگ با تنظیمات عامل — هم‌زمان با تغییر، نمایشگر بالا به‌روز می‌شود</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <label style="flex:1;min-width:150px;font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px">
+          حداکثر گام‌های حلقه (۴ تا ۳۰۰)
+          <input class="field" type="text" inputmode="numeric" id="powerMaxStepsInput" style="min-height:36px;direction:ltr;text-align:left" placeholder="200" oninput="setPowerBudgetDraft('maxSteps', this.value)">
+        </label>
+        <label style="flex:1;min-width:150px;font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px">
+          بودجه زمینه توکن (۶,۰۰۰ تا ۲۵۶,۰۰۰)
+          <input class="field" type="text" inputmode="numeric" id="powerContextBudgetInput" style="min-height:36px;direction:ltr;text-align:left" placeholder="50000" oninput="setPowerBudgetDraft('contextBudget', this.value)">
+        </label>
+      </div>
+    </div>
 
     <div class="modal-actions" style="justify-content:space-between;margin-top:12px">
       <button type="button" onclick="resetPowerModalToDefault()">بازنشانی به متوسط</button>
@@ -2375,6 +2425,21 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+// Parse user-typed numbers the way the server does: Persian ۰-۹ / Arabic ٠-٩
+// digits, thousands separators (both , and ،) and stray spaces all accepted.
+function parseLocalizedNumber(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return NaN;
+  const ascii = value
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[,،_\s\u066c]/g, '')
+    .trim();
+  return ascii ? Number(ascii) : NaN;
+}
+// Server-side clamps mirrored in the UI (functions/_lib/provider.js).
+const clampMaxSteps = (n) => (Number.isFinite(n) ? Math.min(300, Math.max(4, Math.round(n))) : 16);
+const clampContextBudget = (n) => (Number.isFinite(n) ? Math.min(256_000, Math.max(6_000, Math.round(n))) : 24_000);
 const nowFa = (ts) => {
   if (!ts) return '';
   const diff = Date.now() - ts;
@@ -3530,6 +3595,16 @@ function renderPowerModalContent() {
   if (specsEl) specsEl.textContent = `تا ${summary.steps} گام · ${summary.ctxK}K ctx`;
   const fillEl = $('powerMeterFill');
   if (fillEl) fillEl.style.width = `${summary.avgPct}%`;
+  // Keep the numeric budget inputs in sync with the draft (without clobbering
+  // the field the user is currently typing in).
+  const stepsInput = $('powerMaxStepsInput');
+  if (stepsInput && document.activeElement !== stepsInput) {
+    stepsInput.value = String(draft.maxSteps || 16);
+  }
+  const ctxInput = $('powerContextBudgetInput');
+  if (ctxInput && document.activeElement !== ctxInput) {
+    ctxInput.value = String(draft.contextBudget || 24000);
+  }
 
   const effortEl = $('powerEffortReadout');
   if (effortEl) {
@@ -3583,6 +3658,15 @@ function setPowerAxisDraft(axisKey, level) {
   renderPowerModalContent();
 }
 
+// Live-editable numeric budgets inside the Power modal (Persian digits OK).
+function setPowerBudgetDraft(key, rawValue) {
+  if (!powerModalDraft) openPowerModal();
+  const num = Math.floor(parseLocalizedNumber(rawValue));
+  if (!Number.isFinite(num)) return;
+  powerModalDraft[key] = key === 'maxSteps' ? clampMaxSteps(num) : clampContextBudget(num);
+  renderPowerModalContent();
+}
+
 function applyPowerMasterPreset(level) {
   if (!POWER_LEVEL_META[level]) return;
   if (!powerModalDraft) powerModalDraft = {};
@@ -3599,11 +3683,15 @@ function resetPowerModalToDefault() {
 
 async function savePowerConfigFromModal() {
   if (!powerModalDraft) return closeModal('powerModal');
+  const typedSteps = Math.floor(parseLocalizedNumber($('powerMaxStepsInput')?.value));
+  const typedCtx = Math.floor(parseLocalizedNumber($('powerContextBudgetInput')?.value));
   const patch = {
     workStamina: powerModalDraft.workStamina || 'medium',
     detailThinking: powerModalDraft.detailThinking || 'medium',
     ambitionLevel: powerModalDraft.ambitionLevel || 'medium',
-    humanSensitivity: powerModalDraft.humanSensitivity || 'medium'
+    humanSensitivity: powerModalDraft.humanSensitivity || 'medium',
+    maxSteps: Number.isFinite(typedSteps) ? clampMaxSteps(typedSteps) : (powerModalDraft.maxSteps || 16),
+    contextBudget: Number.isFinite(typedCtx) ? clampContextBudget(typedCtx) : (powerModalDraft.contextBudget || 24000)
   };
   await persistAgentConfigPatch(patch, false);
   closeModal('powerModal');
@@ -3703,8 +3791,8 @@ async function saveAgentConfigFromModal() {
     readAgentsMd: Boolean($('cfgReadAgentsMd')?.checked),
     responseStyle: $('cfgResponseStyle')?.value || 'balanced',
     temperature: Math.min(Math.max(Number($('cfgTemperature')?.value ?? 0.25), 0), 1.5),
-    maxSteps: Math.min(Math.max(Math.round(Number($('cfgMaxSteps')?.value || 16)), 4), 96),
-    contextBudget: Math.min(Math.max(Math.round(Number($('cfgContextBudget')?.value || 24000)), 6000), 160000),
+    maxSteps: clampMaxSteps(Math.floor(parseLocalizedNumber($('cfgMaxSteps')?.value))),
+    contextBudget: clampContextBudget(Math.floor(parseLocalizedNumber($('cfgContextBudget')?.value))),
     tokenSaver: $('cfgTokenSaver')?.value || 'max',
     goal: String($('cfgSessionGoal')?.value || '').trim().slice(0, 600),
     customInstructions: String($('cfgCustomInstructions')?.value || '').trim().slice(0, 4000),
@@ -3959,6 +4047,7 @@ function renderConversations() {
     row.innerHTML = `
       ${conv.pinned ? '<span class="pin">📌</span>' : ''}
       <span class="title">${esc(conv.title || 'گفتگوی جدید')}</span>
+      ${conv.mode === 'normal' ? '<span class="conv-mode-chip" title="حالت عادی — فضای کاری مستقل از GitHub (سقف ۱GB)">📦</span>' : ''}
       <span class="meta"><span>${faNum(conv.messageCount || 0)} پیام</span><span>${nowFa(conv.updatedAt)}</span></span>
       <div class="acts">
         <button data-act="pin" title="سنجاق">${conv.pinned ? 'برداشتن سنجاق' : 'سنجاق'}</button>
@@ -4099,9 +4188,53 @@ function applyOpenedConversationData(id, data, { preserveScroll = false } = {}) 
   renderMarathonUI();
 }
 
-async function newConversation(open = true) {
+/* --------------------- new-conversation mode picker ---------------------- */
+
+let newChatDraftMode = 'developer';
+
+function currentConvMode() {
+  const conv = state.conversations.find((c) => c.id === state.conversationId);
+  return conv?.mode === 'normal' || state.workspace?.mode === 'normal' ? 'normal' : 'developer';
+}
+
+function isGithubSyncEnabled() {
+  return Boolean(state.repo) && currentConvMode() !== 'normal';
+}
+
+function openNewConversationModal() {
+  if (state.busy) return toast('صبر کنید پاسخ فعلی تمام شود');
+  toggleSidebar(false);
+  // Pick a sensible default: stay in normal mode when the current conversation is normal.
+  selectNewChatMode(currentConvMode() === 'normal' ? 'normal' : 'developer');
+  $('newChatModal')?.classList.add('open');
+}
+
+function selectNewChatMode(mode) {
+  newChatDraftMode = mode === 'normal' ? 'normal' : 'developer';
+  $('newChatModeDeveloper')?.classList.toggle('active', newChatDraftMode === 'developer');
+  $('newChatModeNormal')?.classList.toggle('active', newChatDraftMode === 'normal');
+}
+
+async function startNewConversationFromModal() {
+  const mode = newChatDraftMode;
+  closeModal('newChatModal');
+  try {
+    await newConversation(true, mode);
+  } catch { /* newConversation reports its own errors */ }
+  if (mode === 'normal') {
+    toast('📦 حالت عادی فعال شد — فضای کاری خالی و مستقل از GitHub (سقف ۱ گیگابایت)');
+  }
+}
+
+async function newConversation(open = true, mode = 'developer') {
+  const convMode = mode === 'normal' ? 'normal' : 'developer';
   const prevId = state.conversationId;
-  const canCopyServerSide = Boolean(prevId && !String(prevId).startsWith('pending-') && state.dirtyFiles.size === 0);
+  // Normal ("arena") mode always starts from a completely EMPTY workspace —
+  // no server-side clone and no carry-over from the previous conversation —
+  // and it is never tied to the GitHub repo.
+  const canCopyServerSide =
+    convMode === 'developer' &&
+    Boolean(prevId && !String(prevId).startsWith('pending-') && state.dirtyFiles.size === 0);
 
   if (open) {
     if (state.openConvAbort) {
@@ -4116,12 +4249,17 @@ async function newConversation(open = true) {
 
   const tempId = open ? `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` : null;
   if (open && tempId) {
+    if (convMode === 'normal') {
+      state.workspace = { files: {}, active: '', lazy: {}, totalBytes: 0, mode: 'normal' };
+      state.dirtyFiles.clear();
+    }
     const optimisticConv = {
       id: tempId,
       title: 'گفتگوی جدید',
       messageCount: 0,
       updatedAt: Date.now(),
-      pinned: false
+      pinned: false,
+      mode: convMode
     };
     state.conversations.unshift(optimisticConv);
     state.conversationId = tempId;
@@ -4134,14 +4272,19 @@ async function newConversation(open = true) {
     closeDiff();
     renderConversations();
     renderChat();
+    renderTree();
+    renderEditor();
     updateContextMeter({});
     renderMarathonUI();
   }
 
   setSync('busy', 'ساخت گفتگوی جدید…');
-  const createPayload = canCopyServerSide
-    ? { action: 'create', copyWorkspaceFrom: prevId }
-    : { action: 'create', workspace: snapshotWorkspace() };
+  const createPayload =
+    convMode === 'normal'
+      ? { action: 'create', mode: 'normal', workspace: { files: {}, active: '' } }
+      : canCopyServerSide
+        ? { action: 'create', mode: 'developer', copyWorkspaceFrom: prevId }
+        : { action: 'create', mode: 'developer', workspace: snapshotWorkspace() };
 
   const task = (async () => {
     try {
@@ -4154,7 +4297,8 @@ async function newConversation(open = true) {
         title: 'گفتگوی جدید',
         messageCount: 0,
         updatedAt: Date.now(),
-        pinned: false
+        pinned: false,
+        mode: convMode
       };
       if (tempId) {
         const idx = state.conversations.findIndex((c) => c.id === tempId);
@@ -4832,8 +4976,18 @@ async function saveTokenCap(clear = false) {
 
 function normalizeWorkspace(input) {
   const files = input && input.files && typeof input.files === 'object' ? { ...input.files } : {};
+  // `null` entries are lazy placeholders for files the server left on disk
+  // (huge normal-mode workspaces) — the key must survive so the tree, meter
+  // and save-merge all keep seeing that file.
   const active = input && input.active && files[input.active] !== undefined ? input.active : Object.keys(files)[0] || '';
-  return { files, active };
+  const lazy = input && input.lazy && typeof input.lazy === 'object' ? { ...input.lazy } : {};
+  return {
+    files,
+    active,
+    ...(Object.keys(lazy).length ? { lazy } : {}),
+    ...(input && Number.isFinite(Number(input.totalBytes)) ? { totalBytes: Number(input.totalBytes) } : {}),
+    ...(input && input.mode === 'normal' ? { mode: 'normal' } : {})
+  };
 }
 function snapshotWorkspace() {
   return { files: state.workspace.files, active: state.workspace.active };
@@ -4847,24 +5001,61 @@ function syncMobileDirtyBadge() {
   if (count > 0) pill.textContent = faNum(count);
 }
 
+function workspaceUsageBytes() {
+  let total = Number(state.workspace?.totalBytes) || 0;
+  if (!total) {
+    const enc = new TextEncoder();
+    for (const v of Object.values(state.workspace?.files || {})) {
+      if (typeof v === 'string') total += enc.encode(v).byteLength;
+    }
+  }
+  return total;
+}
+
+function formatBytesFa(bytes) {
+  if (bytes >= 1_000_000_000) return `${faNum((bytes / 1_000_000_000).toFixed(1))} گیگابایت`;
+  if (bytes >= 1_000_000) return `${faNum((bytes / 1_000_000).toFixed(1))} مگابایت`;
+  if (bytes >= 1_000) return `${faNum(Math.round(bytes / 1_000))} کیلوبایت`;
+  return `${faNum(bytes)} بایت`;
+}
+
 function renderTree() {
   const tree = $('tree');
   tree.innerHTML = '';
   syncMobileDirtyBadge();
   const names = Object.keys(state.workspace.files).sort();
-  $('repoLine').textContent = state.repo
-    ? `⌂ ${state.repo.owner}/${state.repo.repo} · ${state.repo.branch}`
-    : '⌂ مخزن متصل نیست (فایل‌ها در D1)';
+  const normalMode = currentConvMode() === 'normal';
+  $('repoLine').textContent = normalMode
+    ? '📦 فضای کاری مستقل (بدون GitHub) · سقف ۱ گیگابایت'
+    : state.repo
+      ? `⌂ ${state.repo.owner}/${state.repo.repo} · ${state.repo.branch}`
+      : '⌂ مخزن متصل نیست (فایل‌ها در D1)';
+  const meter = $('workspaceMeter');
+  if (meter) {
+    if (normalMode) {
+      const used = workspaceUsageBytes();
+      const pct = Math.min(100, Math.round((used / 1_000_000_000) * 100));
+      meter.hidden = false;
+      meter.textContent = `📦 ${formatBytesFa(used)} از ۱ گیگابایت${pct > 0 ? ` · ${faNum(pct)}٪` : ''}`;
+      meter.title = 'مصرف فضای کاری این گفتگو (حالت عادی · ذخیره‌سازی قطعه‌بندی‌شده)';
+    } else {
+      meter.hidden = true;
+    }
+  }
   if (!names.length) {
-    tree.innerHTML = '<div class="tiny" style="padding:8px">فایلی نیست</div>';
+    tree.innerHTML = normalMode
+      ? '<div class="tiny" style="padding:8px">فضای کاری خالی است — با گفتگو فایل بسازید</div>'
+      : '<div class="tiny" style="padding:8px">فایلی نیست</div>';
     return;
   }
   for (const name of names) {
     const row = document.createElement('div');
     row.className = 'tree-row' + (name === state.workspace.active ? ' active' : '');
-    const icon = name.endsWith('.html') ? '◇' : name.endsWith('.css') ? '▧' : name.endsWith('.json') ? '{}' : name.endsWith('.md') ? '¶' : 'JS';
+    const isLazy = state.workspace.files[name] === null;
+    const icon = isLazy ? '⬇' : name.endsWith('.html') ? '◇' : name.endsWith('.css') ? '▧' : name.endsWith('.json') ? '{}' : name.endsWith('.md') ? '¶' : 'JS';
+    const sizeInfo = isLazy && state.workspace.lazy?.[name] ? ` (${formatBytesFa(state.workspace.lazy[name])})` : '';
     const dirty = state.dirtyFiles.has(name) ? '<span class="badge">●</span>' : '';
-    row.innerHTML = `<span class="ico">${icon}</span><span class="name">${esc(name)}</span>${dirty}`;
+    row.innerHTML = `<span class="ico">${icon}</span><span class="name">${esc(name)}${esc(sizeInfo)}</span>${dirty}`;
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     row.setAttribute('aria-label', 'بازکردن فایل ' + name);
@@ -4876,9 +5067,30 @@ function renderTree() {
   }
 }
 
-function openFile(name) {
+async function openFile(name) {
   if (state.workspace.files[name] === undefined) return;
   state.workspace.active = name;
+  renderTree();
+  // Lazy large file (normal-mode 1GB workspaces): fetch just this one file
+  // from the server instead of having loaded the whole workspace upfront.
+  if (state.workspace.files[name] === null) {
+    renderEditor(); // shows the "not loaded yet" notice while we fetch
+    setWorkspaceView('editor');
+    toggleSidebar(false);
+    try {
+      const file = await api(`/api/state/workspace-file?conversationId=${encodeURIComponent(state.conversationId || '')}&path=${encodeURIComponent(name)}`);
+      if (typeof file?.content === 'string') {
+        state.workspace.files[name] = file.content;
+        if (state.workspace.lazy) delete state.workspace.lazy[name];
+      } else {
+        state.workspace.files[name] = '';
+        toast('فایل خوانده نشد؛ محتوای خالی باز شد');
+      }
+    } catch (err) {
+      state.workspace.files[name] = '';
+      toast('بارگذاری فایل ناموفق بود: ' + err.message);
+    }
+  }
   renderTree();
   renderEditor();
   setWorkspaceView('editor');
@@ -4895,6 +5107,15 @@ function renderEditor() {
     return;
   }
   $('tabName').textContent = name;
+  if (state.workspace.files[name] === null) {
+    // Lazy large file not loaded yet: never leak "null" into the editor and
+    // never let a stray keystroke overwrite the server copy.
+    $('editor').value = `⏳ ${name} هنوز بارگذاری نشده — روی نام آن در فهرست فایل‌ها کلیک کنید تا از سرور بارگذاری شود.`;
+    $('editor').readOnly = true;
+    $('tabDot').className = 'dot';
+    return;
+  }
+  $('editor').readOnly = false;
   $('editor').value = state.workspace.files[name];
   $('tabDot').className = 'dot' + (state.dirtyFiles.has(name) ? '' : ' ok');
   updateNums();
@@ -4908,6 +5129,7 @@ function updateNums() {
 function editorChanged() {
   const name = state.workspace.active;
   if (!name) return;
+  if (state.workspace.files[name] === null) return; // lazy file: wait for openFile() to load it
   state.workspace.files[name] = $('editor').value;
   state.dirtyFiles.add(name);
   $('tabDot').className = 'dot';
@@ -4942,7 +5164,7 @@ async function saveEditor(notify = false) {
     return;
   }
   const name = state.workspace.active;
-  if (name) state.workspace.files[name] = $('editor').value;
+  if (name && state.workspace.files[name] !== null) state.workspace.files[name] = $('editor').value;
   try {
     setSync('busy', 'ذخیره در D1…');
     const wsSnap = snapshotWorkspace();
@@ -5344,6 +5566,29 @@ function renderChat({ preserveScroll = false } = {}) {
   chat.scrollTop = preserveScroll ? prevTop : chat.scrollHeight;
 }
 
+// Keep a stopped turn's partial assistant answer (text + streamed thinking)
+// alive across re-renders: the optimistic bubble lives only in the DOM, so the
+// next renderChat() would wipe it before the D1 reload confirms the persisted
+// partial. Snapshot it into state.messages so it survives reloads.
+function preserveStoppedAssistantBubble(beforeCount, partialText, thinkingText = '') {
+  const keep = Math.max(0, Math.floor(Number(beforeCount) || 0));
+  const text = String(partialText || '').trim();
+  const think = String(thinkingText || '').trim();
+  if (!text && !think) return;
+  if (!Array.isArray(state.messages)) state.messages = [];
+  const committed = state.messages.slice(0, keep);
+  const rest = state.messages.slice(keep);
+  // Drop only previous stopped-bubble placeholders; committed history and any
+  // server-persisted turn messages (user prompt, tool groups) stay untouched.
+  const clean = rest.filter((m) => !(m && m.role === 'assistant' && m.stopped));
+  state.messages = [
+    ...committed,
+    ...clean,
+    { role: 'assistant', content: text, reasoning: think, stopped: true, created_at: Date.now() }
+  ];
+  renderChat({ preserveScroll: true });
+}
+
 const TOOL_LABELS = {
   think: '🧠 تفکر و برنامه‌ریزی',
   list_files: '📂 فهرست فایل‌ها',
@@ -5688,6 +5933,9 @@ function initMobileAndChatUxListeners() {
 function welcomeHtml() {
   const modeMeta = AGENT_MODE_META[state.agentConfig?.mode || 'auto-edit'] || AGENT_MODE_META['auto-edit'];
   const modelTxt = state.modelLabel && state.modelLabel !== '—' ? state.modelLabel : 'خودکار';
+  const normalChip = currentConvMode() === 'normal'
+    ? '<span class="w-chip" title="این گفتگو به GitHub متصل نیست و سقف فضای کاری ۱ گیگابایت دارد"><b>📦 فضای کاری مستقل · ۱GB</b></span>'
+    : '';
   return `<div class="welcome">
     <div class="welcome-hero">
       <div class="claude-mascot-wrap">${claudeMascotSvg()}</div>
@@ -5696,6 +5944,7 @@ function welcomeHtml() {
         <div class="welcome-meta-pills" style="margin:4px 0 0">
           <span class="w-chip"><b style="direction:ltr">${esc(modelTxt)}</b></span>
           <span class="w-chip"><b>${esc(modeMeta.label)}</b></span>
+          ${normalChip}
         </div>
       </div>
     </div>
@@ -6587,7 +6836,7 @@ async function sendMessage(overrideText, opts = {}) {
     autoGrowPrompt(input);
   }
 
-  if (state.repoSyncPromise) {
+  if (state.repoSyncPromise && currentConvMode() !== 'normal') {
     setSync('busy', 'همگام‌سازی فایل‌های مخزن GitHub…');
     try { await state.repoSyncPromise; } catch { /* non-fatal */ }
   }
@@ -6775,8 +7024,14 @@ async function sendMessage(overrideText, opts = {}) {
           }
         }
         if (state.repo && state.agentConfig?.autoCommitGh !== false && (mergedTouched.length || mergedDeleted.length)) {
-          const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
-          commitChangesAtomically(mergedTouched, mergedDeleted, '', badge).catch(() => {});
+          if (currentConvMode() === 'normal') {
+            // Normal ("arena") conversations are deliberately GitHub-free:
+            // everything lives in the CodePilot D1 workspace only.
+            toast('📦 حالت عادی: تغییرات فقط در فضای کاری CodePilot ذخیره شد (بدون GitHub)');
+          } else {
+            const badge = attachDeployBadge('⏳ در حال ثبت اتمیک تغییرات در GitHub…');
+            commitChangesAtomically(mergedTouched, mergedDeleted, '', badge).catch(() => {});
+          }
         }
         if (
           isMarathonForCurrentConversation() &&
@@ -7251,6 +7506,13 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       if (preserved) {
         assistantText = preserved;
         textArea.innerHTML = renderMarkdownish(preserved);
+        // Snapshot the partial answer (plus streamed thinking) into state so
+        // the next renderChat() can't wipe it before the D1 reload lands.
+        preserveStoppedAssistantBubble(
+          state.messages.length,
+          preserved,
+          thinkArea?.textContent?.trim() || ''
+        );
       } else {
         textArea.innerHTML = '<span class="tiny" style="color:var(--claude-amber)">⏹ توسط شما متوقف شد — پیشرفت ذخیره شد</span>';
       }
@@ -8340,6 +8602,32 @@ async function probeLocalTermux() {
     if (out) {
       out.innerHTML = `<div class="notice ok">✔ <b>متصل شد!</b> (${faNum(ms)}ms) · محیط: <code style="direction:ltr;display:inline-block">${esc(info.runner || 'termux')} / ${esc(info.platform || '')}-${esc(info.arch || '')} / Node ${esc(info.node || '')}</code></div>`;
     }
+    // Immediate activation: a live 127.0.0.1 health probe is proof enough —
+    // flip the mode right away (badge + terminal/run_command routing) instead
+    // of waiting for the user to press "ذخیره و فعال‌سازی", then persist it so
+    // the choice survives a page reload even if the modal is never saved.
+    state.sandboxConfig = { ...(state.sandboxConfig || {}), mode: 'local-termux', localUrl: baseUrl };
+    selectSandboxMode('local-termux');
+    syncShellBadge();
+    try {
+      const saved = await api(API.config, {
+        method: 'POST',
+        body: JSON.stringify({
+          sandboxConfig: {
+            mode: 'local-termux',
+            localUrl: baseUrl,
+            cloudUrl: cleanClientCredential($('sbModalCloudUrl')?.value || state.sandboxConfig?.cloudUrl || '')
+          }
+        })
+      });
+      if (saved?.sandboxConfig) {
+        state.sandboxConfig = { ...state.sandboxConfig, ...saved.sandboxConfig };
+      }
+      if (saved?.executionMode) state.executionMode = saved.executionMode;
+      syncShellBadge();
+    } catch {
+      // Best-effort persistence — the explicit Save button retries it anyway.
+    }
   } catch (err) {
     if (out) {
       out.innerHTML = `<div class="notice bad">❌ اتصال به <code>${esc(baseUrl)}</code> برقرار نشد. مطمئن شوید در Termux دستور نصب/اجرا روشن است و اگر مرورگر اجازه‌ی Local Network خواست، گزینه <b>Allow</b> را زده‌اید.</div>`;
@@ -8504,7 +8792,21 @@ function toggleMemoryPanel() {
   else $('memKey').focus();
 }
 
-function closeModal(id) { $(id).classList.remove('open'); }
+function closeModal(id) {
+  $(id).classList.remove('open');
+  if (id === 'newChatModal' && !state.busy && !$('newChatModal').classList.contains('open')) {
+    // Modal dismissed without starting a conversation — restore the editor
+    // surface so the previous workspace stays visible.
+    const cur = state.conversations.find((c) => c.id === state.conversationId);
+    if (cur) {
+      if ((cur.mode || 'developer') === 'normal') {
+        welcomeHtml();
+      } else if (typeof renderTree === 'function') {
+        renderTree();
+      }
+    }
+  }
+}
 document.addEventListener('click', (event) => {
   if (!event.target.closest('.chatbox')) closeFloatingPalettes();
   if ($('topDrawer')?.classList.contains('open') && !event.target.closest('#topDrawer') && !event.target.closest('#topDrawerBtn')) {

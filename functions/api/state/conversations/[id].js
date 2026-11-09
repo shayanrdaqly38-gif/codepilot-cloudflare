@@ -42,7 +42,7 @@ export async function onRequestGet({ request, env, params }) {
       messages = page.messages;
       hasOlderMessages = page.hasOlderMessages;
       oldestSeq = page.oldestSeq;
-      const workspace = skipWorkspace ? undefined : await hydrateConversationWorkspace(env, conversation);
+      const workspace = skipWorkspace ? undefined : await hydrateConversationWorkspace(env, conversation, { byteBudget: 6_000_000 });
       return {
         ok: true,
         conversation: {
@@ -61,7 +61,7 @@ export async function onRequestGet({ request, env, params }) {
     const [rawMessages, checkpoint, workspace] = await Promise.all([
       listMessages(env, conversation.id),
       loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null),
-      skipWorkspace ? Promise.resolve(undefined) : hydrateConversationWorkspace(env, conversation)
+      skipWorkspace ? Promise.resolve(undefined) : hydrateConversationWorkspace(env, conversation, { byteBudget: 6_000_000 })
     ]);
     messages = rawMessages.map((m) => {
       if (!Array.isArray(m?.attachments) || !m.attachments.some((a) => typeof a?.data === 'string' && a.data.length > 300_000)) {

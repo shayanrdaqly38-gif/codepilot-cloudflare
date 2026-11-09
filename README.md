@@ -9,72 +9,112 @@
 > [راه‌اندازی](#راه‌اندازی-دستی-در-cloudflare) واقعاً روی حساب Cloudflare شما انجام شده باشد.
 > کد به‌تنهایی چیزی را همگام نمی‌کند.
 
-## چه چیزی در این گام ساخته شد
+## چه چیزی در این نسخه هست
 
 | بخش | جزئیات |
 | --- | --- |
-| ورود امن | Cloudflare Access (RS256/JWKS) → کوکی نشست امضاشده با HMAC، `HttpOnly`, `SameSite=Strict` |
-| پایگاه‌داده | D1 با جدول‌های `users`, `conversations`, `messages`, `memories`, `usage_daily`, `rate_limits`, `meta` |
+| ورود امن | Cloudflare Access (RS256/JWKS) → کوکی نشست امضاشده با HMAC، `HttpOnly`, `SameSite=Strict`؛ یا حالت تک‌کاربره‌ی `DEV_ACCESS_EMAIL` |
+| پایگاه‌داده | D1 با ۱۴ جدول: `users`, `conversations`, `messages`, `memories`, `workspace_files`, `workspace_file_chunks`, `file_versions`, `uploads`, `generated_images`, `usage_daily`, `rate_limits`, `meta` و… (مهاجرت خودکار تا `SCHEMA_VERSION 9`) |
 | پیام‌ها | ترتیب پایدار با `seq`، ذخیره‌ی پیش از فراخوانی مدل، بازیابی گروه کامل `assistant/tool_calls/tool` |
 | حافظه‌ی بلندمدت | خلاصه‌ی چرخشی گفتگو + ردیف‌های حافظه‌ی قابل‌ویرایش توسط کاربر |
 | پنجره‌ی زمینه | بودجه‌ی توکن، برش فقط از مرز پیام کاربر، خلاصه‌سازی بخش‌های قدیمی |
-| ابزارها | `list_files`, `read_file`, `search_code`, `list_symbols`, `apply_patch`, `write_file`, `undo_edit`, `file_history`, `run_command` |
+| ابزارها | `think`, `list_files`, `read_file`, `search_code`, `list_symbols`, `apply_patch`, `write_file`, `delete_file`, `undo_edit`, `file_history`, `run_command`, `web_search`, `fetch_url`, `generate_image` |
 | ویرایش دقیق | `apply_patch` با search/replace، تطبیق فازی فاصله‌ها، رد ویرایش مبهم، تولید diff سبک git |
 | اعتبارسنجی | بررسی آکولاد/رشته/کامنت، تگ‌های HTML، JSON، و اسکن اعتبارنامه — قبل از بازگرداندن نتیجه |
-| تاریخچه | نسخه‌ی هر فایل پیش از تغییر در D1 (۲۵ نسخه‌ی آخر)، بازگردانی از UI یا با `undo_edit` |
-| اجرا | اختیاری: Sandbox واقعی (Durable Object + Container)؛ در غیر این صورت شل مجازی با اعلام صریح |
+| تاریخچه | نسخه‌ی هر فایل پیش از تغییر در D1، بازگردانی از UI یا با `undo_edit` |
+| جست‌وجوی وب زنده | ابزار `web_search` چندمنبعی + `fetch_url` با محافظت کامل SSRF (loopback، RFC1918، cloud-metadata، ریدایرکت‌های re-validate شده) |
+| استودیو تصویر | `generate_image` با **Cloudflare Workers AI** (FLUX.1 / Phoenix) بدون کلید خارجی؛ بهبود خودکار پرامپت فارسی، ذخیره‌ی chunk شده در D1، گالری owner-isolated |
+| استخر درگاه مدل | تا **۱۰ درگاه** (tooken.club، OpenRouter، Zro، OpenAI-سازگار سفارشی) با failover خودکار و health-tracking به‌ازای هر کاربر؛ کلید API هر کاربر رمزنگاری‌شده در D1 ذخیره می‌شود |
+| بهینه‌ساز توکن | حالت‌های `off/balanced/max/rpd`، کش سهمیه‌ی ارائه‌دهنده، کش کاتالوگ مدل‌ها |
+| کشف Effort | کشف خودکار سطوح `reasoning_effort` مدل‌های تازه روی هر ارائه‌دهنده + کش در D1 |
+| اجرا | سه حالت صادقانه: شل مجازی (پیش‌فرض)، سرور ابری `runner-kit`، پل مستقیم Termux روی `127.0.0.1:8787` |
 | رازداری | پاک‌سازی کلید/توکن در پیام‌ها، حافظه، خروجی ابزار و پاسخ مدل؛ کلیدها فقط در Secrets |
 | محدودیت مصرف | سقف درخواست در دقیقه/روز به‌ازای هر حساب (`rate_limits`) |
-| تست | +۳۰ تست بک‌اند (SQLite واقعی + Access جعلی) و تست دودی رابط کاربری |
-| UI | استریم SSE، ترمینال مجازی، کاوشگر فایل، تنظیمات حافظه، خروجی JSON و حذف داده |
-| توقف پاسخ | دکمه «⏹ توقف» هنگام تولید (مشابه ChatGPT): POST /api/chat/stop استریم مدل را لغو می‌کند، متن جزئی ذخیره می‌شود و ادامه از همان نقطه با «ادامه» ممکن است |
-| دانلود اشیاء | هر فایل تولیدشده با هینت نام در fence (مثلاً ```html portfolio.html) خودکار به آرتیفکت تبدیل می‌شود؛ کارت دانلود، پیش‌نمایش sandbox، کپی محتوا/لینک و بسته ZIP کل گفتگو — همه owner-scoped در D1 |
+| آپلود | آپلود چانکی (هر قطعه ۱۹۲KB) + پیوست فایل/تصویر به پیام‌ها (تا ۲۰MB) |
+| تست | ۱۰۲ تست بک‌اند (SQLite واقعی + Access جعلی) + تست دودی ۲۵۱-assertion رابط کاربری |
+| UI | استریم SSE، ترمینال تعاملی، کاوشگر فایل، تنظیمات حافظه، خروجی JSON و حذف داده، ۳ تم، PWA فول‌اسکرین موبایل |
+| توقف پاسخ | دکمه «⏹ توقف» هنگام تولید: `POST /api/chat/stop` استریم مدل را لغو می‌کند، متن جزئی ذخیره می‌شود و ادامه از همان نقطه ممکن است؛ حباب پاسخ نیمه‌کاره در UI هرگز پاک نمی‌شود |
+| موتور قدرت | ۴ محور (استقامت، دقت جزئیات، پیشرفته‌سازی، حساسیت) + ۶ پروفایل یک‌کلیکی تا «اولترا کد»؛ سقف گام‌ها تا ۳۰۰ و بودجه زمینه تا ۲۵۶K با پارس ارقام فارسی |
+| حالت‌های گفتگو | انتخاب حالت هنگام «＋ گفتگوی جدید»: 👨‍💻 **توسعه‌دهنده** (متصل به GitHub، همان رفتار همیشگی) یا 📦 **عادی** (فضای کاری خالی و مستقل با سقف واقعی ۱GB و ذخیره‌سازی قطعه‌بندی‌شده) — جزئیات پایین‌تر |
 
 ## حالت ماراتن (کار مستمر)
 
 حالت «ماراتن» به ایجنت اجازه می‌دهد بدون توقف و بدون پرسیدن سؤال، قدم‌به‌قدم تا فرمان «توقف» کاربر روی پروژه کار کند:
 
 - **فعال‌سازی:** کارت «🚀 حالت ماراتن» در سایدبار ← انتخاب هدف و مدت ← «شروع».
-- **انتقال:** نشان `marathon` در بدنه POST `/api/chat` ارسال می‌شود؛ `normalizeAgentConfig` آن را اعتبارسنجی می‌کند و `buildSystemPrompt` بخش «MARATHON MODE IS ACTIVE» را به سیستم‌پرامپت تزریق می‌کند.
-- **مدت:** بی‌محدودیت یا ۱/۳/۸ ساعت؛ در پایان بودجه، فرانت‌اند خودکار پیام توقف می‌فرستد.
+- **انتقال:** نشان `marathon` در بدنه POST `/api/chat` ارسال می‌شود؛ `normalizeMarathon` آن را اعتبارسنجی می‌کند (سقف هدف ۶۰۰ کاراکتر، حداکثر ۲۴ ساعت، حداکثر ۱۲۰ چرخه) و `buildSystemPrompt` بخش «🚀 MARATHON MODE IS ACTIVE» را به سیستم‌پرامپت تزریق می‌کند.
+- **مدت:** بی‌محدودیت یا ساعت/دقیقه‌ی دلخواه؛ در پایان بودجه، فرانت‌اند خودکار پیام توقف می‌فرستد.
 - **توقف:** دکمه ⏹ یا ارسال پیام «توقف». پس از خاموش‌شدن، دیگر هیچ دستورالعملی تزریق نمی‌شود.
-- **تست:** `tests/marathon.test.mjs` (نرمال‌سازی + تزریق پرامپت) در `npm test` گنجانده شده است.
+- **تست:** `tests/marathon.test.mjs` (نرمال‌سازی + تزریق پرامپت + بودجه‌های اجرایی) در `npm test` گنجانده شده است.
+
+## حالت‌های گفتگو (👨‍💻 توسعه‌دهنده / 📦 عادی)
+
+هر گفتگو هنگام ساخت، از یکی از دو حالت مستقل را انتخاب می‌کند (مودال «＋ گفتگوی جدید»):
+
+| | 👨‍💻 توسعه‌دهنده | 📦 عادی (Arena) |
+| --- | --- | --- |
+| فضای کاری | clone از گفتگوی قبلی + اتصال به مخزن GitHub | **کاملاً خالی و مستقل** — هیچ داده‌ای منتقل نمی‌شود |
+| همگام‌سازی/کامیت GitHub | خودکار (اتمی، چندفایلی) | **هرگز** — حتی اگر توکن GH در مرورگر باشد |
+| سقف کل | ۲۰۰ فایل · ۸M کاراکتر | **۱ گیگابایت واقعی** (بر اساس `SUM(bytes)` در D1) |
+| سقف هر فایل | ۹۰۰K کاراکتر | ۳۲M کاراکتر در هر `write_file` · فایل‌های تا ۲۴MB قابل ویرایش با `apply_patch` |
+| ذخیره‌سازی | ستون `content` در `workspace_files` | فایل‌های بزرگ‌تر از ~۱MB خودکار به قطعات ≤۷۰۰KB در `workspace_file_chunks` تکه می‌شوند تا سقف ردیف D1 نخورد (۱GB ≈ حداکثر ~۱۴۳۰ ردیف) |
+| بارگذاری در UI | کامل | **lazy**: hydration فقط تا بودجه‌ی ۶MB؛ فایل‌های بزرگ‌تر با placeholder `null` + نشانگر ⬇ و حجم در درخت فایل‌ها می‌آیند و با کلیک از `/api/state/workspace-file` بارگذاری می‌شوند |
+| ابزار `read_file` | کامل | فایل‌های خیلی بزرگ با برش ۲MB + نشان `TRUNCATED` خوانده می‌شوند |
+
+- حالت هر گفتگو در ستون `conversations.mode` ذخیره می‌شود و در فهرست گفتگوها با نشان 📦 مشخص است؛ متر مصرف `📦 x از ۱ گیگابایت` کنار خط مخزن نمایش داده می‌شود.
+- گفتگوی عادی در `fork`/clone، فایل‌های chunk شده را هم کامل منتقل می‌کند؛ حذف گفتگو، ردیف‌های chunk را هم پاک می‌کند.
+- `POST /api/chat` هرگز workspace را از کلاینت نمی‌پذیرد — حالت و hydration سروری است و قابل دستکاری نیست.
+- **تست:** `tests/workspace-modes.test.mjs` (۱۲ تست: نرمال‌سازی حالت، سقف‌ها، chunk round-trip، سقف 1GB، lazy hydration، merge-null، clone با chunk، owner-scope endpoint) در `npm test` گنجانده شده است.
 
 ## ساختار پروژه
 
 ```
-index.html                              رابط کاربری (فارسی، RTL)
-schema.sql                              طرح D1 برای ساخت دستی
-wrangler.toml                           اتصال D1 و متغیرهای غیرحساس
+index.html                              رابط کاربری (فارسی، RTL، تک‌فایل: HTML+CSS+JS)
+manifest.webmanifest                    مانیفست PWA (فول‌اسکرین موبایل)
+schema.sql                              طرح D1 برای ساخت دستی (آینه‌ی SCHEMA_VERSION 9)
+wrangler.toml                           اتصال D1 و AI و متغیرهای غیرحساس
+scripts/check-deploy.sh                 تشخیص «کد قدیمی روی سایت» بعد از deploy
+.dev.vars.example                       الگوی رازهای اجرای محلی
 functions/api/auth.js                   GET/POST /api/auth
-functions/api/config.js                 GET /api/config
-functions/api/chat.js                   POST /api/chat  (SSE، حلقه‌ی ابزار)
-functions/api/chat/stop.js             POST /api/chat/stop (توقف تولید فعال — مثل دکمه توقف ChatGPT)
-functions/api/state/index.js            GET/POST /api/state (bootstrap، export، delete)
-functions/api/state/conversations/index.js
-functions/api/state/conversations/[id].js
-functions/api/state/memory/index.js
-functions/api/state/usage.js
+functions/api/config.js                 GET/POST /api/config (پیکربندی، provider، sandbox، agentConfig)
+functions/api/health.js                 GET /api/health (تشخیص کانفیگ ناقص، بدون افشای راز)
+functions/api/models.js                 GET/POST /api/models (کاتالوگ زنده + کشف Effort)
+functions/api/chat.js                   POST /api/chat  (SSE، حلقه‌ی ابزار، ۱۴ ابزار)
+functions/api/chat/stop.js              POST /api/chat/stop (توقف تولید فعال)
+functions/api/run.js                    POST /api/run (اجرای ترمینال + probe سرور ابری)
+functions/api/uploads.js                GET/POST /api/uploads (آپلود چانکی)
+functions/api/images/index.js           GET/POST /api/images (فهرست + تولید تصویر)
+functions/api/images/[id].js            GET/DELETE /api/images/:id (تصویر باینری + دانلود)
+functions/api/state/index.js            GET/POST /api/state (bootstrap، export، delete، …)
+functions/api/state/conversations/      فهرست سبک (index) و جزئیات کامل ([id])
+functions/api/state/memory/index.js     GET/POST /api/state/memory
+functions/api/state/usage.js            GET/POST /api/state/usage (مصرف + سقف توکن)
+functions/api/state/search/index.js     جست‌وجوی سروری متن/regex
+functions/api/state/versions/index.js   تاریخچه و بازگردانی نسخه‌ها
 functions/_lib/auth.js                  Access + کوکی نشست
 functions/_lib/schema.js                ساخت/مهاجرت خودکار D1
 functions/_lib/store.js                 لایه‌ی داده (همه‌چیز scoped به owner)
-functions/_lib/memory.js                پنجره‌ی زمینه، خلاصه‌سازی، repair گروه tool
-functions/_lib/model.js                 تماس با ارائه‌دهنده‌ی مدل (کلید فقط در سرور)
+functions/_lib/memory.js                پنجره‌ی زمینه، خلاصه‌سازی، repair گروه tool، سیستم‌پرامپت
+functions/_lib/model.js                 تماس با ارائه‌دهنده‌ی مدل (کلید فقط در سرور، failover)
+functions/_lib/provider.js              استخر درگاه، رمزنگاری کلید کاربر، نرمال‌سازی کانفیگ
+functions/_lib/token-optimizer.js       بهینه‌ساز توکن ۴حالته
 functions/_lib/patch.js                 اعمال search/replace + diff
 functions/_lib/search.js                جست‌وجوی متن/regex و فهرست نمادها
 functions/_lib/validate.js              اعتبارسنجی ساختاری + اسکن اعتبارنامه
 functions/_lib/versions.js              تاریخچه‌ی نسخه‌ها در D1
-functions/_lib/artifacts.js            ذخیره/خواندن/دانلود آرتیفکت + بسته ZIP
-functions/api/artifacts/index.js        فهرست و ZIP آرتیفکت‌های یک گفتگو
-functions/api/artifacts/[id].js        متادیتا، دانلود، پیش‌نمایش، حذف آرتیفکت
-functions/api/state/workspace-file.js  دانلود فایل‌های Workspace (با نشست)
-tests/artifacts.test.mjs               تست‌های آرتیفکت (pure + D1)
-functions/_lib/sandbox.js               اجرای واقعی (اختیاری) با fallback صادقانه
-functions/api/state/search/index.js     جست‌وجوی سروری
-functions/api/state/versions/index.js   تاریخچه و بازگردانی
+functions/_lib/sandbox.js               اجرای واقعی/مجازی با fallback صادقانه
+functions/_lib/web.js                   web_search + fetch_url با محافظت SSRF
+functions/_lib/image.js                 استودیو تصویر Workers AI
+functions/_lib/uploads.js               پروتکل آپلود چانکی
+functions/_lib/attachments.js           پیوست‌های پیام (تا ۲۰MB)
+functions/_lib/checkpoint.js            چک‌پوینت نوبت و ادامه از نقطه‌ی قطع
+functions/_lib/turn-registry.js         رجیستری نوبت‌های فعال (برای stop)
 functions/_lib/limits.js                محدودیت نرخ به‌ازای هر حساب
 functions/_lib/api.js                   گارد مشترک: مبدأ، نشست، اسکیمای D1
 functions/_lib/util.js                  Redaction، رمزنگاری، خطاها
+runner-kit/                             سرور اجرای واقعی (Node صفر-وابستگی):
+  server.mjs                              HF Spaces Docker (0.0.0.0:7860) یا Termux (127.0.0.1:8787)
+  termux-setup.sh                         نصب‌گر Termux
 tests/                                  تست‌های Node (SQLite واقعی + jsdom)
 ```
 
@@ -104,11 +144,7 @@ tests/                                  تست‌های Node (SQLite واقعی 
    `model_rejected`، `model_unreachable`) را برمی‌گرداند — بدون مصرف محسوس توکن.
    در UI هم دکمه‌ی **⚡ تست اتصال مدل** در صفحه‌ی ورود همین کار را می‌کند.
 
-3. **اگر کد قدیمی است:** متن انگلیسی `Access is not configured.` فقط در نسخه‌ی قبلی
-   روی `main` هست. PR را merge و پروژه را دوباره Deploy کنید تا پیام‌های فارسی و
-   `/api/health` بیاید.
-
-4. **فعال‌سازی فوری بدون Zero Trust (تک‌کاربره):** `DEV_ACCESS_EMAIL` را ست کنید —
+3. **فعال‌سازی فوری بدون Zero Trust (تک‌کاربره):** `DEV_ACCESS_EMAIL` را ست کنید —
    دقیقاً یک متغیر. راهنما: `SETUP.md` بخش ۰. یک نوار هشدار در UI نشان می‌دهد که
    ورود واقعی نیست.
 
@@ -121,11 +157,12 @@ npx wrangler login
 npx wrangler d1 create codepilot-db
 ```
 
-خروجی یک `database_id` می‌دهد. **آن را در `wrangler.toml` نگذارید.** اتصال را در
-داشبورد بزنید (گام بعد) — دلیلش را پایین توضیح داده‌ام.
+خروجی یک `database_id` می‌دهد. در این ریپو `wrangler.toml` با `pages_build_output_dir`
+به‌صورت IaC تنظیم شده و `database_id` واقعی در آن هست؛ اگر ریپوی خودتان را می‌سازید،
+مقدار را با uuid خودتان عوض کنید — **هرگز با مقدار placeholder کامیت نکنید.**
 
 ```bash
-# اختیاری ولی توصیه‌شده: ساخت جدول‌ها به‌صورت صریح
+# اختیاری ولی توصیه‌شده: ساخت جدول‌ها به‌صورت صریح (آینه‌ی schema.js)
 npx wrangler d1 execute codepilot-db --remote --file=./schema.sql
 ```
 
@@ -137,10 +174,6 @@ npx wrangler d1 execute codepilot-db --remote --file=./schema.sql
 اگر از داشبورد استفاده می‌کنید: **Workers & Pages → پروژه → Settings → Functions →
 D1 database bindings → Add**: نام متغیر **`DB`** و همان دیتابیس `codepilot-db`.
 
-اگر با Wrangler منتشر می‌کنید، بلوک `[[d1_databases]]` در `wrangler.toml` هست ولی
-عمداً کامنت شده است. اگر ترجیح می‌دهید IaC باشد، با uuid واقعی از کامنت درش بیاورید —
-**هرگز با مقدار placeholder کامیت نکنید.**
-
 > ### چرا این مهم است
 >
 > اگر `database_id` در `wrangler.toml` مقدار جعلی (`REPLACE_WITH_...`) داشته باشد،
@@ -148,11 +181,7 @@ D1 database bindings → Add**: نام متغیر **`DB`** و همان دیتا�
 > قبلی را سرو می‌کند** و فقط یک علامت قرمز کوچک در داشبورد نشان می‌دهد. نتیجه:
 > هرچه push کنید، سایت همان خطای قدیمی را نشان می‌دهد.
 >
-> **همیشه بعد از push، وضعیت deploy را چک کنید:**
-> ```bash
-> gh pr checks $(gh pr view --json number -q .number)   # یا صفحه‌ی PR در GitHub
-> ```
-> اگر `Cloudflare Pages` قرمز بود، کد شما روی سایت نیست — حتی اگر merge شده باشد.
+> **همیشه بعد از push، وضعیت deploy را چک کنید** — یا `./scripts/check-deploy.sh`.
 
 ### ۳) Secrets (نه متغیرهای عادی)
 
@@ -165,19 +194,19 @@ npx wrangler pages secret put MODEL_API_KEY
 
 | نام | الزامی | توضیح |
 | --- | --- | --- |
-| `SESSION_SECRET` | ✅ | حداقل ۳۲ کاراکتر تصادفی؛ امضای کوکی نشست |
+| `SESSION_SECRET` | ⚪ | حداقل ۳۲ کاراکتر تصادفی؛ امضای کوکی نشست. ست نشود؟ خودکار و امن از `MODEL_API_KEY` مشتق می‌شود |
 | `MODEL_API_KEY` | ✅ | کلید ارائه‌دهنده‌ی مدل؛ فقط در سرور می‌ماند |
-| `ACCESS_TEAM_DOMAIN` | ✅ | مثل `myteam.cloudflareaccess.com` |
-| `ACCESS_AUD` | ✅ | Audience Tag اپلیکیشن Access |
-| `MODEL_NAME` | — | پیش‌فرض `gpt-4o-mini`؛ برای tooken.club مثلاً `claude-sonnet-5-5` |
+| `ACCESS_TEAM_DOMAIN` | ✅* | مثل `myteam.cloudflareaccess.com` (*در حالت Access واقعی) |
+| `ACCESS_AUD` | ✅* | Audience Tag اپلیکیشن Access |
+| `DEV_ACCESS_EMAIL` | — | ورود تک‌کاربره‌ی سریع بدون Zero Trust |
+| `MODEL_NAME` | — | پیش‌فرض `claude-sonnet-5-5` |
 | `MODEL_BASE_URL` | — | پیش‌فرض `https://tooken.club/v1` |
 | `CONTEXT_BUDGET_TOKENS` | — | پیش‌فرض `24000` |
 | `ACCESS_ALLOWED_EMAILS` | — | فهرست ایمیل‌های مجاز با کاما (اختیاری) |
-| `CHAT_LIMIT_PER_MINUTE` | — | پیش‌فرض `12` |
-| `CHAT_LIMIT_PER_DAY` | — | پیش‌فرض `400` |
+| `CHAT_LIMIT_PER_MINUTE` | — | پیش‌فرض `30` |
+| `CHAT_LIMIT_PER_DAY` | — | پیش‌فرض `1200` |
 
-**همه‌ی این‌ها از داشبورد قابل تنظیم‌اند** — `wrangler.toml` عمداً هیچ `[vars]`ی ندارد،
-چون هر نامی که در آن فایل باشد در داشبورد قفل می‌شود و فقط Secret قابل ویرایش می‌ماند.
+**همه‌ی این‌ها از داشبورد قابل تنظیم‌اند** — `wrangler.toml` عمداً هیچ `[vars]`ی ندارد.
 مسیر: **Settings → Variables and Secrets → Add**. برای کلید و راز، نوع **Secret** و
 برای بقیه **Text**.
 
@@ -193,7 +222,16 @@ Zero Trust → **Access → Applications → Add an application → Self-hosted*
 Access کل سایت را می‌پوشاند. بدون آن، همه‌ی `/api/*` با `401` پاسخ می‌دهند و UI صفحه‌ی
 «ورود امن لازم است» نشان می‌دهد.
 
-### ۵) توکن Commit به GitHub (اختیاری)
+### ۵) اجرای واقعی کد (اختیاری)
+
+- **سرور ابری ۲۴ ساعته رایگان:** پوشه‌ی `runner-kit/` را روی Hugging Face Spaces (SDK=Docker)
+  آپلود کنید و Secret با نام `CP_TOKEN` بسازید؛ آدرس Space و توکن را در مودال «🐧 ترمینال /
+  سندباکس» وارد کنید. راهنمای کامل: `runner-kit/README.md`.
+- **پل مستقیم Termux (اندروید):** در همان مودال، «پل مستقیم Termux محلی» را انتخاب و دستور
+  نصب ۱-کلیکی را در Termux اجرا کنید — مرورگر از `http://127.0.0.1:8787` مستقیم به گوشی
+  وصل می‌شود. پروبِ موفق حالت را بلافاصله فعال و ذخیره می‌کند.
+
+### ۶) توکن Commit به GitHub (اختیاری)
 
 این توکن *هویت کاربر نیست*: فقط اجازه‌ی نوشتن روی یک مخزن است و در `localStorage` همان
 مرورگر می‌ماند. یک **fine-grained token** با دسترسی `Contents: Read and write` فقط روی
@@ -203,15 +241,15 @@ Access کل سایت را می‌پوشاند. بدون آن، همه‌ی `/api
 
 ```bash
 npm install
-npm run dev            # wrangler pages dev . --d1 DB=codepilot-db
 cp .dev.vars.example .dev.vars   # سپس مقادیر را پر کنید
+npm run dev                       # wrangler pages dev . --d1 DB=codepilot-db
 ```
 
 ## تست‌ها
 
 ```bash
-npm test        # ۳۳ تست: احراز هویت، CRUD، حافظه، خلاصه‌سازی، ابزارها، patch، جست‌وجو، اعتبارسنجی، نسخه‌ها، sandbox، مهاجرت
-npm run test:ui # تست دودی رابط کاربری در jsdom (استریم SSE، رندر ابزار، ذخیره‌ی خودکار)
+npm test         # ۹۰ تست: auth، CRUD، حافظه، خلاصه‌سازی، ابزارها، patch، جست‌وجو، اعتبارسنجی، نسخه‌ها، sandbox، SSRF، ماراتن، بهینه‌ساز توکن
+npm run test:ui  # تست دودی رابط کاربری در jsdom (۲۲۵ assertion: استریم SSE، رندر ابزار، سندباکس Termux، استخر درگاه، ماراتن UI)
 npm run test:all
 ```
 
@@ -219,27 +257,31 @@ npm run test:all
 (`node:sqlite`) و با یک شبیه‌ساز D1 اجرا می‌شود؛ Access هم با JWKS و JWT محلی شبیه‌سازی
 می‌شود، بنابراین همان کد تولیدی اجرا می‌شود.
 
-برای ورود محلی یا `Cf-Access-Jwt-Assertion` واقعی لازم است یا باید سراغ
-`wrangler pages dev` با Access واقعی رفت. بدون Access، API عمداً `401` می‌دهد.
-
 ## قرارداد API
 
 | مسیر | متد | کار |
 | --- | --- | --- |
-| `/api/auth` | GET | هویت کاربر، صدور کوکی نشست |
-| `/api/auth` | POST | خروج (پاک‌کردن کوکی) |
-| `/api/config` | GET | پیکربندی غیرحساس |
+| `/api/auth` | GET/POST | هویت کاربر و صدور کوکی / خروج |
+| `/api/config` | GET/POST | پیکربندی غیرحساس / ذخیره‌ی provider، sandbox، agentConfig |
+| `/api/health` | GET | تشخیص کانفیگ + `?probe=1` تست زنده‌ی مدل |
+| `/api/models` | GET/POST | کاتالوگ زنده‌ی مدل‌ها / کشف Effort یک مدل |
+| `/api/chat` | POST | یک نوبت گفتگو، پاسخ `text/event-stream` |
+| `/api/chat/stop` | POST | توقف تولید فعال (متن جزئی ذخیره می‌شود) |
+| `/api/run` | POST | اجرای فرمان ترمینال + `action: 'probe'` سرور ابری |
+| `/api/uploads` | GET/POST | پروتکل آپلود چانکی (`start`/بخش/`delete`) |
+| `/api/images` | GET/POST | فهرست تصاویر / تولید تصویر Workers AI |
+| `/api/images/:id` | GET/DELETE | تصویر باینری owner-isolated (+`?download=1`) / حذف |
 | `/api/state` | GET | یک‌جا: کاربر، گفتگوها، حافظه، مصرف |
-| `/api/state` | POST | `create`, `rename`, `flags`, `delete`, `append`, `replace-messages`, `workspace`, `memory-upsert`, `memory-delete`, `export`, `delete-all` |
+| `/api/state` | POST | `create`, `rename`, `flags`, `delete`, `append`, `replace-messages`, `workspace`, `compact`, `fork`, `memory-upsert`, `memory-delete`, `export`, `delete-all` |
 | `/api/state/conversations` | GET | فهرست سبک گفتگوها |
-| `/api/state/conversations/:id` | GET | گفتگو + پیام‌ها + خلاصه + workspace |
+| `/api/state/conversations/:id` | GET | گفتگو + پیام‌ها + خلاصه + workspace + checkpoint |
+| `/api/state/workspace-file` | GET | محتوای یک فایل مشخص (`conversationId` + `path`) برای بارگذاری lazy فایل‌های بزرگ — owner-scoped |
 | `/api/state/memory` | GET/POST | فهرست/افزودن/حذف حافظه |
-| `/api/state/usage` | GET | مصرف روزانه |
+| `/api/state/usage` | GET/POST | مصرف روزانه + سقف توکن |
 | `/api/state/search` | POST | جست‌وجوی متن/regex در workspace ذخیره‌شده |
 | `/api/state/versions` | GET/POST | تاریخچه‌ی یک فایل / بازگردانی نسخه |
-| `/api/chat` | POST | یک نوبت گفتگو، پاسخ `text/event-stream` |
 
-رویدادهای استریم: `status`, `tool`, `tool_result`, `assistant`, `done`, `error`.
+رویدادهای استریم: `status`, `tool`, `tool_result`, `assistant`, `stopped`, `done`, `error`.
 
 ## تصمیم‌های طراحی که باید بدانید
 
@@ -253,39 +295,36 @@ npm run test:all
 6. **رازداری چندلایه:** ورودی کاربر، حافظه، خروجی ابزار و پاسخ مدل همه پاک‌سازی می‌شوند.
    الگوهای token شکل (GitHub, OpenAI, AWS, Google, Slack, JWT, کلید خصوصی) و
    `api_key = "..."` جایگزین می‌شوند.
-7. **کلید مدل هرگز به مرورگر نمی‌رسد.** `/api/config` فقط نام مدل و بودجه را می‌دهد.
+7. **کلید مدل هرگز به مرورگر نمی‌رسد.** `/api/config` فقط نام مدل و بودجه را می‌دهد؛
+   کلید سفارشی کاربر در D1 رمزنگاری‌شده نگه داشته می‌شود.
 8. **ویرایش مبهم رد می‌شود.** اگر متن جست‌وجو بیش از یک جا پیدا شود، `apply_patch` خطا
    می‌دهد تا مدل مجبور شود زمینه‌ی یکنواتر بفرستد؛ این جلوی خرابی خاموش را می‌گیرد.
 9. **هر تغییر قبل از اعمال snapshot می‌شود** و diff آن در پاسخ `done` می‌آید؛ UI آن را
    نمایش می‌دهد و در صورت اتصال GitHub همان فایل را Commit می‌کند.
 10. **اجرای واقعی ادعا نمی‌شود.** بدون Sandbox، نتیجه‌ی `run_command` با صراحت می‌گوید
     «Virtual shell»؛ با Sandbox ناموجود هم می‌گوید «NOT real execution».
+11. **پروب موفق Termux فوراً حالت را فعال می‌کند** — تا کاربر دکمه‌ی ذخیره را نزده باشد،
+    ترمینال و `run_command` همین حالا به `127.0.0.1` روتر می‌شوند و انتخاب در سرور هم
+    ذخیره می‌شود.
 
 ## محدودیت‌های شناخته‌شده
 
-- شل، **مجازی** است: `ls`, `cat`, `touch`, `echo >`, `rm` روی فایل‌های workspace. هیچ
-  فرمان OS یا دسترسی شبکه‌ای اجرا نمی‌شود.
+- بدون runner خارجی، شل **مجازی** است: `ls`, `cat`, `touch`, `echo >`, `rm` روی فایل‌های
+  workspace. هیچ فرمان OS یا دسترسی شبکه‌ای اجرا نمی‌شود.
 - Commit به GitHub از مرورگر انجام می‌شود (توکن آنجاست). اگر مرورگر بسته شود، فایل در D1
   ذخیره است و در نوبت بعدی/Commit بعدی منتقل می‌شود.
-- سقف‌ها: ۲۰۰ فایل در workspace، ۴۰۰۰ پیام در هر گفتگو، ۳۰۰ گفتگو در هر کاربر،
-  ۱۲ درخواست در دقیقه و ۴۰۰ در روز برای هر حساب (قابل تنظیم).
-- **اجرای واقعی کد** به یک Sandbox جدا نیاز دارد (بخش بعد). خودِ Pages Functions نمی‌تواند
-  پردازه اجرا کند و ما هم آن را جعل نمی‌کنیم.
-- ویرایش هم‌زمان دو دستگاه روی یک فایل با «آخرین نوشتن برنده است» حل می‌شود؛ `revision` از
-  نوشتن روی نسخه‌ی کهنه جلوگیری می‌کند اما merge خودکار وجود ندارد.
-- اجرای Durable Object / اجرای چنددستگاهی هم‌زمان (CRDT) در این گام نیست؛ آخرین نوشتن
-  برنده است و `revision` جلوی نوشتن روی نسخه‌ی کهنه را می‌گیرد.
+- سقف‌ها در حالت 👨‍💻 توسعه‌دهنده: ۲۰۰ فایل در workspace، ۸M کاراکتر workspace و ۹۰۰K
+  کاراکتر در هر فایل؛ در حالت 📦 عادی: ۱GB کل workspace (بر اساس بایت واقعی UTF-8)،
+  ۳۲M کاراکتر در هر نوشتن و ویرایش فایل‌های تا ۲۴MB. مشترک: ۴۰۰۰ پیام در هر گفتگو،
+  ۳۰۰ گفتگو در هر کاربر، ۳۰ درخواست در دقیقه و ۱۲۰۰ در روز برای هر حساب (قابل تنظیم).
+  فایل‌های بزرگ‌تر از ۲۴MB در حالت عادی قابل ویرایش/patch نیستند (خواندن با برش ممکن است).
+- ویرایش هم‌زمان دو دستگاه روی یک فایل با «آخرین نوشتن برنده است» حل می‌شود؛ `revision`
+  از نوشتن روی نسخه‌ی کهنه جلوگیری می‌کند اما merge خودکار وجود ندارد.
+- اجرای Durable Object / CRDT در این گام نیست.
 
 ## نقشه‌ی گام‌های بعدی (پیشنهاد)
 
-این گام «حافظه و ذخیره‌سازی پایدار» را کامل می‌کند. برای نزدیک‌شدن بیشتر به یک محیط
-کدنویسی کامل، ترتیب پیشنهادی:
-
-1. **اجرای واقعی کد** — `wrangler`/Durable Object یا Sandbox جدا؛ الان شل عمداً مجازی است.
-2. **تفکیک workspace از گفتگو** — پروژه‌ی مستقل با نسخه‌بندی فایل، تا گفتگوهای متعدد روی
-   یک پروژه کار کنند.
-3. **جست‌وجوی کد** — ایندکس FTS5 در D1 برای پیدا کردن نمادها بین فایل‌ها.
-5. **همگام‌سازی هم‌زمان** — Durable Object برای جلوگیری از تعارض دو دستگاه در یک لحظه.
-
-> گام‌های ۱ (اجرای واقعی)، ۲ (تفکیک پروژه از گفتگو) و ۴ (ویرایش تفاضلی) در همین نسخه
-> پیاده شده‌اند؛ ۳ (FTS5) و ۵ (هم‌زمانی) باقی مانده‌اند.
+1. **ایندکس FTS5 در D1** برای جست‌وجوی نمادها بین فایل‌ها.
+2. **تفکیک workspace از گفتگو** — گام اول با حالت 📦 عادی انجام شد (فضای کاری مستقل per-conversation با سقف ۱ گیگابایت)؛ باقی‌مانده: اشتراک یک پروژه‌ی developer بین چند گفتگو.
+3. **همگام‌سازی هم‌زمان** — Durable Object برای جلوگیری از تعارض دو دستگاه در یک لحظه.
+4. **ویرایش تفاضلی در UI** — نمایش hunk-by-hunk قبل از پذیرش هر پچ.
