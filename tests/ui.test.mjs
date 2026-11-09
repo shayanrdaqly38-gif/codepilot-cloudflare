@@ -795,6 +795,206 @@ assert.equal($('editor').readOnly, false, 'editor writable once lazy content arr
 await window.openConversation('c-1');
 assert.ok($('tree').textContent.includes('index.html'), 'developer conversation tree renders repo files');
 
+// --- brand-new account (zero conversations): boot() creates the first
+// conversation with open=false. Its id MUST land in state.conversationId, or the
+// very first message goes out with conversationId:null → server 400 bad_id and
+// every retry mints another empty conversation.
+{
+  const emptyCalls = [];
+  const emptyDb = { conversations: [], messages: [], workspace: { files: {}, active: '' } };
+  const emptyDom = new JSDOM(html, {
+    url: 'https://app.example.com/',
+    runScripts: 'dangerously',
+    pretendToBeVisual: true,
+    beforeParse(w) {
+      w.fetch = async (url, init = {}) => {
+        emptyCalls.push({ url: String(url), init });
+        const path = String(url).replace('https://app.example.com', '');
+        if (path === '/api/auth') return jsonResponse({ signedIn: true, user: { email: 'new@example.com' } });
+        if (path === '/api/config') return jsonResponse({ ok: true, model: 'gpt-4o-mini', contextBudgetTokens: 24000 });
+        if (path === '/api/state' && init.method === 'POST') {
+          const body = JSON.parse(init.body || '{}');
+          if (body.action === 'create') {
+            emptyDb.conversations.unshift({ id: 'c-first', title: 'گفتگوی جدید', messageCount: 0, updatedAt: Date.now() });
+            return jsonResponse({ ok: true, id: 'c-first', mode: body.mode || 'developer' });
+          }
+          if (body.action === 'workspace') return jsonResponse({ ok: true });
+          return jsonResponse({ ok: true });
+        }
+        if (path === '/api/state')
+          return jsonResponse({ ok: true, conversations: emptyDb.conversations, memory: [], usage: {} });
+        if (path.startsWith('/api/state/conversations/'))
+          return jsonResponse({
+            ok: true,
+            conversation: { id: 'c-first', title: 'گفتگوی جدید', summaryUntil: 0 },
+            messages: emptyDb.messages,
+            hasOlderMessages: false,
+            oldestSeq: null,
+            workspace: emptyDb.workspace
+          });
+        if (path === '/api/chat') {
+          const body = JSON.parse(init.body || '{}');
+          emptyDb.messages.push({ role: 'user', content: body.message, seq: 0, created_at: Date.now() });
+          return new Response('event: done\ndata: {"content":"ok"}\n\n', {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' }
+          });
+        }
+        return jsonResponse({ ok: true });
+      };
+      w.confirm = () => true;
+      w.TextEncoder = TextEncoder;
+      w.TextDecoder = TextDecoder;
+    }
+  });
+  await wait(400);
+  const ew = emptyDom.window;
+  assert.equal(
+    ew.eval('state.conversationId'),
+    'c-first',
+    'boot() on an empty account binds the created conversation id into state (open=false path)'
+  );
+  assert.equal(
+    emptyCalls.filter((c) => c.init.method === 'POST' && JSON.parse(c.init.body || '{}').action === 'create').length,
+    1,
+    'exactly one conversation is created at boot'
+  );
+
+  // The first message must carry that id — not null.
+  ew.document.getElementById('prompt').value = 'اولین پیام روی حساب تازه';
+  await ew.sendMessage();
+  await wait(400);
+  const firstChat = emptyCalls.find((c) => c.url.endsWith('/api/chat'));
+  assert.ok(firstChat, 'first message posts to /api/chat');
+  assert.equal(JSON.parse(firstChat.init.body).conversationId, 'c-first', 'first message carries the real conversation id');
+  assert.equal(
+    emptyCalls.filter((c) => c.init.method === 'POST' && JSON.parse(c.init.body || '{}').action === 'create').length,
+    1,
+    'sending the first message does not mint a second conversation'
+  );
+  ew.close?.();
+}
+
+// --- switching normal → developer must not keep the arena mode marker
+{
+  const before = window.eval('state.workspace.mode');
+  // Force the workspace into normal mode, then open a developer conversation.
+  window.eval("state.workspace.mode = 'normal'");
+  await window.newConversation(true, 'developer');
+  await wait(100);
+  assert.equal(
+    window.eval('state.workspace.mode'),
+    undefined,
+    'starting a developer conversation drops the inherited arena workspace.mode (repo line + 1GB meter must not lie)'
+  );
+  assert.equal(window.eval('currentConvMode()'), 'developer', 'currentConvMode() reports developer for the new conversation');
+  assert.ok(
+    !$('repoLine').textContent.includes('۱ گیگابایت'),
+    'repo line no longer advertises the GitHub-free 1GB arena: ' + $('repoLine').textContent
+  );
+  void before;
+}
+
+// --- cross-mode start (normal → developer): uses the zero-upload server clone
+// (the server re-validates against the developer caps) instead of re-uploading
+// a multi-MB arena workspace, and never inherits the arena mode marker.
+{
+  await window.newConversation(true, 'normal');
+  await wait(150);
+  assert.equal(window.eval('state.workspace.mode'), 'normal', 'normal conversation marks the workspace as arena');
+  window.eval('state.dirtyFiles.clear()'); // clean → clone shortcut allowed
+
+  const callsBefore = calls.length;
+  await window.newConversation(true, 'developer');
+  await wait(100);
+  const create = calls
+    .slice(callsBefore)
+    .filter((c) => String(c.url).endsWith('/api/state') && c.init.method === 'POST')
+    .map((c) => JSON.parse(c.init.body || '{}'))
+    .find((b) => b.action === 'create');
+  assert.ok(create, 'cross-mode start POSTs a create');
+  assert.equal(create.mode, 'developer');
+  assert.ok(create.copyWorkspaceFrom, 'cross-mode start asks the server to clone (no multi-MB upload)');
+  assert.equal(create.workspace, undefined, 'cross-mode start does not upload the arena workspace');
+  assert.equal(window.eval('state.workspace.mode'), undefined, 'arena marker dropped for the developer conversation');
+
+  // A dirty workspace cannot be cloned server-side, so the client must send the
+  // (already mode-filtered) files instead of silently dropping them.
+  window.eval("state.dirtyFiles.add('x.js')");
+  const callsBefore2 = calls.length;
+  await window.newConversation(true, 'developer');
+  await wait(100);
+  const create2 = calls
+    .slice(callsBefore2)
+    .filter((c) => String(c.url).endsWith('/api/state') && c.init.method === 'POST')
+    .map((c) => JSON.parse(c.init.body || '{}'))
+    .find((b) => b.action === 'create');
+  assert.ok(create2.workspace, 'dirty cross-mode start uploads the workspace payload');
+  assert.equal(create2.copyWorkspaceFrom, undefined, 'dirty cross-mode start cannot rely on a server clone');
+}
+
+// --- starting a developer chat out of an arena one must not leave "ghost"
+// files: the server drops files above the developer caps, so the tree has to
+// drop them at the same moment instead of showing a file that 404s on click.
+{
+  await window.newConversation(true, 'normal');
+  await wait(150);
+  window.eval(`
+    state.conversations.find((c) => c.id === state.conversationId).mode = 'normal';
+    state.workspace.mode = 'normal';
+    state.workspace.files['arena-only.bin'] = 'A'.repeat(1_500_000);
+    state.workspace.files['keep.txt'] = 'keep me';
+    state.workspace.active = 'keep.txt';
+    state.workspace.totalBytes = 1_500_009;
+    state.workspace.lazy = { 'lazy-huge.bin': 2_000_000, 'lazy-small.bin': 1200 };
+    state.workspace.files['lazy-huge.bin'] = null;
+    state.workspace.files['lazy-small.bin'] = null;
+    state.dirtyFiles.clear();
+    renderTree();
+  `);
+  await window.newConversation(true, 'developer');
+  await wait(150);
+
+  const files = Array.from(window.eval('Object.keys(state.workspace.files)')).sort();
+  assert.deepEqual(files, ['keep.txt', 'lazy-small.bin'], 'oversized arena files are dropped up front, per the developer caps');
+  assert.equal(window.eval("state.workspace.files['lazy-huge.bin']"), undefined, 'oversized lazy placeholder dropped too');
+  assert.equal(window.eval("state.workspace.files['lazy-small.bin']"), null, 'small lazy placeholder survives (still lazily loaded)');
+  assert.equal(window.eval('state.workspace.active'), 'keep.txt', 'active file falls back to a surviving file');
+  assert.equal(window.eval('state.workspace.totalBytes'), undefined, 'stale arena byte total is cleared');
+  assert.equal(window.eval('state.dirtyFiles.size'), 0, 'developer conversation starts clean');
+  assert.ok($('tree').textContent.includes('keep.txt'));
+  assert.ok(!$('tree').textContent.includes('arena-only.bin'), 'tree matches what the server actually stored');
+}
+
+// --- a failed create must roll the user back to the conversation they were in
+{
+  await window.openConversation('c-1');
+  const beforeId = window.eval('state.conversationId');
+  const beforeMsgs = window.eval('state.messages.length');
+  const beforeTree = $('tree').textContent;
+
+  const origFetch = window.fetch;
+  window.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/api/state') && init.method === 'POST' && JSON.parse(init.body || '{}').action === 'create') {
+      return jsonResponse({ error: 'سقف گفتگوها پر است', code: 'quota' }, 409);
+    }
+    return origFetch(url, init);
+  };
+  const failed = await window.newConversation(true, 'developer');
+  window.fetch = origFetch;
+  await wait(150);
+
+  assert.equal(failed, null, 'failed create resolves null');
+  assert.equal(window.eval('state.conversationId'), beforeId, 'rolls back to the previous conversation id');
+  assert.equal(window.eval('state.messages.length'), beforeMsgs, 'rolls back the previous message list');
+  assert.ok($('chat').textContent.includes('چه بسازیم؟'), 'previous conversation is rendered again');
+  assert.equal($('tree').textContent, beforeTree, 'previous workspace tree is restored');
+  assert.ok(
+    !window.document.querySelector('#convList .conv .title')?.textContent.includes('pending-'),
+    'no ghost pending row is left in the sidebar'
+  );
+}
+
 // --- signed-out fallback path
 const dom2 = new JSDOM(html, {
   url: 'https://app.example.com/',

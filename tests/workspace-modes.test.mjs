@@ -279,3 +279,81 @@ test('developer conversations keep their legacy caps and never grow chunked stor
   assert.equal(hydrated.files['ok.txt'], 'fine');
   assert.equal(hydrated.mode, 'developer');
 });
+
+/* ---------------- new-conversation regressions (cross-mode clone) --------- */
+
+test('cloning a NORMAL workspace into a DEVELOPER chat re-validates against developer caps', async () => {
+  // Regression: the server-side "zero-upload clone" used to copy raw rows
+  // regardless of mode, so a 1.5MB arena file landed in a developer
+  // conversation whose per-file ceiling is 900K and whose total cap is 8M chars.
+  const arenaId = await createConversation(env, OWNER, {
+    mode: 'normal',
+    workspace: { files: { 'huge.bin': 'y'.repeat(1_500_000), 'ok.txt': 'hello' }, active: 'ok.txt' }
+  });
+  const devId = await createConversation(env, OWNER, { mode: 'developer', copyWorkspaceFrom: arenaId });
+
+  const devRow = await getConversation(env, OWNER, devId);
+  assert.equal(devRow.mode, 'developer');
+  const hydrated = await hydrateConversationWorkspace(env, devRow);
+  assert.equal(hydrated.files['huge.bin'], undefined, 'oversized arena file must not bypass the developer cap');
+  assert.equal(hydrated.files['ok.txt'], 'hello', 'files that fit are still carried over');
+  assert.equal(hydrated.repo, null);
+});
+
+test('cloning a DEVELOPER workspace into a NORMAL chat never leaks the GitHub repo pointer', async () => {
+  const devId = await createConversation(env, OWNER, {
+    mode: 'developer',
+    workspace: {
+      files: { 'a.js': 'console.log(1)' },
+      active: 'a.js',
+      repo: { owner: 'shayanrdaqly38-gif', repo: 'codepilot-cloudflare', branch: 'main' }
+    }
+  });
+  const arenaId = await createConversation(env, OWNER, { mode: 'normal', copyWorkspaceFrom: devId });
+  const hydrated = await hydrateConversationWorkspace(env, await getConversation(env, OWNER, arenaId));
+  assert.equal(hydrated.mode, 'normal');
+  assert.equal(hydrated.files['a.js'], 'console.log(1)');
+  assert.equal(hydrated.repo, null, 'normal mode is GitHub-free even when cloned from a developer chat');
+});
+
+test('same-mode clone still takes the fast raw-copy path (large arena files survive)', async () => {
+  const src = await createConversation(env, OWNER, {
+    mode: 'normal',
+    workspace: { files: { 'big.bin': 'q'.repeat(2_000_000), 'small.txt': 'hi' }, active: 'big.bin' }
+  });
+  const clone = await createConversation(env, OWNER, { mode: 'normal', copyWorkspaceFrom: src });
+  const hydrated = await hydrateConversationWorkspace(env, await getConversation(env, OWNER, clone));
+  assert.equal((hydrated.files['big.bin'] || '').length, 2_000_000, 'chunked files are cloned byte-for-byte');
+  assert.equal(hydrated.files['small.txt'], 'hi');
+});
+
+test('archived conversations do not count toward the per-user quota (no way out of that trap in the UI)', async () => {
+  const quotaOwner = 'https://team.cloudflareaccess.com|quota-user';
+  const now = Date.now();
+  // 301 archived rows: invisible in the sidebar (list defaults to archived=0)
+  // and un-archiveable from the UI.
+  for (let i = 0; i < 301; i += 1) {
+    await env.DB.prepare(
+      `INSERT INTO conversations(id,owner,title,created_at,updated_at,workspace,archived,mode)
+       VALUES(?,?,?,?,?,?,?,?)`
+    )
+      .bind(`q-arch-${i}`, quotaOwner, `old ${i}`, now, now - i, '{}', 1, 'developer')
+      .run();
+  }
+  const id = await createConversation(env, quotaOwner, { mode: 'developer' });
+  assert.ok(id, 'a new conversation can still be created when only archived rows fill the table');
+
+  // …while the ceiling still genuinely applies to live conversations.
+  for (let i = 0; i < 300; i += 1) {
+    await env.DB.prepare(
+      `INSERT INTO conversations(id,owner,title,created_at,updated_at,workspace,archived,mode)
+       VALUES(?,?,?,?,?,?,?,?)`
+    )
+      .bind(`q-live-${i}`, quotaOwner, `live ${i}`, now, now - i, '{}', 0, 'developer')
+      .run();
+  }
+  await assert.rejects(() => createConversation(env, quotaOwner, { mode: 'developer' }), (error) => {
+    assert.equal(error.code, 'quota');
+    return true;
+  });
+});
