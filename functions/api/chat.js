@@ -98,10 +98,9 @@ import {
   VALID_TOKEN_SAVER_MODES
 } from '../_lib/token-optimizer.js';
 
-const MAX_CONTENT = 100_000;
-const MAX_LOOP_STEPS = 16;
-const MAX_THINKING_LOOP_STEPS = 24;
-const MAX_TURN_INPUT_CHARS = 260_000;
+import { MAX_MESSAGE_CHARS } from '../_lib/limits.js';
+
+const MAX_CONTENT = MAX_MESSAGE_CHARS;
 const MAX_FILE_CHARS = 900_000;
 const MAX_TOOL_LOOPS_PER_FILE = 12;
 // Normal ("arena") mode: bigger single writes are fine because storage is

@@ -971,6 +971,11 @@ export function resolvePowerExecutionPlan(agentConfig = {}, reasoningEffort = nu
   let maxSteps;
   if (hasExplicitUserSteps && cfg.maxSteps > spec.stepCap) {
     maxSteps = Math.min(cfg.maxSteps, 300);
+  } else if (hasExplicitUserSteps && cfg.maxSteps < spec.stepFloor) {
+    // An explicit user cap BELOW the stamina floor is a deliberate "keep this
+    // turn short" choice (the UI advertises a 4–300 range), so honour it
+    // instead of silently boosting it to the floor.
+    maxSteps = Math.max(4, cfg.maxSteps);
   } else if (stamina === 'low') {
     maxSteps = Math.min(baseMaxSteps, spec.stepCap);
   } else if (stamina === 'medium') {
