@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 
 const IS_TERMUX = Boolean(process.env.TERMUX_VERSION || String(process.env.PREFIX || '').includes('com.termux'));
 const PORT = Number(process.env.CP_PORT || process.env.PORT || (IS_TERMUX ? 8787 : 7860));
@@ -79,11 +79,84 @@ function isSafeRelPath(rel, root = WORKSPACE_ROOT) {
 // other's files. No `session` → the shared root (backward compatible).
 const SESSIONS_ROOT = path.join(WORKSPACE_ROOT, 'sessions');
 
+// One-time migration marker: before per-conversation sessions existed, every
+// command ran directly in WORKSPACE_ROOT. When the runner is upgraded, an
+// existing conversation would suddenly land in a brand-new EMPTY session dir
+// and "lose" its on-disk work (git clones, node_modules, binaries...).
+// `adoptLegacyRoot()` moves that shared-root content into the first session
+// that executes after the upgrade — exactly once, never clobbering files the
+// session already has (D1-synced copies are newer).
+const ADOPT_MARKER = '.cp-legacy-adopted';
+
 function sessionWorkdir(session) {
   const raw = String(session || '').trim();
   if (!raw || !/^[A-Za-z0-9_-]{1,64}$/.test(raw)) return WORKSPACE_ROOT;
   return path.join(SESSIONS_ROOT, raw);
 }
+
+async function pathExists(p) {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Merge-move `fromDir` into `toDir`, never overwriting existing files. */
+async function mergeMoveDir(fromDir, toDir) {
+  let entries = [];
+  try {
+    entries = await readdir(fromDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await mkdir(toDir, { recursive: true });
+  for (const entry of entries) {
+    const from = path.join(fromDir, entry.name);
+    const to = path.join(toDir, entry.name);
+    if (entry.isDirectory()) {
+      await mergeMoveDir(from, to);
+      await rm(from, { recursive: true, force: true }).catch(() => {});
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      if (await pathExists(to)) continue; // keep the (newer) session copy
+      await rename(from, to).catch(() => {});
+    }
+  }
+}
+
+async function adoptLegacyRoot(sessionDir) {
+  try {
+    const marker = path.join(WORKSPACE_ROOT, ADOPT_MARKER);
+    if (await pathExists(marker)) return;
+    let entries = [];
+    try {
+      entries = await readdir(WORKSPACE_ROOT, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const legacy = entries.filter((e) => e.name !== 'sessions' && e.name !== ADOPT_MARKER);
+    await mkdir(sessionDir, { recursive: true });
+    if (legacy.length) {
+      for (const entry of legacy) {
+        const from = path.join(WORKSPACE_ROOT, entry.name);
+        const to = path.join(sessionDir, entry.name);
+        if (entry.isDirectory()) {
+          await mergeMoveDir(from, to);
+          await rm(from, { recursive: true, force: true }).catch(() => {});
+        } else if (!(await pathExists(to))) {
+          // keep the (newer) session copy when both exist
+          await rename(from, to).catch(() => {});
+        }
+      }
+      console.log(`[runner] adopted legacy workspace into ${sessionDir}`);
+    }
+    await writeFile(marker, `adopted by ${path.basename(sessionDir)} at ${new Date().toISOString()}\n`, 'utf8');
+  } catch {
+    /* adoption is best-effort — never break command execution */
+  }
+}
+
 
 async function snapshotTextFiles(dir, relPrefix = '', out = new Map(), budget = { files: 0, bytes: 0 }) {
   if (budget.files >= MAX_SYNC_FILES || budget.bytes >= MAX_SYNC_TOTAL_BYTES) return out;
@@ -192,7 +265,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(req, res, 200, {
       ok: true,
       service: 'codepilot-runner',
-      version: '2.3.0',
+      version: '2.3.1',
       runner: IS_TERMUX ? 'termux' : 'cloud-linux',
       sessions: true,
       authRequired: Boolean(TOKEN),
@@ -237,6 +310,11 @@ const server = http.createServer(async (req, res) => {
 
     // Isolated per-conversation workspace (parallel chats never collide).
     const workDir = sessionWorkdir(body.session);
+    // First sessioned run after an upgrade adopts the pre-sessions shared
+    // workspace (one-time, marker-guarded, never clobbers D1-synced files).
+    if (workDir !== WORKSPACE_ROOT) {
+      await adoptLegacyRoot(workDir);
+    }
     await mkdir(workDir, { recursive: true });
     if (body.files && typeof body.files === 'object') {
       for (const [rel, content] of Object.entries(body.files)) {

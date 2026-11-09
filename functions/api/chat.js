@@ -839,7 +839,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const result = await runCommand(effectiveEnv || env, {
         command: String(args.command || ''),
         workspace,
-        externalSignal: signal
+        externalSignal: signal,
+        conversationId: conversation.id
       });
       turn.commands.push({ command: String(args.command || ''), mode: result.mode, ok: result.ok });
       if (result.mode === 'virtual' && result.ok) turn.touched.add('(shell)');

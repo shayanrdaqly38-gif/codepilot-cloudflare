@@ -13,7 +13,10 @@
 
 import { envSecrets, redactCode, redactSecrets } from './util.js';
 
-const DEFAULT_TIMEOUT_MS = 22_000;
+// 85s exec budget (the runner caps at 90s): long tasks like installs and
+// builds get a real chance to finish. The agent is taught to background
+// anything longer (nohup + poll) via the system prompt.
+const DEFAULT_TIMEOUT_MS = 85_000;
 const MAX_OUTPUT_CHARS = 24_000;
 const MAX_MOUNT_FILES = 70;
 const MAX_MOUNT_TOTAL_CHARS = 350_000;
@@ -190,7 +193,7 @@ export function applyRunnerFileChanges(workspace, payload = {}, secrets = []) {
   return { touchedFiles, deletedFiles };
 }
 
-async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS, externalSignal = null }) {
+async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_MS, externalSignal = null, session = '' }) {
   const endpoint = String(env?.SANDBOX_URL || '').trim();
   if (!endpoint) return null;
   const secrets = envSecrets(env || {});
@@ -208,7 +211,7 @@ async function callCustomRunner(env, { cmd, files, timeoutMs = DEFAULT_TIMEOUT_M
       headers,
       redirect: 'manual',
       signal: mergeTimeoutSignal(timeoutMs, externalSignal),
-      body: JSON.stringify({ cmd, cwd: '/workspace', timeoutMs, files: safeFiles })
+      body: JSON.stringify({ cmd, cwd: '/workspace', timeoutMs, files: safeFiles, session })
     });
   } catch (error) {
     return { ok: false, unavailable: true, error: error?.message || 'remote runner unreachable' };
@@ -421,7 +424,7 @@ export function formatRealResult(label, result) {
  * Returns { mode: 'sandbox'|'remote-sandbox'|'linux-container'|'virtual'|'blocked', ... }
  * and a `text` field that always states honestly which mode ran.
  */
-export async function runCommand(env, { command, workspace, externalSignal }) {
+export async function runCommand(env, { command, workspace, externalSignal, conversationId = '' }) {
   if (isCancelled(externalSignal)) {
     return {
       mode: 'stopped',
@@ -445,6 +448,12 @@ export async function runCommand(env, { command, workspace, externalSignal }) {
   }
 
   const files = workspace?.files && typeof workspace.files === 'object' ? workspace.files : null;
+  // Per-conversation isolated workspace on the remote runner (parallel chats
+  // never collide). Sanitized to the runner's session charset; empty → the
+  // runner's shared root (legacy behavior).
+  const session = String(conversationId || '')
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    .slice(0, 64);
 
   // Tier 1: Bound Cloudflare Container Durable Object
   if (sandboxEnabled(env)) {
@@ -479,7 +488,7 @@ export async function runCommand(env, { command, workspace, externalSignal }) {
 
   // Tier 2: Custom remote sandbox URL (if configured)
   if (env?.SANDBOX_URL) {
-    const remote = await callCustomRunner(env, { cmd: command, files, externalSignal });
+    const remote = await callCustomRunner(env, { cmd: command, files, externalSignal, session });
     if (remote && !remote.unavailable) {
       const secrets = envSecrets(env || {});
       const syncInfo = applyRunnerFileChanges(workspace, remote, secrets);

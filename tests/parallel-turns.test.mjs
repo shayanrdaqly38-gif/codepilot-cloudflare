@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -323,6 +323,89 @@ test('runner-kit sessions: parallel chats execute in isolated workspaces and nev
     const root = await run({ cmd: 'ls' });
     assert.doesNotMatch(root.stdout, /a\.txt|b\.txt/, 'session files never leak into the default workspace');
     assert.equal((root.changedFiles && Object.keys(root.changedFiles).length) || 0, 0, 'default workspace unchanged');
+  } finally {
+    child.kill('SIGKILL');
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('runner-kit upgrade: first sessioned run adopts the legacy shared workspace (files never "disappear")', async () => {
+  const port = await getFreePort();
+  const workDir = await mkdtemp(path.join(os.tmpdir(), 'cp-adopt-test-'));
+  // Simulate a PRE-sessions runner: the conversation's whole life ran in the
+  // shared root (git repo, node_modules, dotfiles, loose files).
+  await mkdir(path.join(workDir, 'myproject', '.git'), { recursive: true });
+  await mkdir(path.join(workDir, 'node_modules', 'somepkg'), { recursive: true });
+  await writeFile(path.join(workDir, 'myproject', 'app.js'), 'console.log("legacy");\n');
+  await writeFile(path.join(workDir, 'myproject', '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  await writeFile(path.join(workDir, 'node_modules', 'somepkg', 'index.js'), 'module.exports = 1;\n');
+  await writeFile(path.join(workDir, 'notes.txt'), 'legacy top-level file\n');
+  await writeFile(path.join(workDir, '.env'), 'SECRET=1\n');
+
+  const child = spawn(process.execPath, [RUNNER_SCRIPT], {
+    env: { ...process.env, CP_HOST: '127.0.0.1', CP_PORT: String(port), CP_WORKDIR: workDir },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    let ready = false;
+    for (let i = 0; i < 40 && !ready; i += 1) {
+      try {
+        const res = await realFetch(`${baseUrl}/health`);
+        if (res.ok) ready = true;
+      } catch { /* boot */ }
+      if (!ready) await new Promise((r) => setTimeout(r, 150));
+    }
+    assert.ok(ready, 'runner booted');
+
+    const run = (body) =>
+      realFetch(`${baseUrl}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then((r) => r.json());
+
+    // The upgrading conversation runs first — D1 sends a NEWER copy of a file
+    // that also exists in the legacy root. Adoption must move the legacy tree
+    // in without clobbering the fresher D1-synced version.
+    const first = await run({
+      cmd: 'ls -A && cat myproject/app.js',
+      session: 'conv-old',
+      files: { 'myproject/app.js': 'console.log("NEWER from D1");\n' }
+    });
+    assert.equal(first.ok, true, 'first sessioned command succeeded');
+    assert.match(first.stdout, /myproject/, 'legacy project dir visible after adoption');
+    assert.match(first.stdout, /notes\.txt/, 'legacy top-level file visible after adoption');
+    assert.match(first.stdout, /\.env/, 'legacy dotfile visible after adoption');
+    assert.match(first.stdout, /NEWER from D1/, 'D1-synced (newer) file wins over legacy copy');
+
+    const sessionDir = path.join(workDir, 'sessions', 'conv-old');
+    assert.equal(
+      await readFile(path.join(sessionDir, 'notes.txt'), 'utf8'),
+      'legacy top-level file\n',
+      'legacy file physically moved into the session dir'
+    );
+    assert.ok(
+      await stat(path.join(sessionDir, 'node_modules', 'somepkg', 'index.js')).then(() => true).catch(() => false),
+      'node_modules adopted too (ignored-by-sync but part of the environment)'
+    );
+    assert.ok(
+      await stat(path.join(sessionDir, 'myproject', '.git', 'HEAD')).then(() => true).catch(() => false),
+      '.git history adopted'
+    );
+    assert.equal(
+      await readFile(path.join(sessionDir, 'myproject', 'app.js'), 'utf8'),
+      'console.log("NEWER from D1");\n',
+      'session keeps the newer D1 copy, not the clobbered legacy one'
+    );
+
+    // The legacy root is now retired: only sessions/ + the marker remain.
+    const rootEntries = (await readdir(workDir)).sort();
+    assert.deepEqual(rootEntries, ['.cp-legacy-adopted', 'sessions'], 'shared root retired after adoption');
+
+    // A second conversation must NOT inherit the legacy work (adoption is one-time).
+    const second = await run({ cmd: 'ls -A', session: 'conv-new' });
+    assert.doesNotMatch(second.stdout, /myproject|notes\.txt/, 'later sessions start clean');
   } finally {
     child.kill('SIGKILL');
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
