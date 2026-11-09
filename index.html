@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-09.4">
+<html lang="fa" dir="rtl" data-build="2026-11-09.5">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1365,6 +1365,15 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
   <aside class="sidebar" id="workspaceSidebar" aria-label="تاریخچه گفتگوها و فایل‌های پروژه">
     <div class="sidebar-head"><span>تاریخچه گفتگوها</span><span class="tiny" id="convCount">۰</span><button class="drawer-close ghost" onclick="toggleSidebar(false)" aria-label="بستن نوار کناری">×</button></div>
     <button class="new-conversation" onclick="openNewConversationModal()" aria-haspopup="dialog">＋ گفتگوی جدید</button>
+    <div style="display:flex;gap:6px;padding:0 10px 6px">
+      <button type="button" class="ghost tiny" id="convArchivedToggle" onclick="toggleArchivedConversations()" style="flex:1" aria-pressed="false">🗄 آرشیو</button>
+    </div>
+    <div style="padding:0 10px 8px">
+      <input id="convSearch" type="search" placeholder="جست‌وجو در متن گفتگوها…" aria-label="جست‌وجو در متن گفتگوها"
+             style="width:100%;direction:ltr;text-align:left"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();searchConversations()}">
+    </div>
+    <div id="convSearchResults" class="conv-list" style="display:none"></div>
     <div class="scroll">
       <div id="convList" class="conv-list"></div>
       <div class="progress" title="حجم تقریبی زمینه‌ی ارسالی به مدل">
@@ -1502,7 +1511,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
       <div class="floating-palette" id="mentionMenu" role="listbox" aria-label="ارجاع به فایل پروژه"></div>
       <input id="attachmentInput" type="file" multiple hidden onchange="queueAttachments(this.files);this.value=''">
       <div id="attachmentList" style="display:flex;gap:6px;flex-wrap:wrap" aria-live="polite"></div>
-      <textarea class="chat-input" id="prompt" rows="1" aria-label="پیام به دستیار" placeholder="پیام یا دستور (/ و @)…" oninput="onPromptInput(event)" onkeydown="onPromptKeydown(event)"></textarea>
+      <textarea class="chat-input" id="prompt" rows="1" maxlength="100000" aria-label="پیام به دستیار" placeholder="پیام یا دستور (/ و @)…" oninput="onPromptInput(event)" onkeydown="onPromptKeydown(event)"></textarea>
       <div class="sendrow">
         <button type="button" class="comp-icon-btn" onclick="document.getElementById('attachmentInput').click()" title="افزودن عکس یا فایل" aria-label="افزودن عکس یا فایل">📎</button>
         <button type="button" class="comp-icon-btn art-btn" id="imageStudioBtn" onclick="openImageStudioModal()" title="استودیو تصویرساز رایگان و باکیفیت (FLUX.1)" aria-label="استودیو تصویرساز رایگان">🎨</button>
@@ -1605,7 +1614,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="notice" id="storageNotice" style="display:none"></div>
 
-    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.4</div>
+    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.5</div>
 
     <div class="modal-actions">
       <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
@@ -2367,6 +2376,10 @@ const state = {
   auth: null,
   config: null,
   agentConfig: { ...DEFAULT_CLIENT_AGENT_CONFIG },
+  limits: null,           // ceilings reported by the server (GET /api/config)
+  archivedConversations: [],
+  showingArchived: false,
+  conversationsFetchedAt: 0,
   conversations: [],
   conversationId: null,
   messages: [],
@@ -3894,6 +3907,19 @@ async function boot() {
         state.agentConfig = { ...DEFAULT_CLIENT_AGENT_CONFIG, ...config.agentConfig };
       }
       state.contextBudget = config.contextBudgetTokens || state.agentConfig.contextBudget || 24000;
+      // Server-reported ceilings: the sidebar quota label and the composer cap
+      // read from here so they can never advertise a number the server ignores.
+      state.limits = config.limits && typeof config.limits === 'object' ? config.limits : null;
+      if (state.limits?.maxTitleChars) {
+        // keep `title` tooltips honest without hardcoding 120 in three places
+        document.querySelectorAll('[data-limit-title]').forEach((el) => {
+          el.title = 'حداکثر ' + state.limits.maxTitleChars + ' کاراکتر';
+        });
+      }
+      const promptEl = $('prompt');
+      if (promptEl && Number(state.limits?.maxMessageChars) > 0) {
+        promptEl.maxLength = Number(state.limits.maxMessageChars);
+      }
       state.sandbox = Boolean(config.sandbox);
       state.linuxRunner = Boolean(config.linuxRunner);
       state.workersAi = Boolean(config.workersAi);
@@ -4057,10 +4083,46 @@ function showSignedOut(error) {
 function renderConversations() {
   const list = $('convList');
   list.innerHTML = '';
-  $('convCount').textContent = faNum(state.conversations.length);
+  const cap = Number(state.limits?.maxConversations || 0);
+  $('convCount').textContent = cap > 0
+    ? faNum(state.conversations.length) + ' / ' + faNum(cap)
+    : faNum(state.conversations.length);
   if (!state.conversations.length) {
     list.innerHTML = '<div class="tiny" style="padding:10px">گفتگویی نیست.</div>';
     return;
+  }
+  if (state.showingArchived) {
+    if (!state.archivedConversations.length) {
+      list.innerHTML = '<div class="tiny" style="padding:10px">آرشیو خالی است.</div>';
+      return;
+    }
+    for (const conv of state.archivedConversations) {
+      const row = document.createElement('div');
+      row.className = 'conv archived';
+      row.innerHTML = `
+        <span class="pin">🗄</span>
+        <span class="title">${esc(conv.title || 'گفتگوی جدید')}</span>
+        <span class="meta"><span>${faNum(conv.messageCount || 0)} پیام</span><span>${nowFa(conv.updatedAt)}</span></span>
+        <div class="acts">
+          <button data-act="unarchive" title="بازگردانی به فهرست">بازگردانی</button>
+          <button data-act="delete" title="حذف همیشگی">حذف</button>
+        </div>`;
+      row.onclick = (event) => {
+        const act = event.target.closest('button')?.dataset.act;
+        if (act === 'unarchive') return archiveConversation(conv, false);
+        if (act === 'delete') return removeConversation(conv);
+      };
+      list.appendChild(row);
+    }
+    return;
+  }
+  // Tell the user when the server truncated the list instead of silently
+  // dropping older conversations off the bottom of the sidebar.
+  if (cap > 0 && state.conversations.length >= cap) {
+    list.insertAdjacentHTML(
+      'beforeend',
+      `<div class="tiny" style="padding:8px 10px;color:var(--claude-amber)">سقف ${faNum(cap)} گفتگو پر شده است. برای ساخت گفتگوی جدید یکی را حذف کنید.</div>`
+    );
   }
   for (const conv of state.conversations) {
     const row = document.createElement('div');
@@ -4075,12 +4137,14 @@ function renderConversations() {
       <div class="acts">
         <button data-act="pin" title="سنجاق">${conv.pinned ? 'برداشتن سنجاق' : 'سنجاق'}</button>
         <button data-act="rename" title="تغییر نام">نام</button>
+        <button data-act="archive" title="آرشیو — از فهرست پنهان می‌شود و از سقف گفتگوها کم می‌کند">آرشیو</button>
         <button data-act="delete" title="حذف">حذف</button>
       </div>`;
     row.onclick = (event) => {
       const act = event.target.closest('button')?.dataset.act;
       if (act === 'pin') return togglePin(conv);
       if (act === 'rename') return renameConversation(conv);
+      if (act === 'archive') return archiveConversation(conv);
       if (act === 'delete') return removeConversation(conv);
       openConversation(conv.id);
     };
@@ -4695,7 +4759,7 @@ async function loadOlderMessages() {
     const chat = $('chat');
     const prevHeight = chat ? chat.scrollHeight : 0;
     const data = await api(
-      `${API.conversations}/${encodeURIComponent(targetId)}?lite=1&limit=90&beforeSeq=${encodeURIComponent(state.oldestSeq)}&skipWorkspace=1`
+      `${API.conversations}/${encodeURIComponent(targetId)}?lite=1&limit=200&beforeSeq=${encodeURIComponent(state.oldestSeq)}&skipWorkspace=1`
     );
     if (state.conversationId !== targetId) return;
     const older = Array.isArray(data.messages) ? data.messages : [];
@@ -4726,6 +4790,104 @@ async function loadOlderMessages() {
   } finally {
     state.loadingOlder = false;
   }
+}
+
+/* ---- conversation search -------------------------------------------------
+   Looks inside message bodies (not just titles), which is the only way to find
+   an old chat once the sidebar has hundreds of rows. */
+let convSearchTimer = null;
+function searchConversations() {
+  clearTimeout(convSearchTimer);
+  convSearchTimer = setTimeout(runConversationSearch, 120);
+}
+
+async function runConversationSearch() {
+  const input = $('convSearch');
+  const box = $('convSearchResults');
+  if (!input || !box) return;
+  const query = input.value.trim();
+  if (query.length < 2) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = '';
+  box.innerHTML = '<div class="tiny" style="padding:8px">در حال جست‌وجو…</div>';
+  try {
+    const data = await api(API.state, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'search-conversations', query })
+    });
+    const hits = Array.isArray(data.results) ? data.results : [];
+    if (!hits.length) {
+      box.innerHTML = '<div class="tiny" style="padding:8px">چیزی پیدا نشد.</div>';
+      return;
+    }
+    box.innerHTML = '';
+    for (const hit of hits) {
+      const row = document.createElement('div');
+      row.className = 'conv';
+      row.innerHTML =
+        '<span class="title">' + esc(hit.title || 'گفتگو') + '</span>' +
+        '<span class="meta"><span>' + esc(String(hit.snippet || '').slice(0, 90)) + '</span></span>';
+      row.title = hit.snippet || '';
+      row.onclick = () => {
+        input.value = '';
+        box.style.display = 'none';
+        box.innerHTML = '';
+        openConversation(hit.conversationId);
+      };
+      box.appendChild(row);
+    }
+  } catch (error) {
+    box.innerHTML = '<div class="tiny" style="padding:8px">خطا: ' + esc(error.message) + '</div>';
+  }
+}
+
+/** Archive / un-archive a conversation. Archived chats leave the sidebar and
+ *  stop counting against the 300-conversation quota, but are never deleted. */
+async function archiveConversation(conv, archived = true) {
+  try {
+    await api(API.state, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'flags', id: conv.id, archived })
+    });
+    state.conversations = state.conversations.filter((c) => c.id !== conv.id);
+    state.archivedConversations = state.archivedConversations.filter((c) => c.id !== conv.id);
+    if (archived) {
+      state.archivedConversations.unshift({ ...conv, archived: true });
+      if (state.conversationId === conv.id) {
+        if (state.busy) detachActiveTurnForNavigation();
+        state.conversationId = null;
+        state.messages = [];
+        if (state.conversations.length) await openConversation(state.conversations[0].id);
+        else await newConversation();
+      }
+      toast('گفتگو آرشیو شد — از دکمه‌ی 🗄 آرشیو قابل بازگردانی است');
+    } else {
+      state.conversations.unshift({ ...conv, archived: false });
+      toast('گفتگو از آرشیو بازگردانی شد');
+    }
+    renderConversations();
+  } catch (error) { toast(error.message); }
+}
+
+async function loadArchivedConversations() {
+  try {
+    const data = await api(`${API.state}?archived=1`);
+    state.archivedConversations = Array.isArray(data.archived) ? data.archived : [];
+  } catch { state.archivedConversations = []; }
+  renderConversations();
+}
+
+function toggleArchivedConversations() {
+  state.showingArchived = !state.showingArchived;
+  const searchBox = $('convSearchResults');
+  if (searchBox) { searchBox.style.display = 'none'; searchBox.innerHTML = ''; }
+  const btn = $('convArchivedToggle');
+  if (btn) btn.setAttribute('aria-pressed', String(state.showingArchived));
+  if (state.showingArchived) loadArchivedConversations();
+  else renderConversations();
 }
 
 async function togglePin(conv) {
@@ -6618,6 +6780,7 @@ async function queueAttachments(files) {
   }
   renderAttachments();
 }
+$('convSearch')?.addEventListener('input', () => searchConversations());
 $('prompt').addEventListener('paste', event => {
   const files = event.clipboardData?.files;
   if (files?.length) { event.preventDefault(); queueAttachments(files); }
@@ -7061,6 +7224,14 @@ async function sendMessage(overrideText, opts = {}) {
   const attachments = pendingAttachments.map(({id,name,type,size}) => ({id,name,type,size}));
   const text = rawInput || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
   if (!text) return;
+  // Guard the server's 100k ceiling up front: reject here (with the text kept in
+  // the box) instead of burning a request that comes back 413 and leaves the
+  // turn half-rendered. `maxlength` alone is bypassed by paste in some browsers.
+  const maxChars = Number(state.limits?.maxMessageChars) || 100000;
+  if (text.length > maxChars) {
+    toast('پیام بیش از حد طولانی است: ' + faNum(text.length) + ' از ' + faNum(maxChars) + ' کاراکتر');
+    return;
+  }
   if (!opts._autoContinue) cancelMarathonAuto();
   if (!state.ready) return toast('هنوز آماده نیستم؛ چند لحظه صبر کنید');
   if (String(state.conversationId || '').startsWith('pending-') && state.pendingCreatePromise) {
@@ -7137,14 +7308,19 @@ async function sendMessage(overrideText, opts = {}) {
   const priorWaveTouched = Array.isArray(opts._waveTouched) ? opts._waveTouched : [];
   const priorWaveDeleted = Array.isArray(opts._waveDeleted) ? opts._waveDeleted : [];
   const msgCountBeforeTurn = state.messages.length;
+  let turnPersisted = false;   // did the server accept & store this turn?
+  let turnRejected = false;    // did the server reject it outright?
+  let turnStopped = false;     // did the user press Stop?
   let scheduleAutoResumeNext = 0;
   let nextWaveChainPayload = null;
   let turnClean = true;
 
+  let userMessage = null;
+  let userBubble = null;
   if (!isSilentAutoResume) {
-    const userMessage = { role: 'user', content: text, attachments, created_at: Date.now(), autoContinue: Boolean(opts._autoContinue) };
+    userMessage = { role: 'user', content: text, attachments, created_at: Date.now(), autoContinue: Boolean(opts._autoContinue) };
     state.messages.push(userMessage);
-    appendMessageElement(userMessage);
+    userBubble = appendMessageElement(userMessage);
   }
 
   const bubble = document.createElement('div');
@@ -7233,7 +7409,12 @@ async function sendMessage(overrideText, opts = {}) {
     if (!response.ok) {
       let data = null;
       try { data = await response.json(); } catch { /* ignore */ }
-      throw new Error((data && data.error) || `خطای سرور (${response.status})`);
+      const httpError = new Error((data && data.error) || `خطای سرور (${response.status})`);
+      // Carry the HTTP status so callers can tell "the server rejected this
+      // turn, nothing was stored" (4xx) apart from a transport failure.
+      httpError.status = response.status;
+      httpError.code = data && data.code;
+      throw httpError;
     }
     if (!(response.headers.get('Content-Type') || '').includes('text/event-stream')) {
       const data = await response.json();
@@ -7244,6 +7425,8 @@ async function sendMessage(overrideText, opts = {}) {
     pendingAttachments = [];
     renderAttachments();
     const result = await consumeStream(response, bubble, isTurnCurrent);
+    turnPersisted = Boolean(result.ok);
+    turnStopped = Boolean(result.userStopped);
     if (!isTurnCurrent()) return;
     const mergedTouched = [...new Set([...priorWaveTouched, ...(result.touchedFiles || [])])];
     const mergedDeleted = [...new Set([...priorWaveDeleted, ...(result.deletedFiles || [])])];
@@ -7302,6 +7485,23 @@ async function sendMessage(overrideText, opts = {}) {
         };
       } else {
         await reloadCurrentConversation();
+        // A `done` with no text (model answered only with tool calls, or an
+        // empty completion) used to leave the user with a bare user bubble and
+        // no way forward. The reload above rebuilds the transcript from D1, so
+        // attach the retry affordance AFTER it, not in the stream bubble.
+        if (!String(result.text || '').trim()) {
+          const chatEl = $('chat');
+          if (chatEl && !chatEl.querySelector('.empty-reply-card')) {
+            chatEl.insertAdjacentHTML(
+              'beforeend',
+              '<div class="notice bad empty-reply-card" style="margin-top:8px;direction:rtl">' +
+                'این نوبت پاسخی متنی تولید نکرد (فقط ابزار اجرا شد یا مدل خالی برگرداند).' +
+                ' <button type="button" class="ghost" data-act="retry">↻ تلاش دوباره</button></div>'
+            );
+            const rbtn = chatEl.querySelector('.empty-reply-card [data-act="retry"]');
+            if (rbtn) rbtn.onclick = () => { chatEl.querySelector('.empty-reply-card')?.remove(); replayLastUserMessage(); };
+          }
+        }
         renderTurnNotices();
         if (state.diffs?.length) {
           const bubbles = $('chat').querySelectorAll('.msg.assistant');
@@ -7391,7 +7591,15 @@ async function sendMessage(overrideText, opts = {}) {
       renderActiveCheckpointBanner();
     } else if (result.resumable) {
       turnClean = false;
+      // Keep the client-side checkpoint: the server's copy may be missing
+      // (saveTurnCheckpoint is best-effort), and reloading would overwrite
+      // the synthesised one with `null` and strand the user.
+      const clientCheckpoint = state.activeCheckpoint?.active ? state.activeCheckpoint : null;
       await reloadCurrentConversation({ syncWorkspace: true });
+      if (clientCheckpoint && !state.activeCheckpoint?.active) {
+        state.activeCheckpoint = clientCheckpoint;
+        renderActiveCheckpointBanner();
+      }
       const ckReason = state.activeCheckpoint?.reason || '';
       if (ckReason === 'wave_continue' && waveCount < 8) {
         nextWaveChainPayload = {
@@ -7422,6 +7630,9 @@ async function sendMessage(overrideText, opts = {}) {
     }
   } catch (error) {
     turnClean = false;
+    // A 4xx from /api/chat means nothing was stored — the optimistic user
+    // bubble must not survive it (see the finally block below).
+    turnRejected = Boolean(error?.status && error.status >= 400 && error.status < 500);
     if (!isTurnCurrent()) return;
     if (chatAbort.signal.aborted || error?.name === 'AbortError') {
       await reloadCurrentConversation({ syncWorkspace: true });
@@ -7450,6 +7661,21 @@ async function sendMessage(overrideText, opts = {}) {
       return;
     }
     removeLiveTurnBar();
+    // The server rejected the turn outright (nothing was persisted): drop the
+    // optimistic user bubble so the on-screen history matches D1. Without this
+    // a message rejected as too long stayed in `state.messages` forever and
+    // every later reply referenced a turn the server never saw.
+    if (!turnPersisted && turnRejected && !turnStopped) {
+      const idx = state.messages.lastIndexOf(userMessage);
+      if (idx >= 0) state.messages.splice(idx, 1);
+      userBubble?.remove();
+      putConvCache(turnConvId, {
+        conversation: state.conversations.find((c) => c.id === turnConvId) || undefined,
+        messages: state.messages,
+        hasOlderMessages: state.hasOlderMessages,
+        oldestSeq: state.oldestSeq
+      });
+    }
     bubble.querySelector('.claude-spinner-bar')?.remove();
     bubble.querySelector('.msg-text')?.classList.remove('stream-cursor');
     state.busy = false;
@@ -7835,8 +8061,22 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       } else if (!streamedDraft && textArea.querySelector('.typing')) {
         textArea.innerHTML = `<span class="tiny" style="color:var(--claude-bright)">⏸ ${esc(data.error || 'متوقف شد')}</span>`;
       }
-      if (data.checkpoint && data.resumable) {
-        state.activeCheckpoint = data.checkpoint;
+      if (data.resumable) {
+        // `resumable: true` means the SERVER kept a checkpoint and can continue
+        // from here — even when the checkpoint object did not survive the trip
+        // (saveTurnCheckpoint is best-effort). Falling through to the throw
+        // below left the user staring at a half answer with no way forward, so
+        // synthesise a resume card whenever the server says the turn is
+        // resumable but the payload is missing.
+        const ck = data.checkpoint && typeof data.checkpoint === 'object' && data.checkpoint.active
+          ? data.checkpoint
+          : {
+              active: true,
+              reason: data.reason || 'stream_cutoff',
+              errorMessage: data.error || 'ارتباط قطع شد. روی «ادامه» بزنید تا از همین نقطه ادامه یابد.',
+              touchedFiles: Array.isArray(data.savedFiles) ? data.savedFiles : []
+            };
+        state.activeCheckpoint = ck;
         resumableStop = true;
         renderActiveCheckpointBanner();
         return;
@@ -7962,8 +8202,33 @@ async function loadConversations() {
   try {
     const data = await api(API.conversations);
     state.conversations = data.conversations || [];
+    state.conversationsFetchedAt = Date.now();
     renderConversations();
   } catch { /* silent */ }
+}
+
+/* A turn can be running on the SERVER while this tab shows nothing (started on
+   another device, or left over after a refresh). `turnActive` comes from
+   GET /api/state, so poll it on a slow cadence and refresh ONLY the sidebar —
+   never the open transcript, which would fight the live stream. */
+const SIDEBAR_SYNC_MS = 15_000;
+setInterval(() => {
+  if (!state.ready) return;
+  if (document.hidden) return;
+  if (Date.now() - (state.conversationsFetchedAt || 0) < SIDEBAR_SYNC_MS - 500) return;
+  loadConversations().catch(() => {});
+}, SIDEBAR_SYNC_MS);
+
+/** Retry the most recent user prompt without duplicating it in the history. */
+function replayLastUserMessage() {
+  for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+    const msg = state.messages[i];
+    if (msg?.role === 'user' && typeof msg.content === 'string' && msg.content.trim()) {
+      if (state.busy) return toast('لطفاً تا پایان پاسخ صبر کنید');
+      return sendMessage(msg.content, { silentToast: true });
+    }
+  }
+  return toast('پیامی برای تکرار پیدا نشد');
 }
 
 /** Rewind: drop every message from `seq` onwards on the server and in the UI. */

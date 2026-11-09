@@ -60,3 +60,16 @@ export async function enforceChatLimits(env, owner) {
   }
   return { minute: Number(minute.count), day: Number(day.count), perMinute, perDay };
 }
+
+/** Hard ceiling on one user message (mirrors MAX_CONTENT in api/chat.js). */
+export const MAX_MESSAGE_CHARS = 100_000;
+
+/** Public (non-mutating) view of the configured ceilings for the UI. */
+export function publicRateLimits(env) {
+  return {
+    perMinute: envInt(env, 'CHAT_LIMIT_PER_MINUTE', 30),
+    perDay: envInt(env, 'CHAT_LIMIT_PER_DAY', 1200),
+    maxMessageChars: MAX_MESSAGE_CHARS
+  };
+}
+

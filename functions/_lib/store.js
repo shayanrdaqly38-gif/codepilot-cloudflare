@@ -15,6 +15,19 @@ const MAX_INSERT_STMT_BYTES = 750_000;
 const MAX_TITLE = 120;
 const utf8Encoder = new TextEncoder();
 
+/**
+ * Single source of truth for the caps the UI must display. The client reads
+ * these from GET /api/config (`limits`) instead of hardcoding its own numbers,
+ * so a label can never advertise a ceiling the server does not enforce.
+ */
+export function publicLimits() {
+  return {
+    maxConversations: MAX_CONVERSATIONS_PER_USER,
+    maxMessagesPerConversation: MAX_MESSAGES_PER_CONVERSATION,
+    maxTitleChars: MAX_TITLE
+  };
+}
+
 /* ---------------------- workspace modes & real 1GB cap --------------------- */
 // Chunk payload per D1 row: Cloudflare D1 caps a row around ~1MB, so any file
 // whose UTF-8 payload exceeds INLINE_FILE_MAX_BYTES is transparently split
@@ -78,9 +91,9 @@ export async function getUser(env, owner) {
 const CONVERSATION_COLUMNS = `id,title,created_at,updated_at,revision,archived,pinned,
   message_count,last_message_at,last_model,summary_until`;
 
-export async function listConversations(env, owner, { archived = null, limit = 200 } = {}) {
+export async function listConversations(env, owner, { archived = null, limit = MAX_CONVERSATIONS_PER_USER } = {}) {
   const database = await db(env);
-  const capped = clamp(safeInt(limit, 200), 1, 300);
+  const capped = clamp(safeInt(limit, MAX_CONVERSATIONS_PER_USER), 1, MAX_CONVERSATIONS_PER_USER);
   const where = archived === null ? 'owner=?' : 'owner=? AND archived=?';
   const bindings = archived === null ? [owner] : [owner, archived ? 1 : 0];
   const rows = await database

@@ -6,7 +6,7 @@
 // a cache on the client.
 
 import { route, methodNotAllowed } from '../../_lib/api.js';
-import { fail, redactSecrets } from '../../_lib/util.js';
+import { fail, redactSecrets, safeInt } from '../../_lib/util.js';
 import { recentPaths } from '../../_lib/versions.js';
 import { forceCompactConversation } from '../../_lib/memory.js';
 import { callModel } from '../../_lib/model.js';
@@ -36,8 +36,18 @@ import {
 
 export async function onRequestGet({ request, env }) {
   return route(request, env, async ({ identity }) => {
+    // `?archived=1` powers the archive drawer: same payload shape, but the
+    // archived list instead of the live one, so those chats are reachable
+    // (and restorable) instead of vanishing forever.
+    const wantArchived =
+      new URL(request.url).searchParams.get('archived') === '1';
     const [conversations, memories, usage, user, edited] = await Promise.all([
-      listConversations(env, identity.owner),
+      wantArchived
+        ? listConversations(env, identity.owner, { archived: true })
+        : // The live sidebar must not show archived chats: they are reachable
+          // from the 🗄 drawer instead, and they no longer count against the
+          // 300-conversation quota.
+          listConversations(env, identity.owner, { archived: false }),
       listMemories(env, identity.owner),
       getUsage(env, identity.owner),
       getUser(env, identity.owner),
@@ -51,11 +61,18 @@ export async function onRequestGet({ request, env }) {
         name: identity.name || user?.display_name || '',
         since: user?.created_at || null
       },
-      conversations: conversations.map((row) => {
-        const view = conversationView(row);
-        if (activeTurns[view.id]) view.turnActive = true;
-        return view;
-      }),
+      ...(wantArchived
+        ? {
+            archived: conversations.map((row) => conversationView(row)),
+            conversations: []
+          }
+        : {
+            conversations: conversations.map((row) => {
+              const view = conversationView(row);
+              if (activeTurns[view.id]) view.turnActive = true;
+              return view;
+            })
+          }),
       memory: memories,
       usage,
       recentFiles: edited.map((row) => ({
@@ -249,6 +266,43 @@ export async function onRequestPost({ request, env }) {
             memory: await listMemories(env, owner),
             conversations: dump
           };
+        }
+
+        case 'search-conversations': {
+          // Full-text-ish search across every message body, scoped to the
+          // owner. Without this, finding "that chat where I said X" among 300
+          // conversations × 4000 messages was impossible from the UI.
+          const q = String(data.query || '').trim();
+          if (q.length < 2) fail('عبارت جست‌وجو باید حداقل ۲ کاراکتر باشد.', 400, 'query_too_short');
+          if (q.length > 120) fail('عبارت جست‌وجو بیش از حد طولانی است.', 400, 'query_too_long');
+          const needle = q.toLowerCase();
+          const limit = Math.min(Math.max(safeInt(data.limit, 40), 1), 100);
+          const rows = await env.DB.prepare(
+            `SELECT m.conversation_id AS cid, m.seq, m.role, m.body, c.title
+               FROM messages m
+               JOIN conversations c ON c.id = m.conversation_id
+              WHERE c.owner = ? AND c.archived = 0 AND lower(m.body) LIKE ?
+              ORDER BY m.created_at DESC
+              LIMIT ?`
+          )
+            .bind(owner, `%${needle.replace(/[%_]/g, (ch) => '\\' + ch)}%`, limit)
+            .all();
+          const hits = [];
+          for (const row of rows.results || []) {
+            let content = '';
+            try { content = String(JSON.parse(row.body)?.content || ''); } catch { content = ''; }
+            const at = content.toLowerCase().indexOf(needle);
+            if (at < 0) continue; // body matched outside `content` (e.g. reasoning)
+            const start = Math.max(0, at - 60);
+            hits.push({
+              conversationId: row.cid,
+              seq: row.seq,
+              role: row.role,
+              title: row.title,
+              snippet: (start > 0 ? '…' : '') + content.slice(start, at + needle.length + 90).trim()
+            });
+          }
+          return { ok: true, query: q, results: hits };
         }
 
         case 'delete-all': {

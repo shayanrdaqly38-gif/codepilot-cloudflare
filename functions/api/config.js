@@ -24,6 +24,8 @@ import {
   saveUserProviderConfig,
   saveUserSandboxConfig
 } from '../_lib/provider.js';
+import { publicLimits } from '../_lib/store.js';
+import { publicRateLimits } from '../_lib/limits.js';
 
 async function buildModelsPayload(effectiveEnv, { force = false, skipRemote = false } = {}) {
   const baseUrl = String(effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1');
@@ -104,6 +106,9 @@ export async function onRequestGet({ request, env }) {
       modelsSource,
       models,
       contextBudgetTokens: Number(effectiveEnv.CONTEXT_BUDGET_TOKENS || env.CONTEXT_BUDGET_TOKENS) || 24000,
+      // Every ceiling the UI prints comes from here, so a label can never
+      // advertise a limit the server does not actually enforce.
+      limits: { ...publicLimits(), ...publicRateLimits(env) },
       sandbox: sb,
       linuxRunner: linux,
       workersAi: Boolean(env?.AI && typeof env.AI.run === 'function'),
