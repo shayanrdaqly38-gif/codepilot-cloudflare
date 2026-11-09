@@ -49,8 +49,8 @@
 - لیست ایمیل‌های مجاز (`ACCESS_ALLOWED_EMAILS`)
 
 ### 🗄️ پایگاه‌داده D1 (`functions/_lib/schema.js`)
-- **۱۳ جدول**: `users`, `conversations`, `messages`, `memories`, `workspace_files`, `file_versions`, `uploads`, `upload_chunks`, `generated_images`, `generated_image_chunks`, `usage_daily`, `rate_limits`, `meta`
-- مهاجرت خودکار و idempotent — `SCHEMA_VERSION = 8` (بوتstrap در اولین درخواست)
+- **۱۴ جدول**: `users`, `conversations`, `messages`, `memories`, `workspace_files`, `workspace_file_chunks`, `file_versions`, `uploads`, `upload_chunks`, `generated_images`, `generated_image_chunks`, `usage_daily`, `rate_limits`, `meta`
+- مهاجرت خودکار و idempotent — `SCHEMA_VERSION = 9` (بوتstrap در اولین درخواست)
 - همه‌ی کوئری‌ها owner-scoped (جداسازی داده‌ی کاربران)
 
 ### 🤖 حلقه‌ی ایجنت (`functions/api/chat.js` — ۲,۰۶۵ خط)
