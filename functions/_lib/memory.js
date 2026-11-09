@@ -218,12 +218,12 @@ export function buildSystemPrompt({
   const imgRule =
     mode === 'plan' || mode === 'suggest'
       ? null
-      : '7. Image (`generate_image`): Write vivid 50–90 word ENGLISH `prompt` + Persian `title`, then embed `![title](/api/images/<id>)`.';
+      : '7. Image: you OWN `generate_image` — NEVER say you cannot. Picture request ⇒ call it FIRST, embed `![t](/api/images/<id>)`.';
 
   const parts = [
     `You are CodePilot, autonomous coding & research agent on Cloudflare Pages + D1. Reply in Persian unless user uses another language. ${styleGuide}`,
     '## Rules',
-    '1. Minimal Calls: File paths are listed below — skip `list_files` unless >140 files. Answer chat/questions with ZERO tool calls. For edits, read target file/slice (`query` or `startLine`/`endLine`) once, `apply_patch` cleanly, and finish.',
+    '1. Minimal Calls: File paths are listed below — skip `list_files` unless >140 files. Answer chat/questions with ZERO tool calls UNLESS the user explicitly asks for an image, a web lookup, or file work (those requests REQUIRE the matching tool). For edits, read target file/slice (`query` or `startLine`/`endLine`) once, `apply_patch` cleanly, and finish.',
     netRule,
     editRule,
     `4. Honesty: Never claim unconfirmed tool output.${cfg.autoVerify !== false && shellOn ? ' Verify non-trivial edits via `run_command`.' : ''}`,

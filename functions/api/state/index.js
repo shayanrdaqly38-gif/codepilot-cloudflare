@@ -167,6 +167,26 @@ export async function onRequestPost({ request, env }) {
           return { ok: true, workspace };
         }
 
+        case 'write-file': {
+          // Save ONE file into the conversation workspace without shipping the
+          // whole tree back. Used by the "save this image into my project"
+          // button: the bytes arrive as a data: URL, which validateWorkspaceFile
+          // accepts as an inline payload.
+          const conversation = await getConversation(env, owner, data.id);
+          const filePath = String(data.path || '').trim();
+          const content = typeof data.content === 'string' ? data.content : '';
+          if (!filePath) fail('مسیر فایل لازم است.', 400, 'bad_path');
+          if (!content) fail('محتوای فایل خالی است.', 400, 'empty_file');
+          const workspace = await hydrateConversationWorkspace(env, conversation);
+          const nextWorkspace = {
+            ...workspace,
+            files: { ...(workspace.files || {}), [filePath]: content },
+            active: filePath
+          };
+          const saved = await saveWorkspace(env, owner, conversation.id, nextWorkspace);
+          return { ok: true, path: filePath, bytes: content.length, workspace: saved };
+        }
+
         case 'compact': {
           const conversation = await getConversation(env, owner, data.id);
           const messages = await listMessages(env, conversation.id);

@@ -85,7 +85,7 @@ import {
 } from '../_lib/sandbox.js';
 import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
 import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
-import { generateAndStoreImage } from '../_lib/image.js';
+import { bytesToBase64, generateAndStoreImage, loadGeneratedImage } from '../_lib/image.js';
 import {
   buildPatchFailureContext,
   buildRequestSaverWorkspacePack,
@@ -346,7 +346,12 @@ export const TOOLS = [
               'pixel-art'
             ]
           },
-          seed: { type: 'number' }
+          seed: { type: 'number' },
+          saveTo: {
+            type: 'string',
+            description:
+              'Optional path e.g. assets/x.png; saves image into workspace.'
+          }
         },
         required: ['prompt'],
         additionalProperties: false
@@ -898,16 +903,42 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         send('generated_image', image);
       }
       const cleanAlt = (image.title || 'Generated Image').replace(/[\[\]\r\n]/g, ' ').trim();
-      return {
-        ok: true,
-        text:
-          `Image generated successfully!\n` +
-          `- URL: ${image.url}\n` +
-          `- Download URL: ${image.downloadUrl}\n` +
-          `- Resolution: ${image.width}x${image.height} (${image.aspectRatio})\n` +
-          `- Engine: ${image.modelLabel || image.engine}\n` +
-          `- Markdown to include in your reply: ![${cleanAlt}](${image.url})`
-      };
+      const lines = [
+        `Image generated successfully!`,
+        `- URL: ${image.url}`,
+        `- Download URL: ${image.downloadUrl}`,
+        `- Resolution: ${image.width}x${image.height} (${image.aspectRatio})`,
+        `- Engine: ${image.modelLabel || image.engine}`,
+        `- Markdown to include in your reply: ![${cleanAlt}](${image.url})`
+      ];
+
+      // Optional: materialise the bytes as a REAL workspace file so the user can
+      // open/commit/ship it. Without this the picture only ever existed behind
+      // /api/images/<id> and "save it in my project" was impossible.
+      const saveTo = typeof args.saveTo === 'string' ? args.saveTo.trim() : '';
+      if (saveTo) {
+        try {
+          const safeSavePath = assertSafePath(saveTo);
+          const loaded = await loadGeneratedImage(env, owner, image.id);
+          const base64 = bytesToBase64(loaded.bytes);
+          workspace.files[safeSavePath] = `data:${loaded.meta.mime_type || 'image/png'};base64,${base64}`;
+          const previous = String(workspace.files['images.json'] || '');
+          let manifest = [];
+          try { manifest = previous ? JSON.parse(previous) : []; } catch { manifest = []; }
+          if (!Array.isArray(manifest)) manifest = [];
+          manifest.push({ path: safeSavePath, url: image.url, downloadUrl: image.downloadUrl, title: image.title || '', prompt: image.prompt || '', width: image.width, height: image.height, engine: image.engine || '' });
+          workspace.files['images.json'] = JSON.stringify(manifest, null, 2);
+          workspace.active = safeSavePath;
+          turn.touched.add(safeSavePath);
+          turn.workspaceChanged = true;
+          lines.push(`- Saved into workspace: ${safeSavePath} (${loaded.bytes.byteLength} bytes)`);
+          lines.push(`- Manifest updated: images.json (${manifest.length} image${manifest.length === 1 ? '' : 's'})`);
+        } catch (saveError) {
+          lines.push(`- Workspace save FAILED: ${saveError?.message || 'unknown error'}`);
+        }
+      }
+
+      return { ok: true, text: lines.join('\n') };
     }
 
     default:
@@ -1379,6 +1410,48 @@ export async function onRequestPost(context) {
                 }
               }
             }
+          }
+
+          // ---- Deterministic image intent -----------------------------------
+          // Models routinely answer "I can't generate images" even though the
+          // tool is right there (the ZERO-tool-calls rule wins over the user's
+          // request). Detect an image request from the USER's text and make it
+          // impossible to miss: a hard directive appended to the user turn.
+          // This does not call the tool for the model — it only guarantees the
+          // instruction arrives, so the model cannot claim the capability is
+          // missing. If it still refuses, the rescue block after the turn catches it.
+          // Noun + verb co-occurrence, so word order doesn't matter:
+          // «یک تصویر از تانک بساز» and «عکس بساز» both count, while
+          // «این تصویر را توضیح بده» / «عکس را دانلود کن» do not.
+          const IMAGE_NOUN_RE = /(?:تصویر|عکس|نقاشی|لوگو|آیکون|طرح|تصویرسازی|generate_image)/iu;
+          const IMAGE_VERB_RE = /(?:بساز|بسازی|بکش|بگیر|تولید|طراحی|سازی|درست\s*کن|ایجاد|generate)/iu;
+          const looksLikeImageRequest =
+            !resumingFromCheckpoint && IMAGE_NOUN_RE.test(userText) && IMAGE_VERB_RE.test(userText);
+
+          if (looksLikeImageRequest) {
+            const imageDirective = [
+              '## Image request — MANDATORY',
+              'You HAVE a working `generate_image` tool. Call it NOW in this turn with a vivid ENGLISH `prompt`.',
+              'Do NOT reply that you cannot generate images; that is false. Only report failure AFTER a real tool error.',
+              'Embed the returned `![title](/api/images/<id>)`. Pass `saveTo` (e.g. `assets/<name>.png`) when the user',
+              'wants the picture saved in the project.'
+            ].join('\n');
+            let injected = false;
+            for (let mi = messages.length - 1; mi >= 1; mi -= 1) {
+              if (messages[mi]?.role === 'user') {
+                if (typeof messages[mi].content === 'string') {
+                  messages[mi] = { ...messages[mi], content: `${messages[mi].content}\n\n${imageDirective}` };
+                } else if (Array.isArray(messages[mi].content)) {
+                  messages[mi] = {
+                    ...messages[mi],
+                    content: [...messages[mi].content, { type: 'text', text: `\n\n${imageDirective}` }]
+                  };
+                }
+                injected = true;
+                break;
+              }
+            }
+            if (!injected) messages.push({ role: 'user', content: imageDirective });
           }
 
           let autoRepairAttempts = 0;
@@ -1906,7 +1979,7 @@ export async function onRequestPost(context) {
               turnInterruptedReason = 'length_cutoff';
             }
 
-            const stitchedProse = healedTextCarry + String(assistant.content || '');
+            let stitchedProse = healedTextCarry + String(assistant.content || '');
             // Autonomous Self-Repair Gate when boosted Power Engine is active (skip if stream itself cut off):
             if (!turnInterruptedReason && powerPlan.autoRepairValidation && autoRepairAttempts < 2 && steps < maxSteps) {
               const brokenFiles = [];
@@ -1932,6 +2005,31 @@ export async function onRequestPost(context) {
             }
 
             healedTextCarry = '';
+            // ---- Last-resort image rescue ---------------------------------
+            // The user asked for a picture and the model refused to call the
+            // tool (the "I can't generate images" failure). Rather than return
+            // that refusal, generate it here so the request is still honoured.
+            if (looksLikeImageRequest && !(turn.generatedImages || []).length) {
+              const refusal = /(?:نمی\s*توانم|امکان\s*(?:ساخت|تولید)|قادر\s*نیستم|can(?:no|')?t\s+generate|unable\s+to\s+generate)/iu
+                .test(stitchedProse);
+              if (refusal || !stitchedProse.trim()) {
+                try {
+                  send('status', { phase: 'image-rescue', step: steps });
+                  const rescued = await generateAndStoreImage(effectiveEnv || env, identity.owner, {
+                    prompt: userText.slice(0, 1_500),
+                    title: '',
+                    aspectRatio: '1:1',
+                    style: 'auto',
+                    conversationId: conversation.id
+                  });
+                  turn.generatedImages = turn.generatedImages || [];
+                  turn.generatedImages.push(rescued);
+                  send('generated_image', rescued);
+                  stitchedProse = '';
+                } catch { /* keep the model's own text if rescue fails */ }
+              }
+            }
+
             let missingImgMarkdown = '';
             if (Array.isArray(turn.generatedImages) && turn.generatedImages.length > 0) {
               const missingCards = turn.generatedImages.filter((img) => !stitchedProse.includes(img.url));

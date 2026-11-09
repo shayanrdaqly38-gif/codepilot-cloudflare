@@ -9,8 +9,8 @@
     "deploy": "wrangler pages deploy .",
     "db:create": "wrangler d1 create codepilot-db",
     "db:schema": "wrangler d1 execute codepilot-db --remote --file=./schema.sql",
-    "test": "node --test tests/state.test.mjs tests/sync.test.mjs tests/tools.test.mjs tests/attachments.test.mjs tests/uploads.test.mjs tests/marathon.test.mjs tests/micro.test.mjs tests/stop.test.mjs tests/stop-signal.test.mjs tests/sandbox-bridge.test.mjs tests/token-optimizer.test.mjs tests/workspace-modes.test.mjs tests/parallel-turns.test.mjs tests/audit-backend.test.mjs",
-    "test:ui": "node tests/ui.test.mjs && node tests/marathon-ui.test.mjs && node tests/audit-ui.test.mjs",
+    "test": "node --test tests/state.test.mjs tests/sync.test.mjs tests/tools.test.mjs tests/attachments.test.mjs tests/uploads.test.mjs tests/marathon.test.mjs tests/micro.test.mjs tests/stop.test.mjs tests/stop-signal.test.mjs tests/sandbox-bridge.test.mjs tests/token-optimizer.test.mjs tests/workspace-modes.test.mjs tests/parallel-turns.test.mjs tests/audit-backend.test.mjs tests/image-pipeline.test.mjs",
+    "test:ui": "node tests/ui.test.mjs && node tests/marathon-ui.test.mjs && node tests/audit-ui.test.mjs && node tests/image-e2e.test.mjs && node tests/image-toolbox.test.mjs",
     "test:all": "npm test && npm run test:ui"
   },
   "devDependencies": {
