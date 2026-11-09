@@ -190,6 +190,9 @@ function mockFetch(url, init = {}) {
       workspace: db.workspace
     });
   }
+  if (path.startsWith('/api/state/workspace-file') && (!init.method || init.method === 'GET')) {
+    return jsonResponse({ ok: true, path: 'a.txt', content: 'lazy file body', bytes: 14, mode: 'normal' });
+  }
   if (path.startsWith('/api/images') && (!init.method || init.method === 'GET')) {
     return jsonResponse({
       ok: true,
@@ -662,6 +665,71 @@ window.eval('state.busy = true; document.getElementById("sendBtn").disabled = tr
 await window.openConversation('c-1');
 assert.equal($('sendBtn').disabled, false, 'switching conversations unlocks composer immediately');
 assert.ok($('chat').textContent.includes('چه بسازیم؟'), 'switches back to c-1 messages');
+
+// --- New Conversation Mode Picker (#newChatModal): 🧑‍💻 developer vs 📦 normal modes
+// "+ گفتگوی جدید" opens the mode picker instead of instantly creating a conversation
+const modeCallsBefore = calls.length;
+window.openNewConversationModal();
+assert.ok($('newChatModal').classList.contains('open'), 'mode picker opens for new conversations');
+assert.equal(window.document.querySelectorAll('#newChatModal .codex-mode-card').length, 2, 'exactly two mode cards rendered');
+// Developer card selected by default
+assert.ok(
+  $('newChatModeDeveloper').classList.contains('active'),
+  'developer mode pre-selected by default'
+);
+// Cancel keeps the current conversation untouched
+window.closeModal('newChatModal');
+assert.equal($('newChatModal').classList.contains('open'), false, 'cancel closes the picker');
+assert.equal(calls.length, modeCallsBefore, 'cancel performs zero network calls');
+assert.ok($('chat').textContent.includes('چه بسازیم؟'), 'cancel leaves the current conversation view intact');
+
+// Selecting normal mode + start creates a conversation with mode:'normal' & empty workspace
+window.openNewConversationModal();
+$('newChatModeNormal').click();
+assert.ok($('newChatModeNormal').classList.contains('active'), 'clicking the 📦 card selects normal mode');
+assert.ok(!$('newChatModeDeveloper').classList.contains('active'), 'developer card deselects');
+await window.startNewConversationFromModal();
+const modeCreate = calls
+  .slice(modeCallsBefore)
+  .find((c) => String(c.url).endsWith('/api/state') && c.init.method === 'POST' && JSON.parse(c.init.body || '{}').action === 'create');
+assert.ok(modeCreate, 'picker start POSTs a create action');
+const modeCreateBody = JSON.parse(modeCreate.init.body);
+assert.equal(modeCreateBody.mode, 'normal', 'create payload carries mode:normal');
+assert.equal(modeCreateBody.copyWorkspaceFrom, undefined, 'normal mode never clones the previous workspace');
+assert.deepEqual(modeCreateBody.workspace, { files: {}, active: '' }, 'normal mode starts with a strictly empty workspace');
+assert.ok($('newChatModal').classList.contains('open') === false, 'picker closed after start');
+
+// Normal-mode conversation renders empty tree + workspace usage meter + 📦 chip in the list
+await wait(60);
+const modeChip = window.document.querySelector('.conv-mode-chip');
+assert.ok(modeChip, 'conversation list shows a 📦 mode chip for normal conversations');
+assert.equal(modeChip.textContent.trim(), '📦');
+assert.ok($('workspaceMeter'), '#workspaceMeter usage element exists');
+assert.ok($('tree').textContent.includes('خالی است'), 'empty workspace tree rendered for normal mode');
+assert.equal($('editorWrap').style.display, 'none', 'editor hidden with no file open');
+assert.equal($('emptyEditor').style.display, 'grid', 'empty-editor placeholder shown');
+
+// Lazy openFile: null placeholder content fetched on demand via /api/state/workspace-file
+// (a large file created by the assistant stays a null placeholder + size hint in the tree)
+window.eval(`
+  state.workspace.files['big.bin'] = null;
+  state.workspace.lazy = { 'big.bin': 600000 };
+  state.workspace.totalBytes = 600000;
+  renderTree();
+`);
+assert.ok($('tree').textContent.includes('۶۰۰'), 'lazy file shows its on-disk size in the tree');
+const lazyCallsBefore = calls.length;
+await window.openFile('big.bin');
+const lazyFetch = calls.slice(lazyCallsBefore).find((c) => String(c.url).startsWith('/api/state/workspace-file'));
+assert.ok(lazyFetch, 'lazy openFile fetches /api/state/workspace-file');
+assert.ok(String(lazyFetch.url).includes('conversationId='), 'lazy fetch is scoped to the conversation');
+assert.ok(String(lazyFetch.url).includes('path=big.bin'), 'lazy fetch carries the requested path');
+assert.equal($('editor').value, 'lazy file body', 'lazy content loads into the editor after fetch');
+assert.equal($('editor').readOnly, false, 'editor writable once lazy content arrives');
+
+// Switching back to a developer conversation restores GitHub repo line (no meter-driven state leak)
+await window.openConversation('c-1');
+assert.ok($('tree').textContent.includes('index.html'), 'developer conversation tree renders repo files');
 
 // --- signed-out fallback path
 const dom2 = new JSDOM(html, {

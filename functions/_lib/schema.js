@@ -4,7 +4,7 @@ import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 const CREATE = [
   `CREATE TABLE IF NOT EXISTS generated_images (
@@ -38,6 +38,16 @@ const CREATE = [
     content TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (conversation_id, path)
+  )`,
+  // Chunked overflow storage for large workspace files: a file whose UTF-8
+  // payload exceeds a single safe D1 row (~1MB cap) is split into ≤700KB
+  // parts here so normal-mode workspaces can grow to a real 1GB total.
+  `CREATE TABLE IF NOT EXISTS workspace_file_chunks (
+    conversation_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    part INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, path, part)
   )`,
   `CREATE TABLE IF NOT EXISTS uploads (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
@@ -136,7 +146,15 @@ const COLUMNS = {
     ['summary_updated_at', 'INTEGER NOT NULL DEFAULT 0'],
     ['message_count', 'INTEGER NOT NULL DEFAULT 0'],
     ['last_message_at', 'INTEGER NOT NULL DEFAULT 0'],
-    ['last_model', "TEXT NOT NULL DEFAULT ''"]
+    ['last_model', "TEXT NOT NULL DEFAULT ''"],
+    // 'developer' (GitHub-linked, legacy caps) | 'normal' (independent 1GB arena workspace)
+    ['mode', "TEXT NOT NULL DEFAULT 'developer'"]
+  ],
+  workspace_files: [
+    // Exact UTF-8 size of the stored file (content + chunks) for budget checks
+    ['bytes', 'INTEGER NOT NULL DEFAULT 0'],
+    // 1 = real content lives in workspace_file_chunks, content column is ''
+    ['chunked', 'INTEGER NOT NULL DEFAULT 0']
   ],
   messages: [['role', "TEXT NOT NULL DEFAULT ''"]],
   users: [['settings', "TEXT NOT NULL DEFAULT '{}'"]],
