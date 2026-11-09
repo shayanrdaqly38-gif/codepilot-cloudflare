@@ -1,0 +1,33 @@
+# .dev.vars.example — الگوی رازهای اجرای محلی (wrangler pages dev)
+#
+#   cp .dev.vars.example .dev.vars   # سپس مقادیر را پر کنید
+#
+# این فایل فقط «الگو» است و کامیت می‌شود؛ خود `.dev.vars` در .gitignore
+# نادیده گرفته می‌شود و هرگز نباید کامیت شود.
+
+# ── ضروری ────────────────────────────────────────────────────────────────
+# کلید ارائه‌دهنده‌ی مدل (tooken.club یا هر درگاه OpenAI-سازگار)
+MODEL_API_KEY = "sk-..."
+
+# ── توصیه‌شده ────────────────────────────────────────────────────────────
+# کلید امضای کوکی نشست (در صورت حذف، به‌طور امن از MODEL_API_KEY مشتق می‌شود)
+# مقدار پیشنهادی: openssl rand -base64 32
+# SESSION_SECRET = "..."
+
+# ── اختیاری ──────────────────────────────────────────────────────────────
+# مدل پیش‌فرض (پیش‌فرض: claude-sonnet-5-5)
+# MODEL_NAME = "claude-sonnet-5-5"
+
+# بودجه‌ی توکن زمینه (پیش‌فرض: 24000)
+# CONTEXT_BUDGET_TOKENS = "24000"
+
+# ── ورود ─────────────────────────────────────────────────────────────────
+# الف) تک‌کاربره‌ی سریع: فقط این ایمیل اجازه‌ی ورود دارد
+# DEV_ACCESS_EMAIL = "you@example.com"
+
+# ب) چندکاربره با Cloudflare Access:
+# ACCESS_TEAM_DOMAIN = "myteam.cloudflareaccess.com"
+# ACCESS_AUD = "<Application Audience (AUD) tag از داشبورد Access>"
+
+# لیست ایمیل‌های مجاز، جدا با کاما (اختیاری، روی هر دو حالت)
+# ACCESS_ALLOWED_EMAILS = "you@example.com,friend@example.com"
