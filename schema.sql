@@ -1,4 +1,4 @@
--- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 9).
+-- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 10).
 --
 -- OPTIONAL: the app bootstraps and migrates this schema automatically on the
 -- first request (ensureSchema), so running this file is not required. It exists
@@ -127,6 +127,20 @@ CREATE TABLE IF NOT EXISTS workspace_file_chunks (
    PRIMARY KEY (conversation_id, path, part)
 );
 
+-- ------------------------------------------------- active turns (v10) ----
+-- Cross-isolate visibility of in-flight turns: a turn keeps running after
+-- the client disconnects (headless mode), so any isolate must be able to
+-- (a) see that a conversation is busy, (b) request a graceful stop.
+CREATE TABLE IF NOT EXISTS active_turns (
+   conversation_id TEXT PRIMARY KEY,
+   owner TEXT NOT NULL,
+   started_at INTEGER NOT NULL,
+   updated_at INTEGER NOT NULL,
+   stop_requested INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS active_turns_owner
+   ON active_turns(owner, started_at);
+
 -- -------------------------------------------------------------- uploads ----
 CREATE TABLE IF NOT EXISTS uploads (
    id TEXT PRIMARY KEY,
@@ -179,5 +193,5 @@ CREATE TABLE IF NOT EXISTS meta (
    key TEXT PRIMARY KEY,
    value TEXT NOT NULL
 );
-INSERT INTO meta(key, value) VALUES ('schema_version', '9')
+INSERT INTO meta(key, value) VALUES ('schema_version', '10')
    ON CONFLICT(key) DO UPDATE SET value = excluded.value;

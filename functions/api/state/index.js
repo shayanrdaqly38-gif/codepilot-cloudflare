@@ -11,6 +11,7 @@ import { recentPaths } from '../../_lib/versions.js';
 import { forceCompactConversation } from '../../_lib/memory.js';
 import { callModel } from '../../_lib/model.js';
 import { resolveEffectiveEnv } from '../../_lib/provider.js';
+import { activeTurnConversations } from '../../_lib/active-turn.js';
 import {
   conversationView,
   createConversation,
@@ -42,6 +43,7 @@ export async function onRequestGet({ request, env }) {
       getUser(env, identity.owner),
       recentPaths(env, identity.owner, { limit: 20 }).catch(() => [])
     ]);
+    const activeTurns = await activeTurnConversations(env, identity.owner);
     return {
       ok: true,
       user: {
@@ -49,7 +51,11 @@ export async function onRequestGet({ request, env }) {
         name: identity.name || user?.display_name || '',
         since: user?.created_at || null
       },
-      conversations: conversations.map(conversationView),
+      conversations: conversations.map((row) => {
+        const view = conversationView(row);
+        if (activeTurns[view.id]) view.turnActive = true;
+        return view;
+      }),
       memory: memories,
       usage,
       recentFiles: edited.map((row) => ({
