@@ -218,7 +218,7 @@ export function buildSystemPrompt({
   const imgRule =
     mode === 'plan' || mode === 'suggest'
       ? null
-      : '7. Image: you OWN `generate_image` — NEVER say you cannot. Picture request ⇒ call it FIRST, embed `![t](/api/images/<id>)`.';
+      : '7. Image: you OWN `generate_image` — NEVER say you cannot. A picture request ⇒ call it FIRST, then embed `![t](/api/images/<id>)`.';
 
   const parts = [
     `You are CodePilot, autonomous coding & research agent on Cloudflare Pages + D1. Reply in Persian unless user uses another language. ${styleGuide}`,

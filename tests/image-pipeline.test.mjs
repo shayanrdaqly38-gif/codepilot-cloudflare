@@ -227,11 +227,22 @@ test('approval gates saving and sending, so nothing is written by accident', () 
   assert.match(send.slice(0, 400), /if \(!imgPipe\.approved\)/, 'send must require approval');
 });
 
-test('the sent image carries a reference the model can act on', () => {
+test('the sent image goes through the real chat turn, not a local bubble', () => {
   const send = html.slice(html.indexOf('async function imgPipeSendToChat'));
-  const body = send.slice(0, 1400);
-  assert.match(body, /!\[\$\{title\}\]\(\$\{url\}\)/, 'the message must embed the real image markdown');
+  const end = html.indexOf('async function submitDirectStudioImage', send.indexOf('async function imgPipeSendToChat'));
+  const body = html.slice(send.indexOf('async function imgPipeSendToChat'), end);
+
+  // A local bubble never reaches the model — it must call sendMessage.
+  assert.match(body, /await sendMessage\(/, 'sending must go through the real chat turn');
   assert.match(body, /مرجع/, 'the message must ask the model to treat it as a reference');
+  assert.ok(!/action: 'append'/.test(body), 'a locally-appended bubble is not a reference');
+});
+
+test('the reference action also reaches the model', () => {
+  const start = html.indexOf("case 'reference':");
+  const body = html.slice(start, start + 700);
+  assert.match(body, /await sendMessage\(/, 'reference must go through the chat turn');
+  assert.ok(!/action: 'append'/.test(body), 'appending locally would never reach the model');
 });
 
 test('a generated image card always offers download, project-save and zoom', () => {
@@ -384,4 +395,142 @@ test('every toolbox action requires an approved image', () => {
   const guard = html.slice(start, start + 500);
   assert.match(guard, /if \(!img\?\.url\)/, 'needs an image');
   assert.match(guard, /if \(!imgPipe\.approved\)/, 'needs approval');
+});
+
+/* -------------------- «مرجع»: the model must SEE the image ---------------- */
+
+test('posting an /api/images URL makes the model actually SEE the picture', async () => {
+  // Before this, "use it as a reference" only sent the model a URL string it
+  // could not open — the picture was never part of the request.
+  const { env, cookie, post } = await signedIn();
+  const created = await (await post({ action: 'create', title: 'مرجع', mode: 'developer' })).json();
+  const image = await import(`${root}/_lib/image.js`);
+
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64'
+  );
+  env.AI = { run: async () => ({ image: png.toString('base64') }) };
+  const stored = await image.generateAndStoreImage(env, owner, {
+    prompt: 'a tank',
+    title: 'تانک',
+    aspectRatio: '1:1',
+    style: 'auto',
+    conversationId: created.id
+  });
+
+  const original = globalThis.fetch;
+  let lastUser = null;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+    if (!String(url).includes('/chat/completions')) throw new Error('unexpected fetch ' + url);
+    lastUser = [...JSON.parse(init.body || '{}').messages].reverse().find((m) => m.role === 'user');
+    return new Response(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'دیدم.' } }] })}\n\ndata: [DONE]\n\n`,
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+    );
+  };
+
+  try {
+    const res = await chat.onRequestPost(
+      ctx(req('/api/chat', { method: 'POST', body: { conversationId: created.id, message: stored.url }, headers: { Cookie: cookie } }), env)
+    );
+    assert.equal(res.status, 200);
+    await res.text();
+
+    assert.ok(Array.isArray(lastUser?.content), 'an image reference must become a multimodal message');
+    const vision = lastUser.content.find((part) => part.type === 'image_url');
+    assert.ok(vision, 'the model must receive a real image_url part, not a bare URL in text');
+    assert.match(String(vision.image_url.url), /^data:image\//, 'the bytes themselves must be inlined');
+    assert.ok(
+      lastUser.content.some((part) => part.type === 'text'),
+      'the user\'s words must survive alongside the picture'
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('an image too large to inline degrades to a real reference, never a lie', async () => {
+  const { env, cookie, post } = await signedIn();
+  const created = await (await post({ action: 'create', title: 'بزرگ', mode: 'developer' })).json();
+  const image = await import(`${root}/_lib/image.js`);
+
+  // A genuinely big, incompressible PNG.
+  const zlib = await import('node:zlib');
+  const w = 1600;
+  const h = 1600;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  let seed = 12345;
+  for (let y = 0; y < h; y += 1) {
+    raw[y * (w * 3 + 1)] = 0;
+    for (let x = 0; x < w * 3; x += 1) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      raw[y * (w * 3 + 1) + 1 + x] = seed & 0xff;
+    }
+  }
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const table = [];
+    for (let n = 0; n < 256; n += 1) {
+      let c = n;
+      for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    let crc = 0xffffffff;
+    for (const b of td) crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8);
+    const cb = Buffer.alloc(4);
+    cb.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+    return Buffer.concat([len, td, cb]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const bigPng = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0))
+  ]);
+  assert.ok(bigPng.length > 120_000, 'the fixture must actually exceed the inline budget');
+
+  env.AI = { run: async () => ({ image: bigPng.toString('base64') }) };
+  const stored = await image.generateAndStoreImage(env, owner, {
+    prompt: 'big',
+    title: 'بزرگ',
+    aspectRatio: '1:1',
+    style: 'auto',
+    conversationId: created.id
+  });
+
+  const original = globalThis.fetch;
+  let lastUser = null;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/cdn-cgi/access/certs')) return original(url, init);
+    if (!String(url).includes('/chat/completions')) throw new Error('unexpected fetch ' + url);
+    lastUser = [...JSON.parse(init.body || '{}').messages].reverse().find((m) => m.role === 'user');
+    return new Response(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'باشه' } }] })}\n\ndata: [DONE]\n\n`,
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+    );
+  };
+
+  try {
+    const res = await chat.onRequestPost(
+      ctx(req('/api/chat', { method: 'POST', body: { conversationId: created.id, message: stored.url }, headers: { Cookie: cookie } }), env)
+    );
+    assert.equal(res.status, 200, 'an oversized image must not break the turn');
+    await res.text();
+
+    const text = JSON.stringify(lastUser?.content || '');
+    assert.ok(!/data:image\//.test(text), 'an oversized image must not be inlined');
+    assert.ok(/تصویر مرجع در فضای کاری/.test(text), 'it must instead arrive as a real, actionable reference');
+    assert.ok(text.includes(stored.url), 'the reference must carry the usable URL');
+  } finally {
+    globalThis.fetch = original;
+  }
 });

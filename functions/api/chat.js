@@ -100,6 +100,7 @@ import {
 
 import { MAX_MESSAGE_CHARS } from '../_lib/limits.js';
 
+const REFERENCED_IMAGE_INLINE_B64 = 160_000; // ~120 KB of image bytes per referenced picture
 const MAX_CONTENT = MAX_MESSAGE_CHARS;
 const MAX_FILE_CHARS = 900_000;
 const MAX_TOOL_LOOPS_PER_FILE = 12;
@@ -969,6 +970,53 @@ export async function onRequestPost(context) {
       }
 
       const attachments = await resolveUploadRefs(env, identity.owner, data?.attachments);
+
+      // ---- Referencing a generated image ---------------------------------
+      // Embedding `![title](/api/images/<id>)` in the message only ever sent the
+      // model a URL it cannot open, so "use this picture as a reference" was a
+      // promise we did not keep. Pull the bytes the user owns into a real
+      // attachment instead — then a vision model actually sees the image.
+      const referencedImageIds = [
+        ...new Set(
+          [...String(data?.message || '').matchAll(/\/api\/images\/([a-zA-Z0-9_-]{8,64})/g)].map((m) => m[1])
+        )
+      ].slice(0, 2); // the inline budget is 120KB, so two is already generous
+      for (const imageId of referencedImageIds) {
+        if (attachments.some((a) => a.name && a.name.includes(imageId))) continue;
+        try {
+          const loaded = await loadGeneratedImage(env, identity.owner, imageId);
+          const declaredMime = String(loaded.meta.mime_type || 'image/png');
+          const mime = /^image\/(png|jpeg|webp|gif)$/.test(declaredMime) ? declaredMime : 'image/png';
+          const base64 = bytesToBase64(loaded.bytes);
+          // Too big to inline: reference it for real (path + URL) instead of
+          // pretending the model can see it.
+          // Inline images ride in the prompt, so keep them small; larger ones
+          // would blow the request body and the context budget.
+          if (base64.length <= REFERENCED_IMAGE_INLINE_B64) {
+            attachments.push({
+              name: `image-${imageId}.${mime.split('/')[1]}`,
+              type: mime,
+              data: base64
+            });
+          } else {
+            attachments.push({
+              name: `image-${imageId} (ارجاع)`,
+              type: 'text/plain',
+              data: bytesToBase64(
+                new TextEncoder().encode(
+                  `تصویر مرجع در فضای کاری: /api/images/${imageId}\n` +
+                    `عنوان: ${loaded.meta.title || 'بدون عنوان'}\n` +
+                    `پرامپت اصلی: ${loaded.meta.prompt || '—'}\n` +
+                    `(حجم تصویر بیش از سقف درون‌خطی است؛ با read_file یا generate_image دوباره بسازید.)`
+                )
+              )
+            });
+          }
+        } catch {
+          // تصویر حذف شده یا متعلق به کاربر دیگری است — بی‌صدا رد شو
+        }
+      }
+
       const userText = (typeof data?.message === 'string' ? data.message.trim() : '') || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
       if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
@@ -1434,7 +1482,7 @@ export async function onRequestPost(context) {
               'You HAVE a working `generate_image` tool. Call it NOW in this turn with a vivid ENGLISH `prompt`.',
               'Do NOT reply that you cannot generate images; that is false. Only report failure AFTER a real tool error.',
               'Embed the returned `![title](/api/images/<id>)`. Pass `saveTo` (e.g. `assets/<name>.png`) when the user',
-              'wants the picture saved in the project.'
+              'wants the picture saved in the project. An /api/images link in the user turn arrives as a REAL image you can see.'
             ].join('\n');
             let injected = false;
             for (let mi = messages.length - 1; mi >= 1; mi -= 1) {

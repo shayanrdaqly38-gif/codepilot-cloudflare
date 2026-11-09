@@ -18,6 +18,12 @@ const dom = new JSDOM(html, {
         return new Response(JSON.stringify({ ok: true, path: b.path }), { headers: { 'Content-Type': 'application/json' } });
       }
       if (u.match(/\/api\/images\/[A-Za-z0-9_-]+/)) return new Response(Uint8Array.from([0x89,0x50,0x4e,0x47]), { headers: { 'Content-Type': 'image/png' } });
+      if (u.includes('/api/chat')) {
+        // یک نوبت گفتگوی واقعی: پیام کاربر + پاسخ مدل
+        const sse = `data: ${JSON.stringify({ type: 'delta', content: 'دیدم.' })}\n\n` +
+                    `data: ${JSON.stringify({ type: 'done' })}\n\n`;
+        return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
       return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
     };
     w.navigator.clipboard = { writeText: async (t) => { copied.push(t); } };
@@ -47,8 +53,14 @@ await window.imgPipeTool('insert-html');ok('درج در index.html', written.fil
 const writtenIdx = written.includes('index.html');
 ok('تگ img واقعاً درج شد', writtenIdx, JSON.stringify(written));
 
+// «ارجاع» باید از مسیر واقعی گفتگو برود تا مدل خودِ تصویر را ببیند.
 const chatLen = window.document.getElementById('chat').children.length;
-await window.imgPipeTool('reference'); ok('ارجاع در گفتگو', window.document.getElementById('chat').children.length > chatLen);
+let refSent = null;
+const realSend = window.sendMessage;
+window.sendMessage = async (text) => { refSent = text; };
+await window.imgPipeTool('reference');
+window.sendMessage = realSend;
+ok('ارجاع از مسیر گفتگو ارسال شد', Boolean(refSent && refSent.includes('/api/images/img-1')), String(refSent).slice(0, 60));
 
 await window.imgPipeTool('delete');    ok('حذف تصویر', window.imgPipe.image === null);
 

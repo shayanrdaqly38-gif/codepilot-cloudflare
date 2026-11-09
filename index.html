@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-09.6">
+<html lang="fa" dir="rtl" data-build="2026-11-09.7">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1628,7 +1628,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 
     <div class="notice" id="storageNotice" style="display:none"></div>
 
-    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.6</div>
+    <div class="tiny" style="text-align:center;opacity:.65;margin-top:10px">نسخه‌ی ساخت: 2026-11-09.7</div>
 
     <div class="modal-actions">
       <button onclick="closeModal('settingsModal');openCodexModal()">🎛 تنظیمات عامل Codex</button>
@@ -10933,21 +10933,14 @@ async function imgPipeSendToChat() {
     const url = imgPipe.image.url;
     const saveNote = imgPipe.savedPath ? `\n\nفایل پروژه: \`${imgPipe.savedPath}\`` : '';
     const content =
-      `![${title}](${url})\n\n` +
+      `${url}\n\n` +
       `**${title}** · \`${imgPipe.image.width}×${imgPipe.image.height}\`` +
       saveNote +
       `\n\nاین تصویر تایید، ذخیره و دانلود شد. لطفاً آن را به‌عنوان مرجع در ادامه‌ی کار در نظر بگیر.`;
-    const msg = { role: 'user', content };
-    state.messages.push(msg);
-    appendMessageElement(msg);
-    scrollChatToBottom();
-    // تلاش برای ثبت سمت سرور تا در دستگاه دیگر هم بماند
-    try {
-      await api(API.state, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'append', id: state.conversationId, messages: [msg] })
-      });
-    } catch { /* آفلاین/بدون گفتگو — حباب محلی کافی است */ }
+    closeModal('imageStudioModal');
+    setWorkspaceView('chat');
+    // از مسیر واقعی گفتگو می‌رود تا تصویر به‌صورت چندرسانه‌ای به مدل برسد
+    await sendMessage(content);
     imgPipeSetStage('send', 'done');
     imgPipeSetStage('toolbox');
     const box = $('imgPipeToolbox');
@@ -11039,13 +11032,11 @@ async function imgPipeTool(tool) {
     }
 
     case 'reference': {
-      const msg = { role: 'user', content: `${md}\n\nاین تصویر را به‌عنوان مرجع در نظر بگیر: ${title}` };
-      state.messages.push(msg);
-      appendMessageElement(msg);
-      scrollChatToBottom();
+      // به گفتگو می‌رود تا مدل خودِ تصویر را ببیند، نه فقط یک لینک متن.
       closeModal('imageStudioModal');
       setWorkspaceView('chat');
-      return toast('🎯 تصویر به‌عنوان مرجع ثبت شد');
+      await sendMessage(`${img.url}\n\nاین تصویر را به‌عنوان مرجع در نظر بگیر و در ادامه‌ی کار از آن استفاده کن. عنوان: ${title}`);
+      return toast('🎯 تصویر به‌عنوان مرجع برای مدل ارسال شد');
     }
 
     case 'manifest': {
