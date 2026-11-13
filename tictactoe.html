@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0f172a">
+<title>دوز</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#fff;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:12px;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+h1{font-size:26px}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.seg button,.act button{padding:10px 14px;font-size:15px;border:none;border-radius:10px;background:#1e293b;color:#cbd5e1;font-family:inherit;font-weight:600}
+.seg button.on{background:#38bdf8;color:#0f172a}
+.act button{background:#334155;color:#fff}
+.act #reset{background:#22c55e}
+#score{display:flex;gap:10px;width:min(92vw,400px)}
+#score div{flex:1;background:#1e293b;border-radius:12px;padding:8px;text-align:center;font-size:14px;color:#94a3b8}
+#score b{display:block;font-size:24px;color:#fff}
+#score .cur{outline:2px solid #facc15}
+#status{font-size:19px;min-height:26px}
+#wrap{position:relative;width:min(92vw,400px);aspect-ratio:1}
+#board{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:8px;width:100%;height:100%;direction:ltr}
+.cell{background:#1e293b;border:none;border-radius:14px;font-size:min(20vw,84px);font-weight:700;display:flex;align-items:center;justify-content:center;font-family:inherit;color:#fff}
+.cell.x{color:#38bdf8}.cell.o{color:#fb7185}
+.cell span{animation:pop .18s ease-out}
+.cell.win{background:#334155;outline:3px solid #facc15}
+@keyframes pop{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<h1>بازی دوز</h1>
+<div class="row seg" id="mode"><button data-v="ai" class="on">با کامپیوتر</button><button data-v="pvp">دو نفره</button></div>
+<div class="row seg" id="diff"><button data-v="0">آسان</button><button data-v="1">متوسط</button><button data-v="2" class="on">غیرقابل‌شکست</button></div>
+<div id="score"><div id="sx">X<b>0</b></div><div id="sd">مساوی<b>0</b></div><div id="so">O<b>0</b></div></div>
+<div id="status"></div>
+<div id="wrap"><div id="board"></div></div>
+<div class="row act"><button id="undo">↩ برگشت</button><button id="reset">دور جدید</button><button id="clr">صفر کردن امتیاز</button></div>
+<script>
+const W=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const $=id=>document.getElementById(id),boardEl=$('board'),st=$('status');
+let b,turn,over,hist,starter='X',busy=false;
+let cfg=JSON.parse(localStorage.ttt_cfg||'{"mode":"ai","diff":2}');
+let sc=JSON.parse(localStorage.ttt_sc||'{"X":0,"O":0,"D":0}');
+const save=()=>{localStorage.ttt_cfg=JSON.stringify(cfg);localStorage.ttt_sc=JSON.stringify(sc)};
+const vib=n=>navigator.vibrate&&navigator.vibrate(n);
+let ac;function beep(f,d=.08){try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;g.gain.value=.08;o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+d)}catch(e){}}
+function winner(s){for(const l of W)if(s[l[0]]&&s[l[0]]===s[l[1]]&&s[l[1]]===s[l[2]])return l;return null}
+function mm(s,p,me){const w=winner(s);if(w)return s[w[0]]===me?10:-10;if(s.every(v=>v))return 0;
+  let best=p===me?-99:99;
+  for(let i=0;i<9;i++)if(!s[i]){s[i]=p;const v=mm(s,p==='X'?'O':'X',me);s[i]='';
+    if(p===me){if(v>best)best=v}else if(v<best)best=v}
+  return best}
+function aiMove(){
+  const e=[];for(let i=0;i<9;i++)if(!b[i])e.push(i);
+  const rnd=()=>e[Math.random()*e.length|0];
+  const d=cfg.diff;
+  if(d==0)return rnd();
+  if(d==1&&Math.random()<.4)return rnd();
+  let bv=-99,bm=[];
+  for(const i of e){b[i]='O';const v=mm(b,'X','O');b[i]='';
+    if(v>bv){bv=v;bm=[i]}else if(v==bv)bm.push(i)}
+  return bm[Math.random()*bm.length|0]}
+function render(){
+  [...boardEl.children].forEach((c,i)=>{c.innerHTML=b[i]?'<span>'+b[i]+'</span>':'';c.className='cell'+(b[i]?' '+b[i].toLowerCase():'')});
+  $('sx').firstElementChild.textContent=sc.X;$('so').firstElementChild.textContent=sc.O;$('sd').firstElementChild.textContent=sc.D;
+  $('sx').className=!over&&turn==='X'?'cur':'';$('so').className=!over&&turn==='O'?'cur':'';
+  $('so').firstChild.textContent=cfg.mode==='ai'?'کامپیوتر (O)':'O';
+  $('sx').firstChild.textContent=cfg.mode==='ai'?'تو (X)':'X';
+  document.querySelectorAll('#mode button').forEach(x=>x.classList.toggle('on',x.dataset.v===cfg.mode));
+  document.querySelectorAll('#diff button').forEach(x=>x.classList.toggle('on',+x.dataset.v===cfg.diff));
+  $('diff').style.display=cfg.mode==='ai'?'flex':'none'}
+function init(){
+  b=Array(9).fill('');hist=[];over=false;busy=false;turn=starter;
+  boardEl.innerHTML='';
+  for(let i=0;i<9;i++){const c=document.createElement('button');c.onclick=()=>click(i);boardEl.appendChild(c)}
+  msg();render();
+  if(cfg.mode==='ai'&&turn==='O')aiTurn()}
+function msg(){st.textContent=cfg.mode==='ai'?(turn==='X'?'نوبت توست':'کامپیوتر فکر می‌کند…'):'نوبت: '+turn}
+function click(i){if(over||b[i]||busy||(cfg.mode==='ai'&&turn==='O'))return;move(i)}
+function move(i){
+  b[i]=turn;hist.push(i);beep(turn==='X'?520:380);vib(15);
+  const w=winner(b);
+  if(w){over=true;sc[turn]++;save();render();w.forEach(k=>boardEl.children[k].classList.add('win'));
+    st.textContent=cfg.mode==='ai'?(turn==='X'?'بردی! 🎉':'کامپیوتر برد 🤖'):'برنده: '+turn+' 🎉';
+    vib([60,40,60]);beep(780,.25);starter=starter==='X'?'O':'X';return}
+  if(b.every(v=>v)){over=true;sc.D++;save();render();st.textContent='مساوی!';starter=starter==='X'?'O':'X';return}
+  turn=turn==='X'?'O':'X';msg();render();
+  if(cfg.mode==='ai'&&turn==='O')aiTurn()}
+function aiTurn(){busy=true;setTimeout(()=>{busy=false;if(!over&&turn==='O')move(aiMove())},450)}
+$('undo').onclick=()=>{
+  if(busy||over||hist.length<(cfg.mode==='ai'?2:1))return;
+  const n=cfg.mode==='ai'?(turn==='X'?2:1):1;
+  for(let k=0;k<n&&hist.length;k++)b[hist.pop()]='';
+  turn=cfg.mode==='ai'?'X':(n===1?(turn==='X'?'O':'X'):turn);
+  msg();render()};
+$('reset').onclick=init;
+$('clr').onclick=()=>{sc={X:0,O:0,D:0};save();render()};
+$('mode').onclick=e=>{const v=e.target.dataset.v;if(!v)return;cfg.mode=v;save();starter='X';init()};
+$('diff').onclick=e=>{const v=e.target.dataset.v;if(v==null)return;cfg.diff=+v;save();starter='X';init()};
+init();
+</script>
+</body>
+</html>
