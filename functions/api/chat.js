@@ -725,9 +725,6 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       if (workspace.files[path] === undefined) {
         return { ok: false, text: `Error: file not found: ${path}.` };
       }
-      if (Object.keys(workspace.files).length < 2) {
-        return { ok: false, text: 'Error: refusing to delete the last remaining file in the workspace.' };
-      }
       if (workspace.files[path] === null) {
         const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
         if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };

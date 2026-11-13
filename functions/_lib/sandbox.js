@@ -586,7 +586,6 @@ export function virtualShell(workspace, rawCommand) {
     }
     case 'rm': {
       if (files[arg] === undefined) return `rm: file not found: ${arg}`;
-      if (Object.keys(files).length < 2) return 'rm: refusing to delete the last file';
       delete files[arg];
       return `removed ${arg}`;
     }

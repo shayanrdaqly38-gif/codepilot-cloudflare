@@ -5649,7 +5649,6 @@ function newFile() {
 function deleteActive() {
   const name = state.workspace.active;
   if (!name) return;
-  if (Object.keys(state.workspace.files).length < 2) return toast('حداقل یک فایل باید بماند');
   if (!confirm(`فایل ${name} حذف شود؟`)) return;
   delete state.workspace.files[name];
   state.dirtyFiles.delete(name);
