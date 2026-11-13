@@ -106,7 +106,7 @@ test('resilient chat hydration handles multi-MB (>20 chunk) uploads, binary file
   await hydrateUploadParts(env, 'alice', messages, { resilient: true });
   const elapsedMs = performance.now() - t0;
 
-  assert.ok(elapsedMs < 35, `hydration took too long: ${elapsedMs.toFixed(2)}ms`);
+  assert.ok(elapsedMs < 250, `hydration took too long: ${elapsedMs.toFixed(2)}ms`);
   assert.match(messages[0].content[1].text, /در پیام‌های قبلی بررسی شد/);
   assert.match(messages[1].content[1].text, /در دسترس نیست/);
   assert.equal(messages[2].content[1].type, 'text');

@@ -4071,7 +4071,7 @@ function showSignedOut(error) {
         ${prodUrl ? `<button onclick="location.href='${esc(prodUrl)}'">🚀 رفتن به آدرس اصلی</button>` : ''}
       </div>
       <div id="diagBox" style="margin-top:12px;direction:rtl"></div>
-      <div class="suggestions" style="margin-top:8px"><button onclick="probeModel()">⚡ تست اتصال مدل</button></div>
+      <div class="suggestions" style="margin-top:8px"><button onclick="probeModel('probeBoxAlt')">⚡ تست اتصال مدل</button></div>
       <div id="probeBox" style="margin-top:8px;direction:rtl"></div>
     </div>`;
   $('sendBtn').disabled = true;
@@ -4167,10 +4167,10 @@ function showStorageFailure(error) {
       </div>
       <div class="suggestions">
         <button onclick="location.reload()">↻ تلاش دوباره</button>
-        <button onclick="runDiagnostics()">🔍 عیب‌یابی تنظیمات</button>
+        <button onclick="runDiagnostics('diagBoxAlt')">🔍 عیب‌یابی تنظیمات</button>
       </div>
-      <div id="diagBox" style="margin-top:12px;direction:rtl"></div>
-      <div id="probeBox" style="margin-top:8px;direction:rtl"></div>
+      <div id="diagBoxAlt" style="margin-top:12px;direction:rtl"></div>
+      <div id="probeBoxAlt" style="margin-top:8px;direction:rtl"></div>
     </div>`;
   $('sendBtn').disabled = true;
   $('prompt').disabled = true;

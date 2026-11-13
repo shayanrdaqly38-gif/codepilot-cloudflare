@@ -2172,7 +2172,8 @@ export async function onRequestPost(context) {
                 method: 'POST',
                 headers: chainHeaders,
                 body: chainBody,
-                signal: chainCtrl.signal
+                signal: chainCtrl.signal,
+                redirect: 'manual'
               })
                 .then((res) => {
                   // Detach immediately: aborting our side makes the chained

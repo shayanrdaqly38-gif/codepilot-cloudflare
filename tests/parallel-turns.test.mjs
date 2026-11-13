@@ -280,7 +280,16 @@ test('runner-kit sessions: parallel chats execute in isolated workspaces and nev
   const port = await getFreePort();
   const workDir = await mkdtemp(path.join(os.tmpdir(), 'cp-sessions-test-'));
   const child = spawn(process.execPath, [RUNNER_SCRIPT], {
-    env: { ...process.env, CP_HOST: '127.0.0.1', CP_PORT: String(port), CP_WORKDIR: workDir },
+    env: {
+      ...process.env,
+      CP_HOST: '127.0.0.1',
+      CP_PORT: String(port),
+      CP_WORKDIR: workDir,
+      // Never inherit a real runner token from the host shell — the child
+      // runner must stay open on loopback so /health works in CI/Termux.
+      CP_TOKEN: '',
+      SANDBOX_TOKEN: ''
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -343,7 +352,16 @@ test('runner-kit upgrade: first sessioned run adopts the legacy shared workspace
   await writeFile(path.join(workDir, '.env'), 'SECRET=1\n');
 
   const child = spawn(process.execPath, [RUNNER_SCRIPT], {
-    env: { ...process.env, CP_HOST: '127.0.0.1', CP_PORT: String(port), CP_WORKDIR: workDir },
+    env: {
+      ...process.env,
+      CP_HOST: '127.0.0.1',
+      CP_PORT: String(port),
+      CP_WORKDIR: workDir,
+      // Never inherit a real runner token from the host shell — the child
+      // runner must stay open on loopback so /health works in CI/Termux.
+      CP_TOKEN: '',
+      SANDBOX_TOKEN: ''
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   const baseUrl = `http://127.0.0.1:${port}`;
