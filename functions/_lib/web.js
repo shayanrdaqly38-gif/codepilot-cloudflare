@@ -117,9 +117,11 @@ export function assertSafeExternalUrl(rawUrl) {
     if (
       lower === '::' ||
       lower === '::1' ||
-      lower.startsWith('fe80:') ||
-      lower.startsWith('fc') ||
+      /^fe[89ab][0-9a-f]:/.test(lower) || // fe80::/10 link-local, not only the fe80::/16 subrange
+      /^fe[c-f][0-9a-f]:/.test(lower) || // fec0::/10 site-local
+      lower.startsWith('fc') || // fc00::/7 unique-local
       lower.startsWith('fd') ||
+      lower.startsWith('ff') || // ff00::/8 multicast is not a public unicast destination
       lower.startsWith('::ffff:')
     ) {
       fail('دسترسی به آدرس IPv6 محلی/خصوصی مسدود است.', 400, 'ssrf_blocked');

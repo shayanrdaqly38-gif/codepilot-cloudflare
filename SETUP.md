@@ -9,20 +9,11 @@
 > **خطای فارسی `access_unconfigured`** یعنی کد جدید هست ولی `ACCESS_TEAM_DOMAIN` /
 > `ACCESS_AUD` ست نشده — چک‌لیست زیر را ببینید.
 
-## ⚡ چهار کار در داشبورد (به همین ترتیب)
+## ⚡ راه‌اندازی در Cloudflare
 
-کد الان درست deploy می‌شود. ولی تا این چهار مورد ست نشوند، سایت خطا می‌دهد.
-همه در **Workers & Pages → پروژه → Settings** انجام می‌شود.
+این ریپو اتصال D1 را از `wrangler.toml` مدیریت می‌کند؛ برای همین پروژه، بایندینگ `DB` و شناسه‌ی دیتابیس از قبل در فایل تعریف شده‌اند و نباید دوباره از داشبورد اضافه شوند. اگر پروژه را به حساب Cloudflare دیگری منتقل یا fork می‌کنید، طبق بخش «۱. D1» پایین شناسه را با دیتابیس همان حساب جایگزین کنید.
 
-### ۱) D1 — بدون این، هیچ چیز ذخیره نمی‌شود
-
-**Functions → D1 database bindings → Add**
-| فیلد | مقدار |
-|---|---|
-| Variable name | `DB` (دقیقاً همین) |
-| D1 database | دیتابیسی که با `wrangler d1 create codepilot-db` ساختید |
-
-اگر هنوز نساخته‌اید، از داشبورد **Storage & Databases → D1 → Create** بزنید.
+سپس Secretهای لازم برای ورود و ارائه‌دهنده‌ی مدل را در **Workers & Pages → پروژه → Settings → Variables and Secrets** تنظیم کنید. چون فایل Wrangler منبع تنظیمات بایندینگ‌هاست، Secretها را از داشبورد یا با دستورهای Wrangler اضافه کنید؛ برای تنظیماتی که معمولاً متغیر عادی‌اند نیز در این پروژه می‌توان از نوع Secret استفاده کرد.
 
 > جدول‌ها را لازم نیست دستی بسازید؛ برنامه در اولین درخواست خودش می‌سازد.
 
@@ -46,7 +37,7 @@ MODEL_API_KEY = <کلید tooken.club>
 
 ### ۴) ورود را انتخاب کنید (یکی از دو راه)
 
-**الف) سریع (تک‌کاربره):** نوع **Variable** → `DEV_ACCESS_EMAIL = your@email.com`
+**الف) سریع (تک‌کاربره):** در داشبورد به‌صورت **Secret** اضافه کنید: `DEV_ACCESS_EMAIL = your@email.com`
 **ب) امن (چندکاربره):** `ACCESS_TEAM_DOMAIN` و `ACCESS_AUD` را تنظیم کنید — بخش ۳.
 
 ---
@@ -61,16 +52,12 @@ https://<سایت>/api/health
 
 > ### چرا بعضی ردیف‌ها در داشبورد قفل‌اند؟
 >
-> اگر هر نامی در `[vars]` فایل `wrangler.toml` باشد، Cloudflare آن را مالِ فایل
-> می‌داند و در داشبورد قفل می‌کند:
-> *"Environment variables for this project are being managed through wrangler.toml.
-> Only Secrets can be managed via the Dashboard."*
->
-> برای همین این پروژه **هیچ `[vars]`ی ندارد**. همه‌ی متغیرهای غیرحساس از داشبورد
-> قابل ویرایش‌اند و کد برای هر کدام پیش‌فرض امن دارد:
-> `MODEL_NAME`، `DEV_ACCESS_EMAIL`، `CONTEXT_BUDGET_TOKENS`، `ACCESS_ALLOWED_EMAILS`.
->
-> فقط Secret‌ها (`MODEL_API_KEY`، `SESSION_SECRET`) به‌هرحال از داشبورد ساخته می‌شوند.
+> چون `pages_build_output_dir` و بایندینگ‌ها در `wrangler.toml` تعریف شده‌اند، این فایل
+> منبع تنظیمات deploy است و داشبورد ممکن است افزودن متغیرهای عادی را قفل کند.
+> برای اطمینان، تنظیمات اجرایی را در این پروژه از نوع **Secret** اضافه کنید؛ کد
+> مقادیر را از `env` می‌خواند و برای Secret بودن آن‌ها الزامی ندارد.
+> نام‌های اختیاری شامل `MODEL_NAME`، `DEV_ACCESS_EMAIL`، `CONTEXT_BUDGET_TOKENS` و
+> `ACCESS_ALLOWED_EMAILS` هستند.
 
 ## ۰. جزئیات حالت تک‌کاربره (بدون Cloudflare Access)
 
@@ -81,7 +68,7 @@ npx wrangler pages secret put SESSION_SECRET     # openssl rand -base64 32
 npx wrangler pages secret put MODEL_API_KEY      # کلید tooken.club
 ```
 
-و در **Settings → Variables and Secrets → Add** (نوع: *Variable* نه Secret):
+و در **Settings → Variables and Secrets → Add**، به‌صورت **Secret**:
 
 ```
 DEV_ACCESS_EMAIL = your-email@example.com
@@ -104,18 +91,22 @@ DEV_ACCESS_EMAIL = your-email@example.com
 
 ## ۱. D1
 
+`wrangler.toml` همین ریپو هم بایندینگ `DB` و هم `database_id` را تعریف می‌کند. هنگام deploy از همین فایل استفاده می‌شود؛ شناسه‌ی دیتابیس یک راز نیست و باید در پیکربندی Wrangler باشد.
+
+اگر روی حساب Cloudflare خودتان deploy می‌کنید یا این ریپو را fork کرده‌اید:
+
 ```bash
 npx wrangler login
 npx wrangler d1 create codepilot-db
+```
+
+شناسه‌ی UUID خروجی را جایگزین `database_id` در `wrangler.toml` کنید، سپس deploy کنید. در این حالت بایندینگ جداگانه‌ای از داشبورد نسازید؛ فایل Wrangler منبع حقیقت است. برای همان پروژه/حسابی که شناسه‌اش از قبل در فایل تنظیم شده، این مرحله را رد کنید.
+
+```bash
 npx wrangler d1 execute codepilot-db --remote --file=./schema.sql   # اختیاری
 ```
 
-> ⚠️ `database_id` را در `wrangler.toml` **نگذارید**. مقدار placeholder باعث شکست
-> deploy می‌شود و در آن حالت Cloudflare بی‌صدا همان نسخه‌ی قدیمی را سرو می‌کند.
-> اتصال را در گام بعد از داشبورد بزنید.
-
-داشبورد: **Workers & Pages → پروژه‌ی CodePilot → Settings → Functions → D1 database
-bindings → Add** → Variable name: `DB` → Database: `codepilot-db`.
+اجرای schema دستی اختیاری است: برنامه خودش جدول‌ها را می‌سازد و مهاجرت می‌کند.
 
 ## ۲. Secrets
 
