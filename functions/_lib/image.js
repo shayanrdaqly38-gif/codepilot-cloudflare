@@ -13,11 +13,84 @@
 // slices) and served via `/api/images/:id` so chat history & LLM context never bloat with Base64!
 
 import { fail } from './util.js';
+import { assertSafeExternalUrl } from './web.js';
 
 export const IMAGE_CHUNK_BYTES = 192_000; // Divisible by 3 -> 256,000 Base64 chars/row (< 300 KB SQL)
 const MAX_IMAGE_BYTES = 8_000_000;
+const MAX_REMOTE_IMAGE_REDIRECTS = 4;
 const MAX_STORED_IMAGES_PER_OWNER = 120;
 const MAX_PROMPT_CHARS = 1_900;
+
+/** Download provider-returned image URLs without allowing SSRF or unbounded bodies. */
+export async function fetchRemoteImageBytes(rawUrl, signal = null) {
+  let currentUrl;
+  try {
+    currentUrl = assertSafeExternalUrl(rawUrl);
+    if (currentUrl.protocol !== 'https:') return null;
+  } catch {
+    return null;
+  }
+
+  for (let hop = 0; hop <= MAX_REMOTE_IMAGE_REDIRECTS; hop += 1) {
+    const response = await fetch(currentUrl.href, {
+      method: 'GET',
+      redirect: 'manual',
+      signal
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('Location');
+      await response.body?.cancel().catch(() => {});
+      if (!location || hop === MAX_REMOTE_IMAGE_REDIRECTS) return null;
+      try {
+        currentUrl = assertSafeExternalUrl(new URL(location, currentUrl.href).href);
+        if (currentUrl.protocol !== 'https:') return null;
+      } catch {
+        return null;
+      }
+      continue;
+    }
+
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return null;
+    }
+    const declaredLength = Number(response.headers.get('Content-Length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_BYTES) {
+      await response.body?.cancel().catch(() => {});
+      return null;
+    }
+    if (!response.body) return null;
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        if (total + value.byteLength > MAX_IMAGE_BYTES) {
+          await reader.cancel().catch(() => {});
+          return null;
+        }
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    } finally {
+      reader.releaseLock?.();
+    }
+
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+  return null;
+}
 
 export const IMAGE_ASPECT_SPECS = {
   '1:1': { width: 1024, height: 1024, label: 'مربع (1:1 · 1024×1024)' },
@@ -438,23 +511,20 @@ async function tryProviderImagesEndpoint(env, { prompt, width, height, externalS
       };
     }
     const remoteUrl = payload?.data?.[0]?.url;
-    if (typeof remoteUrl === 'string' && /^https:\/\//i.test(remoteUrl)) {
-      const imgRes = await fetch(remoteUrl, { method: 'GET', redirect: 'follow', signal: ctrl.signal });
-      if (imgRes.ok) {
-        const bytes = new Uint8Array(await imgRes.arrayBuffer());
-        const mimeType = detectImageMime(bytes);
-        if (mimeType) {
-          return {
-            ok: true,
-            bytes,
-            mimeType,
-            engine: 'provider-api',
-            model: imageModel,
-            modelLabel: `Provider (${imageModel})`,
-            width,
-            height
-          };
-        }
+    if (typeof remoteUrl === 'string') {
+      const bytes = await fetchRemoteImageBytes(remoteUrl, ctrl.signal);
+      const mimeType = bytes ? detectImageMime(bytes) : null;
+      if (bytes && mimeType) {
+        return {
+          ok: true,
+          bytes,
+          mimeType,
+          engine: 'provider-api',
+          model: imageModel,
+          modelLabel: `Provider (${imageModel})`,
+          width,
+          height
+        };
       }
     }
     return { ok: false, errors: ['provider_empty_image'] };

@@ -5,7 +5,7 @@
 -- for transparency and for review: `npm run db:schema` executes it explicitly.
 --
 -- The CREATE statements are idempotent (IF NOT EXISTS), and the columns that
--- older deployments gained through migrations (v1 → v9) are already inlined
+-- older deployments gained through migrations (v1 → v10) are already inlined
 -- here, so a fresh database ends up identical to a fully-migrated one.
 
 -- ---------------------------------------------------------------- users -----
