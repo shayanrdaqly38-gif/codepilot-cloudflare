@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" id="metaThemeColor" content="#211b17">
+<meta name="theme-color" id="metaThemeColor" content="#2e2620">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -19,7 +19,7 @@
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html{width:100%;max-width:100%;background:#211b17;color-scheme:dark;overflow-x:hidden;-webkit-text-size-adjust:100%}
+html{width:100%;max-width:100%;background:#2e2620;color-scheme:dark;overflow-x:hidden;-webkit-text-size-adjust:100%}
 html[data-theme="claude-day"]{background:#FAF5EE;color-scheme:light}
 html[data-theme="midnight"]{background:#11141a;color-scheme:dark}
 body{margin:0;width:100%;max-width:100%;position:relative;background:var(--bg);color:var(--text);height:100vh;height:100dvh;overflow:hidden;overflow-x:clip;font-size:13px}
@@ -341,16 +341,16 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
    Optional themes: claude-day (Anthropic warm cream-orange), midnight
    ========================================================================= */
 :root,body[data-theme="claude-warm"]{
-  --bg:#211b17;
-  --bg-elev:#29211c;
-  --panel:#2b221d;
-  --panel2:#362b24;
-  --panel3:#42342b;
-  --chat-bg:#251e19;
-  --editor-bg:#1d1714;
-  --term-bg:#191411;
-  --line:#4c3c32;
-  --line-strong:#695040;
+  --bg:#2e2620;
+  --bg-elev:#362c25;
+  --panel:#382f28;
+  --panel2:#44382e;
+  --panel3:#514137;
+  --chat-bg:#2b241e;
+  --editor-bg:#29221d;
+  --term-bg:#221b16;
+  --line:#59473b;
+  --line-strong:#7a624f;
   --text:#fbf4ed;
   --text-soft:#eadccf;
   --muted:#c7b3a1;
@@ -361,14 +361,14 @@ textarea:focus-visible{outline:2px solid #648fbb;outline-offset:-2px}
   --claude-glow:rgba(232,123,82,.22);
   --claude-tint:rgba(232,123,82,.13);
   --green:#82d9a0;
-  --user-bg:linear-gradient(145deg,#3d291f,#33221a);
-  --user-border:#6e4632;
-  --card-bg:rgba(54,43,36,.78);
-  --composer-bg:#312620;
-  --composer-border:#5b4538;
-  --btn-bg:#382c25;
-  --btn-hover:#47372e;
-  --code-bg:#181310;
+  --user-bg:linear-gradient(145deg,#4a3327,#3e2b21);
+  --user-border:#7d533b;
+  --card-bg:rgba(68,54,44,.74);
+  --composer-bg:#3b2f27;
+  --composer-border:#6b5343;
+  --btn-bg:#45372e;
+  --btn-hover:#524237;
+  --code-bg:#221b16;
   --on-primary:#1f130d;
 }
 body[data-theme="claude-day"]{
@@ -1137,7 +1137,7 @@ body[data-theme="claude-day"] .msg.user .user-msg-acts button{background:rgba(0,
   box-shadow:0 10px 30px rgba(0,0,0,.24);direction:rtl;
 }
 .gen-image-frame{
-  position:relative;width:100%;background:var(--code-bg,#120e0b);
+  position:relative;width:100%;background:var(--code-bg,#221b16);
   display:flex;align-items:center;justify-content:center;min-height:160px;cursor:zoom-in;
 }
 .gen-image-frame img{
@@ -1280,7 +1280,7 @@ body[data-theme="claude-day"] .sb-mode-card.active strong{color:var(--claude-dee
 .sb-panel[hidden]{display:none!important}
 .sb-cmd-box{
   direction:ltr;text-align:left;font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;
-  background:var(--code-bg,#120e0b);color:#e9dfd5;border:1px solid var(--line);border-radius:10px;
+  background:var(--code-bg,#221b16);color:#e9dfd5;border:1px solid var(--line);border-radius:10px;
   padding:9px 11px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0;
 }
 .sb-probe-out{margin-top:8px;font-size:11.5px;line-height:1.65}
@@ -3561,7 +3561,7 @@ async function refreshLiveModels(silent = false, force = !silent) {
 function applyTheme(themeId, persistLocal = false) {
   const valid = ['claude-warm', 'claude-day', 'midnight'];
   const next = valid.includes(themeId) ? themeId : 'claude-warm';
-  const bgHex = next === 'claude-day' ? '#FAF5EE' : next === 'midnight' ? '#101216' : '#211b17';
+  const bgHex = next === 'claude-day' ? '#FAF5EE' : next === 'midnight' ? '#101216' : '#2e2620';
   const scheme = next === 'claude-day' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;
   document.documentElement.style.backgroundColor = bgHex;

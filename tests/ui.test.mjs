@@ -1053,7 +1053,7 @@ assert.equal($('metaThemeColor').getAttribute('content'), '#FAF5EE', 'claude-day
 window.applyTheme('midnight');
 assert.equal($('metaThemeColor').getAttribute('content'), '#101216', 'midnight syncs dark browser chrome color');
 window.applyTheme('claude-warm');
-assert.equal($('metaThemeColor').getAttribute('content'), '#211b17', 'claude-warm syncs warm browser chrome color');
+assert.equal($('metaThemeColor').getAttribute('content'), '#2e2620', 'claude-warm syncs warm browser chrome color');
 
 // Mobile view bar switches active workspace view in 1 tap
 const mobileEditorBtn = $('mobileViewBar').querySelector('[data-workspace-view="editor"]');
