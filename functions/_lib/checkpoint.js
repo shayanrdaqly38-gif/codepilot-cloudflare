@@ -151,6 +151,7 @@ export async function saveTurnCheckpoint(env, owner, conversationId, data = {}) 
   const partialRaw = typeof data.partialContent === 'string' ? redactSecrets(data.partialContent, secrets) : '';
   const record = {
     active: true,
+    turnId: String(data.turnId || prev?.turnId || '').slice(0, 80),
     originalGoal: truncate(
       redactSecrets(String(prev?.originalGoal || data.originalGoal || '').trim(), secrets),
       2_500
@@ -171,6 +172,11 @@ export async function saveTurnCheckpoint(env, owner, conversationId, data = {}) 
     partialTextChars: partialRaw ? partialRaw.length : 0
   };
 
+  if (record.turnId) {
+    const lease = await env.DB.prepare('SELECT turn_id FROM active_turns WHERE conversation_id=? AND owner=?')
+      .bind(String(conversationId), String(owner)).first();
+    if (lease?.turn_id && String(lease.turn_id) !== record.turnId) return null;
+  }
   await env.DB.prepare(
     `INSERT INTO meta(key, value) VALUES(?, ?)
      ON CONFLICT(key) DO UPDATE SET value=excluded.value`
@@ -186,6 +192,25 @@ export async function clearTurnCheckpoint(env, owner, conversationId) {
   await ensureSchema(env);
   const key = await ckptMetaKey(owner, conversationId);
   await env.DB.prepare('DELETE FROM meta WHERE key=?').bind(key).run();
+}
+
+/** A stale runner may not delete a checkpoint belonging to a newer turn. */
+export async function clearTurnCheckpointForTurn(env, owner, conversationId, turnId) {
+  if (!env?.DB || !owner || !conversationId || !turnId) return false;
+  await ensureSchema(env);
+  const key = await ckptMetaKey(owner, conversationId);
+  const row = await env.DB.prepare('SELECT value FROM meta WHERE key=?').bind(key).first();
+  if (!row?.value) return true;
+  let parsed = null;
+  try { parsed = JSON.parse(row.value); } catch { /* malformed legacy row */ }
+  const lease = await env.DB.prepare('SELECT turn_id FROM active_turns WHERE conversation_id=? AND owner=?')
+    .bind(String(conversationId), String(owner)).first();
+  // The caller may clear when it owns the current/final lease, even if the
+  // stored checkpoint was written by the previous wave it is resuming.
+  const ownsLease = String(lease?.turn_id || '') === String(turnId);
+  if (parsed?.turnId && parsed.turnId !== turnId && !ownsLease) return false;
+  await env.DB.prepare('DELETE FROM meta WHERE key=?').bind(key).run();
+  return true;
 }
 
 /**

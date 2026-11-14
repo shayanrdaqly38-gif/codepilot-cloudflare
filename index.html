@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-09.5">
+<html lang="fa" dir="rtl" data-build="2026-11-14.1">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -2461,6 +2461,8 @@ const state = {
   sessionCachedTokens: 0,
   busy: false,
   activeTurnToken: 0,
+  activeTurn: null,
+  pendingStopConv: null,
   chatAbortController: null,
   // Parallel chats: per-conversation turn tracking. state.busy only reflects
   // the CURRENT view; busyConvs is the truth for every conversation with a
@@ -2550,9 +2552,13 @@ function setStoragePill(ok, text) {
 async function api(path, options = {}) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
   if (init.body && !init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
+  const method = String(init.method || 'GET').toUpperCase();
+  const safeToRetry = method === 'GET' || method === 'HEAD';
   let res;
   let data = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  // Never retry a write here. A 503 can arrive AFTER the Worker persisted the
+  // user message; only idempotent reads may be retried by this generic helper.
+  for (let attempt = 0; attempt < (safeToRetry ? 3 : 1); attempt += 1) {
     try {
       res = await fetch(path, init);
     } catch (err) {
@@ -2561,7 +2567,7 @@ async function api(path, options = {}) {
         abortErr.aborted = true;
         throw abortErr;
       }
-      if (attempt < 2) {
+      if (safeToRetry && attempt < 2) {
         await new Promise((r) => setTimeout(r, 450 * (attempt + 1)));
         continue;
       }
@@ -2572,7 +2578,7 @@ async function api(path, options = {}) {
     if (type.includes('application/json')) {
       try { data = await res.json(); } catch { data = null; }
     }
-    if ((res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt < 2 && !init.signal?.aborted) {
+    if (safeToRetry && (res.status === 502 || res.status === 503 || res.status === 504) && !data?.code && attempt < 2 && !init.signal?.aborted) {
       await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
       continue;
     }
@@ -2581,10 +2587,25 @@ async function api(path, options = {}) {
   if (!res.ok) {
     const error = new Error((data && data.error) || `خطای سرور (${res.status})`);
     error.status = res.status;
-    error.code = data && data.code;
+    error.code = data?.code || `http_${res.status}`;
+    error.details = data?.details || null;
+    error.requestId = data?.requestId || res.headers.get('X-Request-Id') || '';
+    error.turnId = data?.details?.turnId || res.headers.get('X-Turn-Id') || '';
+    error.build = data?.build || res.headers.get('X-CodePilot-Build') || '';
+    error.rayId = res.headers.get('cf-ray') || '';
     throw error;
   }
   return data || {};
+}
+
+function formatTurnError(error) {
+  const parts = [error?.message || 'خطای نامشخص'];
+  if (error?.code) parts.push(`کد: ${error.code}`);
+  if (error?.requestId) parts.push(`درخواست: ${String(error.requestId).slice(0, 12)}`);
+  if (error?.turnId) parts.push(`نوبت: ${String(error.turnId).slice(0, 12)}`);
+  if (error?.rayId) parts.push(`Cloudflare: ${String(error.rayId).slice(0, 16)}`);
+  if (error?.build) parts.push(`نسخه: ${error.build}`);
+  return parts.join(' · ');
 }
 
 /* ------------------------------ model & shell ---------------------------- */
@@ -4294,7 +4315,7 @@ function detachActiveTurnForNavigation() {
    new messages stream in every ~2.5s until the turn finishes. */
 const turnPollers = new Map();
 
-function startTurnPolling(convId) {
+function startTurnPolling(convId, { immediate = true } = {}) {
   if (!convId || String(convId).startsWith('pending-') || turnPollers.has(convId)) return;
   const entry = { timer: null, stopped: false, lastSeq: 0 };
   turnPollers.set(convId, entry);
@@ -4323,6 +4344,11 @@ function startTurnPolling(convId) {
     }
     const stillActive = Boolean(data?.turnActive || data?.conversation?.turnActive);
     const isCurrent = state.conversationId === convId;
+    if (isCurrent && data?.turn) state.activeTurn = { ...data.turn, conversationId: convId };
+    if (isCurrent && stillActive && data?.turn?.stopRequested) {
+      const bar = ensureLiveTurnBar();
+      bar.textContent = '⏹ درخواست توقف ثبت شد — در حال همگام‌سازی پیشرفت…';
+    }
     if (isCurrent && msgs.length) {
       const fresh = msgs.filter((m) => !state.messages.some((x) => x.seq === m.seq));
       if (fresh.length) {
@@ -4359,7 +4385,8 @@ function startTurnPolling(convId) {
     }
   };
   entry.timer = setInterval(poll, 2500);
-  poll();
+  if (immediate) poll();
+  else entry.initialTimer = setTimeout(poll, 500);
 }
 
 function stopTurnPolling(convId) {
@@ -4367,6 +4394,7 @@ function stopTurnPolling(convId) {
   if (!entry) return;
   entry.stopped = true;
   clearInterval(entry.timer);
+  clearTimeout(entry.initialTimer);
   turnPollers.delete(convId);
 }
 
@@ -4391,55 +4419,92 @@ function removeLiveTurnBar() {
  *  asking (wave boundaries / local-exec handoffs). User-stopped turns keep
  *  the manual resume card — we never override an explicit stop. */
 const autoResumedCheckpoints = new Set();
+const explicitlyStoppedConvs = new Set();
 
 function maybeAutoResumeCheckpoint(checkpoint) {
   if (!checkpoint || !checkpoint.active) return false;
+  if (explicitlyStoppedConvs.has(state.conversationId)) return false;
+  if (checkpoint.reason === 'user_stopped') return false;
   const reason = String(checkpoint.reason || '');
   const waveNum = Number(checkpoint.waveNumber || 0);
   const canAuto =
     (reason === 'wave_continue' && waveNum < 12) ||
     (reason === 'local_exec_continue' && isLocalTermuxActive());
   if (!canAuto) return false;
-  const dedupeKey = `${state.conversationId}:${reason}:${waveNum}`;
+  const dedupeKey = `${state.conversationId}:${checkpoint.turnId || ''}:${reason}:${waveNum}`;
   if (autoResumedCheckpoints.has(dedupeKey)) return false;
   autoResumedCheckpoints.add(dedupeKey);
   toast('🔄 ادامه‌ی خودکار از نقطه‌ی قطع…');
-  sendMessage('ادامه', { resumeCheckpoint: true, silentAutoResume: true });
+  sendMessage('ادامه', { resumeCheckpoint: true, silentAutoResume: true, resumeTurnId: checkpoint.turnId || '' });
   return true;
 }
 
 async function stopCurrentTurn(opts = {}) {
-  cancelMarathonAuto();
   const convId = state.conversationId;
+  if (!convId || String(convId).startsWith('pending-') || state.pendingStopConv === convId) return;
+  state.pendingStopConv = convId;
+  explicitlyStoppedConvs.add(convId);
+  cancelMarathonAuto();
   const pausedMarathonNow = !opts.keepMarathon && isMarathonForCurrentConversation() && !getMarathonState().paused;
   if (pausedMarathonNow) {
     persistMarathon({ paused: true });
     renderMarathonUI();
   }
+  const turnInfo = state.activeTurn?.conversationId === convId ? state.activeTurn : null;
+  // Fence the reader immediately so a late SSE frame cannot re-lock the view.
+  state.activeTurnToken += 1;
   if (state.chatAbortController) {
     try { state.chatAbortController.abort(); } catch { /* ignore */ }
+    state.chatAbortController = null;
   }
-  // A headless turn (no live reader here) is stopped through the server —
-  // the D1 flag reaches whichever isolate is running it.
-  if (convId && !String(convId).startsWith('pending-')) {
-    state.busyConvs.delete(convId);
-    stopTurnPolling(convId);
-    removeLiveTurnBar();
-    try {
-      await fetch(API.stop, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: convId })
-      });
-    } catch { /* ignore */ }
+  const stopBtn = $('stopTurnBtn');
+  if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = 'در حال توقف…'; }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  let result = null;
+  let failed = false;
+  try {
+    const res = await fetch(API.stop, {
+      method: 'POST',
+      credentials: 'same-origin',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: convId, turnId: turnInfo?.turnId || '', requestId: turnInfo?.requestId || '' })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    result = await res.json();
+    if (!result?.ok || !result?.accepted) throw new Error(result?.error || 'stop not accepted');
+  } catch {
+    failed = true;
+  } finally {
+    clearTimeout(timer);
+    state.pendingStopConv = null;
+    if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = '⏹ توقف'; }
   }
+  // Unlock the local composer regardless of the HTTP outcome. The server lease
+  // still rejects overlapping work; the poller reconciles the durable state.
+  state.busyConvs.delete(convId);
+  state.busy = false;
+  state.activeTurn = null;
+  document.body.classList.remove('is-working');
+  if (stopBtn) stopBtn.hidden = true;
+  $('sendBtn').disabled = pendingAttachments.some((file) => file.status !== 'ready');
+  $('sendBtn').textContent = 'ارسال ↑';
+  $('composerHint').textContent = '';
+  removeLiveTurnBar();
+  startTurnPolling(convId);
+  await reloadCurrentConversation({ syncWorkspace: true }).catch(() => {});
+  renderActiveCheckpointBanner();
   if (!opts.silentToast) {
-    toast(
-      pausedMarathonNow
-        ? '⏹ اجرای فعلی متوقف و ماراتن موقتاً مکث شد (برای ادامه ▶ یا توقف کامل ⏹ را بزنید)'
-        : '⏹ اجرای پاسخ متوقف شد و پیشرفت ذخیره گردید'
-    );
+    if (failed) {
+      toast('⚠️ توقف تأیید نشد؛ وضعیت سرور در حال بررسی است. ارسال جدید تا پایان نوبت قبلی رد می‌شود.', 5000);
+    } else if (result?.settled || result?.state === 'stopped' || result?.state === 'completed') {
+      toast(pausedMarathonNow
+        ? '⏹ توقف تأیید شد و ماراتن موقتاً مکث شد'
+        : '⏹ توقف تأیید شد؛ پیشرفت ذخیره‌شده بازخوانی شد');
+    } else {
+      toast('⏹ درخواست توقف ثبت شد؛ در حال همگام‌سازی پیشرفت…', 4000);
+    }
   }
 }
 
@@ -4474,14 +4539,26 @@ function applyOpenedConversationData(id, data, { preserveScroll = false } = {}) 
   // Re-attach to a still-running (server-headless) turn: show the working
   // surface and stream progress in via the poller.
   const turnActive = Boolean(data.turnActive || data.conversation?.turnActive);
+  state.activeTurn = data.turn ? { ...data.turn, conversationId: id } : null;
   if (conv) conv.turnActive = turnActive;
-  if (turnActive) {
+  if (turnActive && !data.turn?.stopRequested && !explicitlyStoppedConvs.has(id)) {
     state.busy = true;
     document.body.classList.add('is-working');
     if ($('stopTurnBtn')) $('stopTurnBtn').hidden = false;
     $('sendBtn').disabled = true;
     $('sendBtn').textContent = '✳…';
     ensureLiveTurnBar();
+    startTurnPolling(id);
+  } else if (turnActive) {
+    // Stop was accepted but the remote Worker is still flushing. Do not lock
+    // the composer behind a zombie; the poller will settle the durable state.
+    state.busy = false;
+    document.body.classList.remove('is-working');
+    if ($('stopTurnBtn')) $('stopTurnBtn').hidden = true;
+    $('sendBtn').disabled = pendingAttachments.some((file) => file.status !== 'ready');
+    $('sendBtn').textContent = 'ارسال ↑';
+    const bar = ensureLiveTurnBar();
+    bar.textContent = '⏹ درخواست توقف ثبت شد — در حال همگام‌سازی پیشرفت…';
     startTurnPolling(id);
   } else {
     removeLiveTurnBar();
@@ -7321,6 +7398,8 @@ async function sendMessage(overrideText, opts = {}) {
     renderEditor();
   }
 
+  if (!opts.silentAutoResume) explicitlyStoppedConvs.delete(state.conversationId);
+  const requestId = (globalThis.crypto?.randomUUID?.() || `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
   const turnToken = ++state.activeTurnToken;
   const turnConvId = state.conversationId;
   const chatAbort = new AbortController();
@@ -7366,6 +7445,7 @@ async function sendMessage(overrideText, opts = {}) {
   let scheduleAutoResumeNext = 0;
   let nextWaveChainPayload = null;
   let turnClean = true;
+  let reattachAfterDrop = false;
 
   let userMessage = null;
   let userBubble = null;
@@ -7417,6 +7497,7 @@ async function sendMessage(overrideText, opts = {}) {
   try {
     const reqBody = JSON.stringify({
       conversationId: state.conversationId,
+      requestId,
       message: text,
       attachments,
       model: resolvedModel,
@@ -7435,41 +7516,50 @@ async function sendMessage(overrideText, opts = {}) {
       ...(Array.isArray(opts.localExecResults) ? { localExecResults: opts.localExecResults } : {}),
       ...(effectiveTurnMarathon ? { marathon: effectiveTurnMarathon } : {}),
       ...(opts.resumeCheckpoint ? { resumeCheckpoint: true } : {}),
+      ...(opts.resumeTurnId ? { resumeTurnId: opts.resumeTurnId } : {}),
       ...(isSilentAutoResume ? { silentAutoResume: true } : {}),
       repo: state.repo ? { owner: state.repo.owner, repo: state.repo.repo, branch: state.repo.branch } : null
     });
-    let response;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      response = await fetch(API.chat, {
-        method: 'POST',
-        credentials: 'same-origin',
-        signal: chatAbort.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: reqBody
-      });
-      if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt === 0 && !chatAbort.signal.aborted) {
-        const ct = response.headers.get('Content-Type') || '';
-        if (!ct.includes('application/json')) {
-          await new Promise((r) => setTimeout(r, 700));
-          continue;
-        }
-      }
-      break;
-    }
+    // One POST per logical request. The server's requestId ledger makes a
+    // transport retry idempotent, but a raw edge 503 is still not a reason to
+    // blindly submit the same user message twice from the browser.
+    const response = await fetch(API.chat, {
+      method: 'POST',
+      credentials: 'same-origin',
+      signal: chatAbort.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: reqBody
+    });
 
     if (!isTurnCurrent()) return;
     if (!response.ok) {
       let data = null;
       try { data = await response.json(); } catch { /* ignore */ }
       const httpError = new Error((data && data.error) || `خطای سرور (${response.status})`);
-      // Carry the HTTP status so callers can tell "the server rejected this
-      // turn, nothing was stored" (4xx) apart from a transport failure.
       httpError.status = response.status;
-      httpError.code = data && data.code;
+      httpError.code = data?.code || `http_${response.status}`;
+      httpError.details = data?.details || null;
+      httpError.requestId = data?.requestId || response.headers.get('X-Request-Id') || requestId;
+      httpError.turnId = data?.details?.turnId || response.headers.get('X-Turn-Id') || '';
+      httpError.build = data?.build || response.headers.get('X-CodePilot-Build') || '';
+      httpError.rayId = response.headers.get('cf-ray') || '';
       throw httpError;
     }
     if (!(response.headers.get('Content-Type') || '').includes('text/event-stream')) {
       const data = await response.json();
+      if (data?.replayed) {
+        turnPersisted = true;
+        turnClean = false;
+        state.activeTurn = data.turnId ? { turnId: data.turnId, requestId: data.requestId || requestId, conversationId: turnConvId, active: false, state: data.state } : null;
+        await reloadCurrentConversation({ syncWorkspace: true });
+        if (data.state === 'stopped' || data.code === 'turn_stopped') {
+          renderActiveCheckpointBanner();
+        } else if (data.state === 'error' || data.code) {
+          bubble.className = 'msg assistant error';
+          bubble.textContent = 'خطا: ' + formatTurnError({ message: data.error || data.code, code: data.code, requestId: data.requestId, turnId: data.turnId });
+        }
+        return;
+      }
       throw new Error(data.error || 'پاسخ سرور قابل خواندن نیست');
     }
 
@@ -7518,6 +7608,7 @@ async function sendMessage(overrideText, opts = {}) {
           nextWaveChainPayload = {
             resumeCheckpoint: true,
             silentAutoResume: true,
+            resumeTurnId: result.turnId || result.checkpoint?.turnId || '',
             localExecResults,
             _forceCloudRunner: forceCloudNext,
             _localExecCount: localExecCount + 1,
@@ -7530,6 +7621,7 @@ async function sendMessage(overrideText, opts = {}) {
         nextWaveChainPayload = {
           resumeCheckpoint: true,
           silentAutoResume: true,
+          resumeTurnId: result.turnId || result.checkpoint?.turnId || '',
           _localExecCount: localExecCount,
           _waveCount: waveCount + 1,
           _waveTouched: mergedTouched,
@@ -7582,60 +7674,13 @@ async function sendMessage(overrideText, opts = {}) {
       }
     } else if (result.clientNetworkDropped && !chatAbort.signal.aborted) {
       turnClean = false;
+      reattachAfterDrop = true;
       const vEl = bubble.querySelector('.claude-verb');
-      if (vEl) vEl.textContent = '🔄 نوسان اینترنت تشخیص داده شد — بررسی وضعیت ذخیره در سرور…';
-      let recoveredFromD1 = false;
-      for (let poll = 0; poll < 3; poll += 1) {
-        await new Promise((r) => setTimeout(r, 1300));
-        if (!isTurnCurrent() || chatAbort.signal.aborted) return;
-        try {
-          const snap = await api(`${API.conversations}/${encodeURIComponent(state.conversationId)}?lite=1&limit=90`);
-          if (!isTurnCurrent()) return;
-          const snapMsgs = snap.messages || [];
-          const hasAssistantReply = snapMsgs.length > msgCountBeforeTurn && snapMsgs.at(-1)?.role === 'assistant';
-          if (hasAssistantReply && !snap.checkpoint?.active) {
-            state.messages = snapMsgs;
-            state.hasOlderMessages = Boolean(snap.hasOlderMessages);
-            state.oldestSeq = snap.oldestSeq ?? (snapMsgs.length ? snapMsgs[0].seq : null);
-            state.activeCheckpoint = null;
-            if (snap.workspace) {
-              state.workspace = normalizeWorkspace(snap.workspace);
-              renderTree();
-              renderEditor();
-            }
-            putConvCache(state.conversationId, snap);
-            renderChat();
-            recoveredFromD1 = true;
-            break;
-          }
-          if (snap.checkpoint?.active) {
-            state.activeCheckpoint = snap.checkpoint;
-            break;
-          }
-        } catch { /* retry next poll */ }
-      }
-      if (!recoveredFromD1 && isTurnCurrent()) {
-        await reloadCurrentConversation({ syncWorkspace: true });
-        const ckReason = state.activeCheckpoint?.reason || 'stream_cutoff';
-        const isHardStop =
-          ckReason === 'quota_exhausted' ||
-          ckReason === 'auth_failed' ||
-          ckReason === 'rate_limited' ||
-          ckReason === 'user_stopped';
-        if (!isHardStop && autoRetryCount < 2) {
-          scheduleAutoResumeNext = autoRetryCount + 1;
-        } else {
-          if (!state.activeCheckpoint?.active) {
-            state.activeCheckpoint = {
-              active: true,
-              reason: 'stream_cutoff',
-              errorMessage: 'ارتباط اینترنت در میانه دریافت پاسخ قطع شد. روی ادامه بزنید تا از همین نقطه ادامه یابد.',
-              touchedFiles: result.touchedFiles || []
-            };
-          }
-          renderActiveCheckpointBanner();
-        }
-      }
+      if (vEl) vEl.textContent = '🔄 اتصال استریم قطع شد — بازاتصال به نوبت ذخیره‌شده در سرور…';
+      setSync('busy', 'بازاتصال به نوبت فعال سرور (بدون درخواست مدل جدید)…');
+      // Re-attach by polling the fenced D1 lease. Do NOT silentAutoResume here:
+      // the original Worker may still be running under waitUntil.
+      startTurnPolling(turnConvId, { immediate: false });
     } else if (result.clientNetworkDropped && chatAbort.signal.aborted) {
       turnClean = false;
       // User clicked Stop (`stopCurrentTurn`) — reload persisted checkpoint cleanly without treating as network drop!
@@ -7657,6 +7702,7 @@ async function sendMessage(overrideText, opts = {}) {
         nextWaveChainPayload = {
           resumeCheckpoint: true,
           silentAutoResume: true,
+          resumeTurnId: result.turnId || result.checkpoint?.turnId || '',
           _waveCount: waveCount + 1,
           _waveTouched: mergedTouched,
           _waveDeleted: mergedDeleted
@@ -7686,17 +7732,29 @@ async function sendMessage(overrideText, opts = {}) {
     // bubble must not survive it (see the finally block below).
     turnRejected = Boolean(error?.status && error.status >= 400 && error.status < 500);
     if (!isTurnCurrent()) return;
-    if (chatAbort.signal.aborted || error?.name === 'AbortError') {
+    if (error?.code === 'turn_active') {
+      reattachAfterDrop = true;
+      turnRejected = true;
+      state.activeTurn = {
+        conversationId: turnConvId,
+        turnId: error.turnId || error.details?.turnId || '',
+        requestId: error.details?.requestId || '',
+        active: true,
+        state: error.details?.state || 'running'
+      };
+      startTurnPolling(turnConvId, { immediate: false });
+    } else if (chatAbort.signal.aborted || error?.name === 'AbortError') {
       await reloadCurrentConversation({ syncWorkspace: true });
       renderActiveCheckpointBanner();
     } else {
+      const displayError = formatTurnError(error);
       const existingText = bubble.querySelector('.msg-text')?.textContent?.trim() || '';
       if (!existingText) {
         bubble.className = 'msg assistant error';
-        bubble.textContent = 'خطا: ' + error.message;
-        state.messages.push({ role: 'assistant', content: 'خطا: ' + error.message, created_at: Date.now() });
+        bubble.textContent = 'خطا: ' + displayError;
+        state.messages.push({ role: 'assistant', content: 'خطا: ' + displayError, created_at: Date.now() });
       } else {
-        bubble.insertAdjacentHTML('beforeend', `<div class="notice bad" style="margin-top:8px">خطا: ${esc(error.message)}</div>`);
+        bubble.insertAdjacentHTML('beforeend', `<div class="notice bad" style="margin-top:8px">خطا: ${esc(displayError)}</div>`);
       }
       if (state.activeCheckpoint?.active) renderActiveCheckpointBanner();
     }
@@ -7730,16 +7788,32 @@ async function sendMessage(overrideText, opts = {}) {
     }
     bubble.querySelector('.claude-spinner-bar')?.remove();
     bubble.querySelector('.msg-text')?.classList.remove('stream-cursor');
-    state.busy = false;
-    document.body.classList.remove('is-working');
-    if ($('stopTurnBtn')) $('stopTurnBtn').hidden = true;
-    renderAttachments();
-    $('sendBtn').textContent = 'ارسال ↑';
-    $('composerHint').textContent = '';
-    setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
+    if (reattachAfterDrop && !chatAbort.signal.aborted) {
+      // The stream died, not the server lease. Keep the working surface and
+      // let the poller (not a new model POST) decide when it is safe to type.
+      state.busy = true;
+      document.body.classList.add('is-working');
+      if ($('stopTurnBtn')) $('stopTurnBtn').hidden = false;
+      $('sendBtn').disabled = true;
+      $('sendBtn').textContent = '✳…';
+      $('composerHint').textContent = 'بازاتصال به نوبت سرور…';
+      ensureLiveTurnBar();
+      startTurnPolling(turnConvId, { immediate: false });
+    } else {
+      state.busy = false;
+      document.body.classList.remove('is-working');
+      if ($('stopTurnBtn')) $('stopTurnBtn').hidden = true;
+      renderAttachments();
+      $('sendBtn').textContent = 'ارسال ↑';
+      $('sendBtn').disabled = pendingAttachments.some((file) => file.status !== 'ready');
+      $('composerHint').textContent = '';
+      setSync('on', 'همگام با ابر · ' + (state.auth?.user?.email || ''));
+    }
     syncAgentUi();
     loadConversations();
-    if (nextWaveChainPayload) {
+    if (reattachAfterDrop) {
+      // No wave/auto-retry scheduling while re-attaching.
+    } else if (nextWaveChainPayload) {
       const syncMsg = Array.isArray(nextWaveChainPayload.localExecResults)
         ? '📱 خروجی Termux آماده شد · ارسال به مدل و ادامه…'
         : `🌊 انتقال خودکار به موج ${faNum((nextWaveChainPayload._waveCount || 1) + 1)}…`;
@@ -7756,6 +7830,7 @@ async function sendMessage(overrideText, opts = {}) {
           sendMessage('ادامه', {
             resumeCheckpoint: true,
             silentAutoResume: true,
+            resumeTurnId: state.activeCheckpoint?.turnId || '',
             _autoRetryCount: scheduleAutoResumeNext,
             _waveCount: waveCount,
             _waveTouched: priorWaveTouched,
@@ -7780,6 +7855,8 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
   let userStopped = false;
   let serverErrorReceived = false;
   let clientNetworkDropped = false;
+  let serverTurnId = '';
+  let serverRequestId = '';
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -7798,6 +7875,11 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
 
   const handle = (event, data) => {
     if (!isTurnCurrent()) return;
+    if (data?.turnId) {
+      serverTurnId = String(data.turnId);
+      serverRequestId = String(data.requestId || serverRequestId || '');
+      state.activeTurn = { conversationId: state.conversationId, turnId: serverTurnId, requestId: serverRequestId, active: event !== 'done' && event !== 'stopped' && event !== 'error', state: event === 'done' ? 'completed' : event === 'stopped' ? 'stopped' : event === 'error' ? 'error' : 'running' };
+    }
     if (event === 'status') {
       if (Number(data.step) > 0) currentStep = Number(data.step);
       if (Number(data.maxSteps) > 0) currentMaxSteps = Number(data.maxSteps);
@@ -8133,7 +8215,12 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
         renderActiveCheckpointBanner();
         return;
       }
-      throw new Error(data.error || 'خطای پردازش');
+      const streamErr = new Error(data.error || 'خطای پردازش');
+      streamErr.code = data.code || 'chat_failed';
+      streamErr.turnId = data.turnId || serverTurnId;
+      streamErr.requestId = data.requestId || serverRequestId;
+      streamErr.build = data.build || '';
+      throw streamErr;
     }
   };
 
@@ -8196,7 +8283,10 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
     clientNetworkDropped,
     text: assistantText,
     touchedFiles,
-    deletedFiles
+    deletedFiles,
+    turnId: serverTurnId,
+    requestId: serverRequestId,
+    checkpoint: state.activeCheckpoint || null
   };
 }
 

@@ -1,11 +1,11 @@
--- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 10).
+-- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 11).
 --
 -- OPTIONAL: the app bootstraps and migrates this schema automatically on the
 -- first request (ensureSchema), so running this file is not required. It exists
 -- for transparency and for review: `npm run db:schema` executes it explicitly.
 --
 -- The CREATE statements are idempotent (IF NOT EXISTS), and the columns that
--- older deployments gained through migrations (v1 → v10) are already inlined
+-- older deployments gained through migrations (v1 → v11) are already inlined
 -- here, so a fresh database ends up identical to a fully-migrated one.
 
 -- ---------------------------------------------------------------- users -----
@@ -127,19 +127,54 @@ CREATE TABLE IF NOT EXISTS workspace_file_chunks (
    PRIMARY KEY (conversation_id, path, part)
 );
 
--- ------------------------------------------------- active turns (v10) ----
--- Cross-isolate visibility of in-flight turns: a turn keeps running after
--- the client disconnects (headless mode), so any isolate must be able to
--- (a) see that a conversation is busy, (b) request a graceful stop.
+-- ------------------------------------------------- active turns (v11) ----
+-- Fenced cross-isolate leases. A live row is never superseded; Stop does not
+-- extend the lease; terminal rows remain briefly for status/duplicate reads.
 CREATE TABLE IF NOT EXISTS active_turns (
    conversation_id TEXT PRIMARY KEY,
    owner TEXT NOT NULL,
    started_at INTEGER NOT NULL,
    updated_at INTEGER NOT NULL,
-   stop_requested INTEGER NOT NULL DEFAULT 0
+   stop_requested INTEGER NOT NULL DEFAULT 0,
+   turn_id TEXT NOT NULL DEFAULT '',
+   request_id TEXT NOT NULL DEFAULT '',
+   lease_expires_at INTEGER NOT NULL DEFAULT 0,
+   state TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS active_turns_owner
    ON active_turns(owner, started_at);
+
+-- Idempotent chat admission ledger (one row per client request id).
+CREATE TABLE IF NOT EXISTS turn_requests (
+   owner TEXT NOT NULL,
+   request_id TEXT NOT NULL,
+   conversation_id TEXT NOT NULL,
+   turn_id TEXT NOT NULL DEFAULT '',
+   payload_hash TEXT NOT NULL DEFAULT '',
+   stop_requested INTEGER NOT NULL DEFAULT 0,
+   created_at INTEGER NOT NULL,
+   updated_at INTEGER NOT NULL,
+   state TEXT NOT NULL DEFAULT 'running',
+   outcome TEXT NOT NULL DEFAULT '{}',
+   PRIMARY KEY (owner, request_id)
+);
+CREATE INDEX IF NOT EXISTS turn_requests_conv
+   ON turn_requests(owner, conversation_id, created_at);
+
+-- Shared rolling provider-call budget, keyed by a hash of the credential.
+CREATE TABLE IF NOT EXISTS provider_calls (
+   call_id TEXT PRIMARY KEY,
+   bucket TEXT NOT NULL,
+   started_at INTEGER NOT NULL,
+   expires_at INTEGER NOT NULL,
+   state TEXT NOT NULL DEFAULT 'running'
+);
+CREATE INDEX IF NOT EXISTS provider_calls_bucket_time
+   ON provider_calls(bucket, started_at);
+CREATE TABLE IF NOT EXISTS provider_limits (
+   bucket TEXT PRIMARY KEY,
+   cooldown_until INTEGER NOT NULL DEFAULT 0
+);
 
 -- -------------------------------------------------------------- uploads ----
 CREATE TABLE IF NOT EXISTS uploads (
@@ -193,5 +228,5 @@ CREATE TABLE IF NOT EXISTS meta (
    key TEXT PRIMARY KEY,
    value TEXT NOT NULL
 );
-INSERT INTO meta(key, value) VALUES ('schema_version', '10')
+INSERT INTO meta(key, value) VALUES ('schema_version', '11')
    ON CONFLICT(key) DO UPDATE SET value = excluded.value;

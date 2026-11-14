@@ -1,6 +1,8 @@
 // Small runtime helpers shared by every Pages Function.
 // Runs on the Cloudflare Workers runtime: Web APIs only (no Node built-ins).
 
+import { BUILD_VERSION } from './build.js';
+
 const textEncoder = new TextEncoder();
 
 export class HttpError extends Error {
@@ -21,7 +23,8 @@ const BASE_HEADERS = {
   'Cache-Control': 'no-store, no-cache, must-revalidate, private',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  Vary: 'Cf-Access-Jwt-Assertion'
+  Vary: 'Cf-Access-Jwt-Assertion',
+  'X-CodePilot-Build': BUILD_VERSION
 };
 
 export function json(body, status = 200, headers = {}) {
@@ -36,17 +39,21 @@ export function json(body, status = 200, headers = {}) {
 }
 
 /** Convert any thrown value into a safe JSON error response. */
-export function errorResponse(error) {
+export function errorResponse(error, { requestId = '' } = {}) {
   if (error instanceof HttpError) {
+    const headers = {};
+    const retryAfterMs = Number(error.extra?.retryAfterMs || error.retryAfterMs || 0);
+    if (error.status === 429 && retryAfterMs > 0) headers['Retry-After'] = String(Math.ceil(retryAfterMs / 1000));
     return json(
-      { error: error.message, code: error.code, ...(error.extra ? { details: error.extra } : {}) },
-      error.status
+      { error: error.message, code: error.code, build: BUILD_VERSION, ...(requestId ? { requestId } : {}), ...(error.extra ? { details: error.extra } : {}) },
+      error.status,
+      headers
     );
   }
   // Never leak provider internals or stack traces to the browser.
   console.error('unhandled', error && error.name ? error.name : 'Error');
   return json(
-    { error: 'خطای غیرمنتظره در سرور رخ داد. دوباره تلاش کنید.', code: 'internal' },
+    { error: 'خطای غیرمنتظره در سرور رخ داد. دوباره تلاش کنید.', code: 'internal', build: BUILD_VERSION, ...(requestId ? { requestId } : {}) },
     500
   );
 }

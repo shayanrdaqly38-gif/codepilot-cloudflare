@@ -18,6 +18,7 @@ import {
   saveDiscoveredSpec
 } from './provider.js';
 import { applyPromptCacheBreakpoints } from './token-optimizer.js';
+import { reserveProviderCall, recordProviderCooldown, parseRetryAfterMs, providerBucketForCredential } from './provider-budget.js';
 
 export const ALLOWED_TOOLS = new Set([
   'think',
@@ -2962,13 +2963,90 @@ export function compactMessagesForRetry(messages, level = 1) {
 function computeRateLimitWaitMs(headers, attemptIdx, env) {
   const testOverride = Number(env?._rateLimitWaitMs);
   if (Number.isFinite(testOverride) && testOverride > 0) return testOverride;
-  const retryAfterRaw = headers?.get?.('retry-after') || headers?.get?.('x-ratelimit-reset-requests') || '';
-  const parsedSec = Number.parseFloat(String(retryAfterRaw).replace(/s$/i, ''));
-  if (Number.isFinite(parsedSec) && parsedSec > 0) {
-    return Math.min(Math.max(Math.ceil(parsedSec * 1000), 1200), 10_000);
-  }
+  // Honor the server's ask exactly. A long Retry-After is returned to the
+  // caller as a checkpoint, never shortened to fit inside this Worker.
+  const retryAfterMs = parseRetryAfterMs(headers);
+  if (retryAfterMs > 0) return retryAfterMs;
   const schedule = [2000, 4200, 7500];
   return schedule[Math.min(attemptIdx, schedule.length - 1)];
+}
+
+async function abortableSleep(ms, signal) {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) {
+    const err = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+    err.status = 499; err.code = 'turn_stopped';
+    throw err;
+  }
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      const err = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
+      err.status = 499; err.code = 'turn_stopped';
+      reject(err);
+    };
+    signal.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
+async function fetchProviderAttempt(env, apiKey, endpoint, init, timeoutMs) {
+  const reservation = await reserveProviderCall(env, { apiKey, timeoutMs, signal: init.signal });
+  if (!reservation.allowed) {
+    const err = new Error(
+      reservation.aborted
+        ? 'اجرای پاسخ توسط کاربر متوقف شد.'
+        : `سقف درخواست‌های این کلید پر است؛ ${Math.ceil((reservation.retryAfterMs || 1000) / 1000)} ثانیه دیگر ادامه دهید.`
+    );
+    err.status = reservation.aborted ? 499 : 429;
+    err.code = reservation.aborted ? 'turn_stopped' : 'model_rate_limited';
+    err.retryAfterMs = reservation.retryAfterMs || 0;
+    err.providerBudgetDenied = true;
+    throw err;
+  }
+  try {
+    const response = await fetch(endpoint, init);
+    // Keep the in-flight lease until the body is fully consumed/cancelled.
+    // JSON error paths call response.text(); SSE paths read to EOF. Wrapping
+    // the body covers both without sprinkling releases through every branch.
+    if (!response.body) {
+      await reservation.release();
+      return response;
+    }
+    const reader = response.body.getReader();
+    let released = false;
+    const release = async () => {
+      if (released) return;
+      released = true;
+      await reservation.release();
+    };
+    const body = new ReadableStream({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            await release();
+            controller.close();
+            return;
+          }
+          controller.enqueue(value);
+        } catch (error) {
+          await release();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try { await reader.cancel(reason); } finally { await release(); }
+      }
+    });
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  } catch (error) {
+    await reservation.release();
+    throw error;
+  }
 }
 
 function extractGatewayHost(urlStr) {
@@ -3119,7 +3197,7 @@ export async function callModel(env, payload) {
       }
       return res;
     } catch (err) {
-      if (singleGw && env?._owner && isFailoverEligibleError(err)) {
+      if (singleGw && env?._owner && isFailoverEligibleError(err) && !err.providerBudgetDenied) {
         await recordGatewayOutcome(env, env._owner, singleGw, {
           ok: false,
           status: err?.status,
@@ -3211,7 +3289,7 @@ export async function callModel(env, payload) {
       if (env && typeof env === 'object' && env._stickyGatewayId === gw.id) {
         env._stickyGatewayId = '';
       }
-      if (env?._owner && isFailoverEligibleError(err)) {
+      if (env?._owner && isFailoverEligibleError(err) && !err.providerBudgetDenied) {
         await recordGatewayOutcome(env, env._owner, gw, {
           ok: false,
           status: err?.status,
@@ -3383,7 +3461,7 @@ async function callModelOnProvider(env, payload) {
         const combinedSignal = payload.signal
           ? AbortSignal.any([payload.signal, AbortSignal.timeout(effectiveAttemptTimeout)])
           : AbortSignal.timeout(effectiveAttemptTimeout);
-        response = await fetch(endpoint, {
+        response = await fetchProviderAttempt(env, primaryKeyPool[activeKeyIdx] || env.MODEL_API_KEY, endpoint, {
           method: 'POST',
           redirect: 'manual',
           signal: combinedSignal,
@@ -3394,9 +3472,10 @@ async function callModelOnProvider(env, payload) {
             ...providerExtraHeaders(baseUrl)
           },
           body
-        });
+        }, effectiveAttemptTimeout);
       } catch (error) {
         lastStatus = 0;
+        if (error?.providerBudgetDenied) throw error;
         if (error?.code === 'turn_stopped' || payload.signal?.aborted) {
           const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
           stopErr.status = 499;
@@ -3413,7 +3492,7 @@ async function callModelOnProvider(env, payload) {
         const isTimeoutErr = error?.name === 'TimeoutError' || error?.name === 'AbortError';
         if (netRetries === 0 && cIndex === 0 && !env?._hasNextGateway && !isTimeoutErr) {
           netRetries += 1;
-          await sleep(400);
+          await abortableSleep(400, payload.signal);
           continue;
         }
         if (cIndex + 1 < candidates.length) break;
@@ -3478,7 +3557,7 @@ async function callModelOnProvider(env, payload) {
           if (statusRetries === 0 && cIndex === 0) {
             statusRetries += 1;
             if (streamThisAttempt) forceNonStreamFallback = true;
-            await sleep(450);
+            await abortableSleep(450, payload.signal);
             continue;
           }
           if (cIndex + 1 < candidates.length) break;
@@ -3497,7 +3576,7 @@ async function callModelOnProvider(env, payload) {
           if (!hasVisibleProse && netRetries < 2 && cIndex === 0) {
             netRetries += 1;
             if (netRetries === 2 && streamThisAttempt) forceNonStreamFallback = true;
-            await sleep(450 * netRetries);
+            await abortableSleep(450 * netRetries, payload.signal);
             continue;
           }
           if (snap.hasTruncatedToolCall || !hasVisibleProse) {
@@ -3519,7 +3598,7 @@ async function callModelOnProvider(env, payload) {
           if (statusRetries === 0 && cIndex === 0) {
             statusRetries += 1;
             if (streamThisAttempt) forceNonStreamFallback = true;
-            await sleep(450);
+            await abortableSleep(450, payload.signal);
             continue;
           }
           fail('پاسخ مدل ساختار معتبری نداشت. دوباره تلاش کنید یا «ادامه» بزنید.', 502, 'model_empty');
@@ -3723,28 +3802,47 @@ async function callModelOnProvider(env, payload) {
           errText
         );
 
-      // Smart multi-step 429 Rate-Limit backoff during live `/api/chat` streaming (`onDelta` active):
-      // Skip backoff sleeps when `isDailyQuota429` OR when another backup gateway (`env._hasNextGateway`) is ready to take over immediately!
-      if (status === 429 && !isDailyQuota429 && !env?._hasNextGateway && typeof payload.onDelta === 'function' && rateLimitRetries < 3 && cIndex === 0) {
+      // A 429 is handled once for every caller (chat, summary, probe). The
+      // provider's Retry-After is a lower bound, never a value to clamp down.
+      if (status === 429 && !isDailyQuota429) {
         const waitMs = computeRateLimitWaitMs(response.headers, rateLimitRetries, env);
-        rateLimitRetries += 1;
-        try {
-          payload.onDelta({ type: 'rate_limit_wait', waitMs, attempt: rateLimitRetries });
-        } catch { /* ignore */ }
-        await sleep(waitMs);
-        continue;
+        const activeKey = primaryKeyPool[activeKeyIdx] || env.MODEL_API_KEY;
+        const bucket = await providerBucketForCredential(activeKey);
+        await recordProviderCooldown(env, bucket, waitMs).catch(() => {});
+        const canWaitInline =
+          !env?._hasNextGateway &&
+          typeof payload.onDelta === 'function' &&
+          rateLimitRetries < 3 &&
+          cIndex === 0 &&
+          waitMs <= 10_000 &&
+          !payload.signal?.aborted;
+        if (canWaitInline) {
+          rateLimitRetries += 1;
+          try {
+            payload.onDelta({ type: 'rate_limit_wait', waitMs, attempt: rateLimitRetries });
+          } catch { /* ignore */ }
+          await abortableSleep(waitMs, payload.signal);
+          continue;
+        }
+        const rateErr = new Error(
+          `سهمیه‌ی لحظه‌ای سرویس مدل پر شده است؛ ${Math.ceil(waitMs / 1000)} ثانیه دیگر ادامه دهید.`
+        );
+        rateErr.status = 429;
+        rateErr.code = 'model_rate_limited';
+        rateErr.retryAfterMs = waitMs;
+        throw rateErr;
       }
 
       if (
         !isDailyQuota429 &&
         !env?._hasNextGateway &&
-        (status === 408 || status === 429 || status === 499 || status === 500 || status === 502 || status === 503 || status === 504) &&
+        (status === 408 || status === 499 || status === 500 || status === 502 || status === 503 || status === 504) &&
         statusRetries === 0 &&
         rateLimitRetries === 0 &&
         cIndex === 0
       ) {
         statusRetries += 1;
-        await sleep(status === 429 ? 900 : 500);
+        await abortableSleep(500, payload.signal);
         continue;
       }
 
