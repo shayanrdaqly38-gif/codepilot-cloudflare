@@ -348,10 +348,78 @@ export function createAgentControl({ powerProfile = {}, maxSteps = 20, originalG
   return { beforeTool, afterTool, beginStep, endStep, snapshot, invalidateWorkspace };
 }
 
+/** True when the model's whole reply is a bare "done/انجام شد" claim with no
+ *  substance. Used to refuse fabricated or evidence-free completion claims. */
+export function isBareCompletionClaim(text) {
+  const s = String(text || '')
+    .replace(/[‌‏‎]/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+  if (!s || s.length > 60) return false;
+  return /^(?:انجام(?:ش)? (?:شد|دادم)|کار (?:انجام|تمام) شد|تمام(?:ش)? (?:شد|کردم)|تموم شد|به پایان رسید|درست شد|حل شد|باشه|حله|اوکی|done|completed|finished|all done|task (?:completed|done)|fixed|ok|okay)$/.test(s);
+}
+
+export function isSmallTalk(text) {
+  const s = String(text || '').trim();
+  if (!s || s.length > 80) return false;
+  return /^(?:(?:سلام|درود|خوبی|چطوری|چه خبر|مرسی|ممنون|سپاس|تشکر|خسته نباشی|خسته نباشید|اوکی|باشه|حله|عالی|دمت گرم|hi|hello|hey|thanks|thank you|ok|okay|cool|nice)[.!؟?،,\s]*){1,3}$/i.test(s);
+}
+
+export function turnHasConcreteEvidence(turn = {}, checkpoint = null) {
+  const commands = Array.isArray(turn.commands) ? turn.commands : [];
+  return Boolean(
+    (Number(turn.editCount) || 0) > 0 ||
+    (turn.deleted?.size || 0) > 0 ||
+    turn.workspaceChanged ||
+    (Array.isArray(turn.generatedImages) && turn.generatedImages.length > 0) ||
+    commands.some((c) => c?.ok && c?.mode !== 'virtual') ||
+    (Array.isArray(checkpoint?.touchedFiles) && checkpoint.touchedFiles.length > 0) ||
+    (Array.isArray(checkpoint?.deletedFiles) && checkpoint.deletedFiles.length > 0)
+  );
+}
+
+export function buildConcreteCompletionSummary(turn = {}, { claim = '' } = {}) {
+  const lines = [];
+  const cleanClaim = String(claim || '').trim();
+  if (cleanClaim) lines.push(cleanClaim);
+  const touched = [...(turn.touched || [])].filter((p) => p && !String(p).startsWith('('));
+  const deleted = [...(turn.deleted || [])];
+  const changed = [...new Set([...touched, ...deleted])];
+  if (changed.length) {
+    lines.push(`تغییرات ذخیره‌شده: ${changed.slice(0, 12).map((p) => `\`${p}\``).join('، ')}${changed.length > 12 ? ' و چند فایل دیگر' : ''}.`);
+  }
+  const realCommands = (Array.isArray(turn.commands) ? turn.commands : []).filter((c) => c?.ok && c?.mode !== 'virtual');
+  if (realCommands.length) {
+    lines.push(`اجرای موفق: ${realCommands.slice(0, 4).map((c) => `\`${String(c.command || '').slice(0, 80)}\``).join('، ')}.`);
+  }
+  const broken = (Array.isArray(turn.validation) ? turn.validation : []).filter((v) => v && v.ok === false);
+  if (broken.length) {
+    lines.push(`هشدار اعتبارسنجی: ${broken.slice(0, 4).map((v) => `\`${v.path}\``).join('، ')}.`);
+  } else if (changed.length && !realCommands.length) {
+    lines.push('تست اجرایی جداگانه‌ای در این نوبت ثبت نشد.');
+  }
+  if (Array.isArray(turn.generatedImages) && turn.generatedImages.length) {
+    lines.push(`${turn.generatedImages.length} تصویر تولید و ذخیره شد.`);
+  }
+  return lines.join('\n\n') || cleanClaim;
+}
+
+export function buildUnverifiedCompletionMessage(claim = '', turn = {}) {
+  const quoted = String(claim || '').trim() || 'انجام شد';
+  const changed = [...(turn.touched || []), ...(turn.deleted || [])].filter((p) => p && !String(p).startsWith('('));
+  const lines = [
+    `[ارزیابی سیستم] مدل پاسخ «${quoted.slice(0, 120)}» داد، اما این ادعا بدون شاهد پذیرفته نشد: در این نوبت تغییر فایل، اجرای واقعی، تصویر یا پاسخ مشخصی ثبت نشد.`,
+    changed.length ? `فایل‌های دارای تغییر قبلی: ${changed.slice(0, 8).join('، ')}.` : 'هیچ فایلی در این نوبت تغییر نکرد.',
+    'برای ادامه، دقیقاً بگو کدام فایل/بخش باید تغییر کند، چه خطایی بررسی شود، یا چه معیار پایانی مدنظرت است.'
+  ];
+  return lines.join('\n\n');
+}
+
 export function buildControlStopMessage(controlStop, { touchedFiles = [], deletedFiles = [] } = {}) {
   const changed = [...new Set([...(touchedFiles || []), ...(deletedFiles || [])])].filter((p) => p && !p.startsWith('('));
   const lines = [];
-  lines.push('⏹ اجرای خودکار را متوقف کردم چون چند گام پیاپی پیشرفت تازه‌ای نداشتند (تکرار ابزار، فکرکردن بدون اقدام، یا ویرایش بی‌نتیجه).');
+  lines.push('⏹ [ارزیابی سیستم] اجرای خودکار را متوقف کردم چون چند گام پیاپی پیشرفت تازه‌ای نداشتند (تکرار ابزار، فکرکردن بدون اقدام، یا ویرایش بی‌نتیجه).');
   lines.push('این توقف برای جلوگیری از مصرف بی‌نتیجهٔ درخواست‌ها و سهمیه است؛ خطای سرور نیست.');
   if (changed.length) {
     lines.push(`تغییرات ذخیره‌شده تا این نقطه: ${changed.slice(0, 12).map((p) => `\`${p}\``).join('، ')}${changed.length > 12 ? ' و چند فایل دیگر' : ''}.`);

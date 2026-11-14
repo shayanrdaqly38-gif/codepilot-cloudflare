@@ -7,6 +7,7 @@
 //     the agent resumes from the EXACT cutoff point without restarting from step 1.
 
 import { ensureSchema } from './schema.js';
+import { isBareCompletionClaim } from './agent-control.js';
 import { envSecrets, redactSecrets, sha256Hex, truncate } from './util.js';
 
 const CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -262,13 +263,16 @@ export function buildCheckpointResumeDirective(ckpt, workspace) {
   if (Array.isArray(ckpt.completedTools) && ckpt.completedTools.length) {
     lines.push(`- عملیات‌های تکمیل‌شده قبلی: ${ckpt.completedTools.join(' → ')}`);
   }
+  if (ckpt.reason === 'unverified_completion') {
+    lines.push('- ادعای قبلی «انجام شد» بدون شاهد رد شد؛ آن را متن یا قول خودت فرض نکن. فقط کار تأییدشده را ادامه بده و در پایان دقیقاً بگو چه چیزی تغییر کرد.');
+  }
   if (ckpt.interruptedToolCall?.name) {
     const t = ckpt.interruptedToolCall;
     lines.push(
       `- عملیات ناتمام در لحظه قطع‌شدن: ابزار \`${t.name}\`${t.targetPath ? ` روی «${t.targetPath}»` : ''} وسط استریم قطع شد و اجرا نشد. ابتدا وضعیت فعلی فایل‌ها را در صورت نیاز با \`read_file\` ببین و دقیقاً از همین مرحله ادامه بده.`
     );
   }
-  if (ckpt.partialTextTail) {
+  if (ckpt.partialTextTail && !isBareCompletionClaim(ckpt.partialTextTail)) {
     lines.push(
       `- متن/کد قبلی تا ${ckpt.partialTextChars} کاراکتر نوشته شد و دقیقاً در انتهای قطعه زیر قطع شد:`,
       '<cutoff_point>',

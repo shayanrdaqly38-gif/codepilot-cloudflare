@@ -51,7 +51,7 @@ function sse(text) {
     data: JSON.parse(block.match(/^data: (.+)$/m)?.[1] || '{}')
   }));
 }
-function reply(content = 'انجام شد') {
+function reply(content = 'پاسخ آزمایشی کامل است.') {
   return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }), {
     status: 200, headers: { 'Content-Type': 'application/json' }
   });

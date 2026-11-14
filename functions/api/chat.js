@@ -73,7 +73,15 @@ import {
 } from '../_lib/active-turn.js';
 import { clearTurnCheckpointForTurn } from '../_lib/checkpoint.js';
 import { BUILD_VERSION } from '../_lib/build.js';
-import { buildControlStopMessage, createAgentControl } from '../_lib/agent-control.js';
+import {
+  buildConcreteCompletionSummary,
+  buildControlStopMessage,
+  buildUnverifiedCompletionMessage,
+  createAgentControl,
+  isBareCompletionClaim,
+  isSmallTalk,
+  turnHasConcreteEvidence
+} from '../_lib/agent-control.js';
 import { envSecrets, fail, json, redactSecrets, sha256Hex, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
@@ -599,7 +607,11 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const lazyNote = lazyCount
         ? `\n(${lazyCount} very large file(s) were skipped by search — use read_file on them directly.)`
         : '';
-      return { ok: true, text: formatSearchHits(result) + lazyNote };
+      const regexHint =
+        !args.regex && !result.results.length && /[|*+?()[\]{}^$\\]/.test(String(args.query || ''))
+          ? '\n[Hint: the query contains regex metacharacters but regex:false was used, so it was matched literally. If you meant alternation/patterns, retry with regex:true; otherwise search a plain substring.]'
+          : '';
+      return { ok: true, text: formatSearchHits(result) + lazyNote + regexHint };
     }
 
     case 'list_symbols': {
@@ -1223,6 +1235,7 @@ export async function onRequestPost(context) {
         persistedMsgCount += tail.length;
       };
       let finalText = '';
+      let checkpointPartialText = '';
       let usedModel = '';
       let requestedModelUsed = selectedModel || '';
       let appliedEffort = reasoningEffort;
@@ -1238,6 +1251,9 @@ export async function onRequestPost(context) {
       let healedTextCarry = '';
       let autoHealCount = 0;
       const MAX_AUTO_HEALS = 3;
+      let completionNudges = 0;
+      const MAX_COMPLETION_NUDGES = 2;
+      let finalReplyEmitted = false;
       let turnInterruptedReason = '';
       let pendingLocalExecPayload = null;
       const completedToolsLog = [];
@@ -1937,6 +1953,7 @@ export async function onRequestPost(context) {
                   touchedFiles: [...turn.touched],
                   deletedFiles: [...turn.deleted]
                 });
+                finalReplyEmitted = true;
                 const stopGw = effectiveEnv._activeGateway || {
                   slot: 1,
                   baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
@@ -1980,6 +1997,7 @@ export async function onRequestPost(context) {
                   finalText = autoSummary;
                 }
                 stepStreamedContent = '';
+                finalReplyEmitted = true;
                 turn.savedRequests = (turn.savedRequests || 0) + 1;
                 const fastGw = effectiveEnv._activeGateway || {
                   slot: 1,
@@ -2054,6 +2072,31 @@ export async function onRequestPost(context) {
               }
             }
 
+            // Completion integrity gate: a bare "done/انجام شد" with no concrete
+            // evidence is not an acceptable final answer. Nudge the model a
+            // bounded number of times to either do the work or report the blocker.
+            const completionClaim = stitchedProse.trim();
+            const concreteEvidence = turnHasConcreteEvidence(turn, resumingFromCheckpoint ? existingCheckpoint : null);
+            if (
+              !turnInterruptedReason &&
+              !isSmallTalk(userText) &&
+              completionNudges < MAX_COMPLETION_NUDGES &&
+              steps < maxSteps &&
+              isBareCompletionClaim(completionClaim) &&
+              !concreteEvidence
+            ) {
+              completionNudges += 1;
+              healedTextCarry = '';
+              if (completionClaim) messages.push({ role: 'assistant', content: completionClaim });
+              messages.push({
+                role: 'user',
+                content:
+                  '[کنترل پایان کار موتور]: پاسخ قبلی فقط ادعای انجام بود ولی هیچ تغییر فایل، اجرای واقعی، تصویر یا پاسخ مشخصی ثبت نشد. اگر هدف کاربر هنوز باقی است، همین حالا بخش لازم را بخوان، ویرایش کن و بررسی کن؛ اگر مانعی داری دقیقاً بگو. بدون شاهد نگو «انجام شد». اگر واقعاً تمام شده، دقیقاً بگو چه چیزی تغییر کرد و چگونه تأیید شد.'
+              });
+              send('status', { phase: 'completion_check', attempt: completionNudges, step: steps, maxSteps });
+              continue;
+            }
+
             healedTextCarry = '';
             let missingImgMarkdown = '';
             if (Array.isArray(turn.generatedImages) && turn.generatedImages.length > 0) {
@@ -2065,24 +2108,41 @@ export async function onRequestPost(context) {
                     .join('\n\n') + '\n\n';
               }
             }
-            finalText = (missingImgMarkdown + stitchedProse.trim()).trim() || 'انجام شد.';
+            const honestProse = (missingImgMarkdown + stitchedProse.trim()).trim();
+            const concreteEvidenceNow = turnHasConcreteEvidence(turn, resumingFromCheckpoint ? existingCheckpoint : null);
+            if (honestProse && isBareCompletionClaim(honestProse) && !concreteEvidenceNow && !isSmallTalk(userText)) {
+              turnInterruptedReason = 'unverified_completion';
+              finalText = buildUnverifiedCompletionMessage(honestProse, turn);
+            } else if (honestProse) {
+              finalText = isBareCompletionClaim(honestProse) && concreteEvidenceNow
+                ? buildConcreteCompletionSummary(turn, { claim: honestProse })
+                : honestProse;
+            } else if (concreteEvidenceNow) {
+              finalText = buildConcreteCompletionSummary(turn);
+            } else {
+              finalText = '';
+            }
+            checkpointPartialText = isBareCompletionClaim(stitchedProse.trim()) ? '' : stitchedProse.trim();
+            finalReplyEmitted = true;
             stepStreamedContent = '';
             const turnActiveGw = effectiveEnv._activeGateway || {
               slot: 1,
               baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
             };
-            newMessages.push({
-              role: 'assistant',
-              content: finalText,
-              ...(usedModel ? { actual_model: usedModel } : {}),
-              ...(requestedModelUsed ? { requested_model: requestedModelUsed } : {}),
-              gateway_info: turnActiveGw,
-              ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
-              ...(appliedEffort && appliedEffort !== 'none' ? { reasoning_effort: appliedEffort } : {}),
-              ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
-              created_at: Date.now()
-            });
-            messages.push({ role: 'assistant', content: finalText });
+            if (finalText) {
+              newMessages.push({
+                role: 'assistant',
+                content: finalText,
+                ...(usedModel ? { actual_model: usedModel } : {}),
+                ...(requestedModelUsed ? { requested_model: requestedModelUsed } : {}),
+                gateway_info: turnActiveGw,
+                ...(result.reasoning ? { reasoning: result.reasoning.slice(0, 10_000) } : {}),
+                ...(appliedEffort && appliedEffort !== 'none' ? { reasoning_effort: appliedEffort } : {}),
+                ...(stepReasoningTokens > 0 ? { reasoning_tokens: stepReasoningTokens } : {}),
+                created_at: Date.now()
+              });
+              messages.push({ role: 'assistant', content: finalText });
+            }
             send('assistant', {
               content: finalText,
               interrupted: Boolean(turnInterruptedReason),
@@ -2098,7 +2158,7 @@ export async function onRequestPost(context) {
           const cumulativeStepsNow = priorCompletedSteps + steps;
           const nextWaveNumber = (Number(existingCheckpoint?.waveNumber) || 0) + 1;
 
-          if (!finalText && !isLocalExecHandoff) {
+          if (!finalReplyEmitted && !finalText && !isLocalExecHandoff) {
             if ((hitWaveBoundary || (newMessages.length > 0 && steps >= waveMaxSteps)) && cumulativeStepsNow < maxSteps) {
               // Clean Multi-Wave Handoff BEFORE Cloudflare Workers' 50-subrequest limit!
               isWaveHandoff = true;
@@ -2109,9 +2169,9 @@ export async function onRequestPost(context) {
             } else {
               finalText = 'پاسخی دریافت نشد. دوباره تلاش کنید.';
             }
-            if (finalText && !newMessages.some((m) => m.role === 'assistant' && m.content === finalText)) {
-              newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
-            }
+            // These are system status notices, not model speech. Do not persist
+            // them as assistant messages: the next turn must never see the
+            // server's fallback attributed to the model ("I didn't say that").
           }
 
           await flushNewMessagesTail();
@@ -2141,7 +2201,9 @@ export async function onRequestPost(context) {
               toolLedger: control.snapshot(),
               pendingLocalExec: isLocalExecHandoff ? pendingLocalExecPayload : null,
               partialContent:
-                isWaveHandoff || isLocalExecHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
+                isWaveHandoff || isLocalExecHandoff || turnInterruptedReason === 'step_limit' || turnInterruptedReason === 'unverified_completion'
+                  ? ''
+                  : checkpointPartialText
             }).catch(() => null);
           } else if (resumingFromCheckpoint || existingCheckpoint) {
             await clearTurnCheckpointForTurn(env, identity.owner, conversation.id, turnId).catch(() => {});
