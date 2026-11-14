@@ -66,11 +66,14 @@ import {
 } from '../_lib/store.js';
 import { registerActiveTurn } from '../_lib/turn-registry.js';
 import {
-  markTurnActive,
-  heartbeatTurnActive,
-  clearTurnActive
+  admitTurnRequest,
+  heartbeatTurn,
+  startTurnHeartbeat,
+  releaseTurn
 } from '../_lib/active-turn.js';
-import { envSecrets, fail, redactSecrets, stripSecrets } from '../_lib/util.js';
+import { clearTurnCheckpointForTurn } from '../_lib/checkpoint.js';
+import { BUILD_VERSION } from '../_lib/build.js';
+import { envSecrets, fail, json, redactSecrets, sha256Hex, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
 import { formatSearchHits, formatSymbols, listSymbols, searchWorkspace } from '../_lib/search.js';
@@ -922,22 +925,77 @@ export async function onRequestPost(context) {
     env,
     async ({ identity, data, setCookie, waitUntil }) => {
       const conversationId = String(data?.conversationId || '');
-      const preloadedWaveCkpt = conversationId
-        ? await loadTurnCheckpoint(env, identity.owner, conversationId).catch(() => null)
-        : null;
+      const rawText = typeof data?.message === 'string' ? data.message.trim() : '';
+      const hasAttachmentRefs = Array.isArray(data?.attachments) && data.attachments.length > 0;
+      if (!rawText && !hasAttachmentRefs) fail('متن پیام خالی است.', 400, 'empty_message');
+      if (rawText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
+      const conversation = await getConversation(env, identity.owner, conversationId);
+      const clientRequestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
+      if (clientRequestId && !/^[A-Za-z0-9_-]{8,80}$/.test(clientRequestId)) fail('شناسه درخواست معتبر نیست.', 400, 'bad_request_id');
+      const requestId = clientRequestId || `srv-${crypto.randomUUID()}`;
+      // Fingerprint the semantic payload, not multi-MB attachment bytes. A
+      // reused request id with different text/model/attachments is a conflict.
+      const payloadHash = await sha256Hex(JSON.stringify({
+        conversationId: conversation.id,
+        message: rawText,
+        attachments: (Array.isArray(data?.attachments) ? data.attachments : []).map((a) => ({
+          id: a?.id || a?.uploadId || '', name: a?.name || '', type: a?.type || '', size: a?.size || 0
+        })),
+        model: data?.model || '',
+        reasoningEffort: data?.reasoningEffort || '',
+        thinking: data?.thinking,
+        agentMode: data?.agentMode || '',
+        networkAccess: data?.networkAccess,
+        shellAccess: data?.shellAccess,
+        tokenSaver: data?.tokenSaver || '',
+        localRunner: data?.localRunner,
+        resumeCheckpoint: data?.resumeCheckpoint === true,
+        silentAutoResume: data?.silentAutoResume === true,
+        resumeTurnId: data?.resumeTurnId || '',
+        localExecResults: Array.isArray(data?.localExecResults) ? data.localExecResults.map((r) => r?.callId || '') : []
+      }));
+      const admission = await admitTurnRequest(env, identity.owner, conversation.id, { requestId, payloadHash });
+      if (admission.status === 'conflict') fail('این شناسه درخواست قبلاً برای محتوای دیگری استفاده شده است.', 409, 'request_id_conflict');
+      if (admission.status === 'active') {
+        fail('این گفتگو یک نوبت فعال دارد؛ به همان نوبت متصل شوید.', 409, 'turn_active', {
+          turnId: admission.current?.turnId || '',
+          requestId: admission.current?.requestId || requestId,
+          turnActive: true,
+          state: admission.current?.state || 'running'
+        });
+      }
+      if (admission.status === 'replay') {
+        let outcome = {};
+        try { outcome = JSON.parse(admission.record?.outcome || '{}'); } catch { /* ignore */ }
+        return json({
+          ok: true,
+          replayed: true,
+          requestId,
+          turnId: String(admission.record?.turn_id || ''),
+          state: String(admission.record?.state || 'completed'),
+          ...outcome
+        }, 200, { 'X-Request-Replayed': '1', 'X-Turn-Id': String(admission.record?.turn_id || ''), 'X-Request-Id': requestId });
+      }
+      const turnId = admission.turnId;
+      let runnerStarted = false;
+      try {
+      const preloadedWaveCkpt = await loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null);
       const isWaveContinuation = Boolean(
         data?.silentAutoResume === true &&
           preloadedWaveCkpt?.active &&
+          (!preloadedWaveCkpt.turnId || !data?.resumeTurnId || preloadedWaveCkpt.turnId === data.resumeTurnId) &&
           (preloadedWaveCkpt?.reason === 'wave_continue' || preloadedWaveCkpt?.reason === 'local_exec_continue')
       );
+      if (data?.silentAutoResume === true && !isWaveContinuation && data?.resumeCheckpoint !== true) {
+        fail('نقطه ادامه معتبر نیست؛ وضعیت گفتگو را دوباره بارگذاری کنید.', 409, 'checkpoint_stale');
+      }
       if (!isWaveContinuation) {
         await enforceChatLimits(env, identity.owner);
       }
 
       const attachments = await resolveUploadRefs(env, identity.owner, data?.attachments);
-      const userText = (typeof data?.message === 'string' ? data.message.trim() : '') || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
+      const userText = rawText || (attachments.length ? 'فایل‌های پیوست را بررسی کن.' : '');
       if (!userText) fail('متن پیام خالی است.', 400, 'empty_message');
-      if (userText.length > MAX_CONTENT) fail('پیام بیش از حد طولانی است.', 413, 'too_large');
 
       const effectiveEnv = await resolveEffectiveEnv(env, identity.owner);
       const subreqTracker = { count: 1 };
@@ -1037,7 +1095,6 @@ export async function onRequestPost(context) {
         return true;
       });
 
-      const conversation = await getConversation(env, identity.owner, conversationId);
       const { count } = await messageStats(env, conversation.id);
       if (count === 0) {
         await env.DB.prepare('UPDATE conversations SET title=? WHERE id=? AND owner=?')
@@ -1046,6 +1103,12 @@ export async function onRequestPost(context) {
       }
 
       const existingCheckpointPreload = await loadTurnCheckpoint(env, identity.owner, conversation.id).catch(() => null);
+      if (data?.silentAutoResume === true && existingCheckpointPreload?.active) {
+        const ck = existingCheckpointPreload;
+        if (ck.reason === 'user_stopped' || (ck.turnId && data?.resumeTurnId && ck.turnId !== data.resumeTurnId)) {
+          fail('نقطه ادامه متعلق به نوبت دیگری است یا توسط کاربر متوقف شده؛ ادامه خودکار مجاز نیست.', 409, 'checkpoint_stale');
+        }
+      }
       const isSilentAutoResume = Boolean(data?.silentAutoResume === true && existingCheckpointPreload?.active);
 
       // 1. Persist the user turn first (durability over speed), unless this is a silent background VPN-blip reconnect.
@@ -1087,7 +1150,8 @@ export async function onRequestPost(context) {
         data?.localTermuxInfo && typeof data.localTermuxInfo === 'object' ? data.localTermuxInfo : null;
       const linux = linuxRunnerEnabled(effectiveEnv) || useLocalTermuxBridge;
       const sb = sandboxEnabled(env);
-      const turnReg = registerActiveTurn(identity.owner, conversation.id);
+      const turnReg = registerActiveTurn(identity.owner, conversation.id, turnId);
+      const stopHeartbeat = startTurnHeartbeat(env, identity.owner, conversation.id, turnId, turnReg.controller);
       // Headless turns: a client disconnect (page refresh, app close, mobile
       // backgrounding) must NOT kill the turn. The turn keeps running under
       // waitUntil, persists everything to D1 incrementally, and the user
@@ -1101,14 +1165,15 @@ export async function onRequestPost(context) {
           request.signal.addEventListener('abort', () => { headless = true; }, { once: true });
         }
       }
-      await markTurnActive(env, identity.owner, conversation.id);
-
       const { stream, send, close } = sseStream();
       const headers = {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-store, no-transform',
         'X-Accel-Buffering': 'no',
-        Connection: 'keep-alive'
+        Connection: 'keep-alive',
+        'X-CodePilot-Build': BUILD_VERSION,
+        'X-Turn-Id': turnId,
+        'X-Request-Id': requestId
       };
       if (setCookie) headers['Set-Cookie'] = setCookie;
 
@@ -1151,6 +1216,8 @@ export async function onRequestPost(context) {
       const completedToolsLog = [];
       let existingCheckpoint = existingCheckpointPreload;
       let resumingFromCheckpoint = false;
+      let terminalState = 'error';
+      let terminalOutcome = { code: 'chat_failed', resumable: true };
 
       const turnRunner = (async () => {
         try {
@@ -1259,6 +1326,9 @@ export async function onRequestPost(context) {
 
           send('status', {
             phase: resumingFromCheckpoint ? 'resuming' : 'thinking',
+            turnId,
+            requestId,
+            build: BUILD_VERSION,
             sandbox: sb,
             linuxRunner: linux,
             reasoningEffort,
@@ -1284,7 +1354,7 @@ export async function onRequestPost(context) {
             messages: history,
             memories,
             callModel: (payload) =>
-              callModel(effectiveEnv, { ...payload, ...(selectedModel ? { model: selectedModel } : {}) }),
+              callModel(effectiveEnv, { ...payload, signal: turnReg.signal, ...(selectedModel ? { model: selectedModel } : {}) }),
             saveMemories: (memo) =>
               env.DB.prepare(
                 `INSERT INTO memories(id,owner,scope,project,key,value,created_at,updated_at)
@@ -1396,14 +1466,19 @@ export async function onRequestPost(context) {
               stopErr.code = 'turn_stopped';
               throw stopErr;
             }
-            // Cross-isolate stop + liveness heartbeat (headless turns are
-            // stopped through the D1 flag when the stop request lands on a
-            // different isolate than the one running the turn).
-            if (steps > 0 && (await heartbeatTurnActive(env, identity.owner, conversation.id))) {
+            // Cross-isolate stop + fenced liveness heartbeat at every step.
+            const leaseCheck = await heartbeatTurn(env, identity.owner, conversation.id, turnId);
+            if (leaseCheck.stopped || turnReg.signal.aborted) {
               const stopErr = new Error('اجرای پاسخ توسط کاربر متوقف شد.');
               stopErr.status = 499;
               stopErr.code = 'turn_stopped';
               throw stopErr;
+            }
+            if (leaseCheck.lost) {
+              const lostErr = new Error('مالکیت این نوبت از دست رفت؛ اجرای موازی متوقف شد.');
+              lostErr.status = 409;
+              lostErr.code = 'turn_lease_lost';
+              throw lostErr;
             }
             // Everything from previous steps forms complete tool groups by
             // now — persist it so progress is visible to polling clients.
@@ -2003,6 +2078,7 @@ export async function onRequestPost(context) {
           const touchedList = [...turn.touched].filter((p) => !p.startsWith('('));
           if (turnInterruptedReason) {
             savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
+              turnId,
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
               originalGoal: userText,
               reason: turnInterruptedReason,
@@ -2016,7 +2092,7 @@ export async function onRequestPost(context) {
                 isWaveHandoff || isLocalExecHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
             }).catch(() => null);
           } else if (resumingFromCheckpoint || existingCheckpoint) {
-            await clearTurnCheckpoint(env, identity.owner, conversation.id).catch(() => {});
+            await clearTurnCheckpointForTurn(env, identity.owner, conversation.id, turnId).catch(() => {});
           }
 
           const outputChars = newMessages.reduce(
@@ -2078,7 +2154,17 @@ export async function onRequestPost(context) {
             slot: 1,
             baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
           };
+          terminalState = 'completed';
+          terminalOutcome = {
+            resumable: Boolean(savedCheckpoint),
+            waveContinue: isWaveHandoff,
+            localExecContinue: isLocalExecHandoff,
+            interruptedReason: isWaveHandoff || isLocalExecHandoff ? null : turnInterruptedReason || null
+          };
           send('done', {
+            turnId,
+            requestId,
+            build: BUILD_VERSION,
             content: displayFinalText,
             marathonCompleted: marathonGoalDone,
             model: usedModel,
@@ -2145,48 +2231,10 @@ export async function onRequestPost(context) {
             }
           });
 
-          // Headless wave chaining: the client that normally re-posts
-          // "ادامه" at a wave boundary is gone (closed app / refresh). The
-          // turn keeps making progress by chaining itself — a fresh internal
-          // request gets a fresh subrequest budget. Bounded by the checkpoint
-          // waveNumber cap below; on failure the checkpoint remains and the
-          // next client visit auto-resumes it.
-          if (isWaveHandoff && headless && Number(savedCheckpoint?.waveNumber || 0) < 12) {
-            try {
-              const chainUrl = new URL(request.url).origin + '/api/chat';
-              const chainBody = JSON.stringify({
-                ...(data && typeof data === 'object' ? data : {}),
-                conversationId: conversation.id,
-                message: 'ادامه',
-                silentAutoResume: true,
-                resumeCheckpoint: true
-              });
-              const cookie = request.headers.get('Cookie');
-              const chainHeaders = { 'Content-Type': 'application/json' };
-              if (cookie) chainHeaders.Cookie = cookie;
-              const chainCtrl = new AbortController();
-              const chainPromise = fetch(chainUrl, {
-                method: 'POST',
-                headers: chainHeaders,
-                body: chainBody,
-                signal: chainCtrl.signal,
-                redirect: 'manual'
-              })
-                .then((res) => {
-                  // Detach immediately: aborting our side makes the chained
-                  // turn headless, so IT keeps running under its own
-                  // waitUntil and self-chains further waves by itself.
-                  chainCtrl.abort();
-                  try { res.body?.cancel?.(); } catch { /* ignore */ }
-                })
-                .catch(() => {});
-              if (typeof waitUntil === 'function') {
-                try { waitUntil(chainPromise); } catch { /* ignore */ }
-              }
-            } catch {
-              /* checkpoint survives for client-side auto-resume */
-            }
-          }
+          // No server-side self-POST: a disconnected client re-attaches to this
+          // lease or resumes the saved checkpoint explicitly. Chaining fetches
+          // here used to overlap the next turn and hit Workers self-invocation
+          // limits while making Stop/quota behavior unpredictable.
         } catch (error) {
           const partialContent = stripSecrets(
             String((healedTextCarry || '') + (error?.partialContent || stepStreamedContent || '')).trim(),
@@ -2218,6 +2266,8 @@ export async function onRequestPost(context) {
                           ? 'timeout'
                           : 'error';
 
+          terminalState = errCode === 'turn_stopped' ? 'stopped' : 'error';
+          terminalOutcome = { code: errCode, reason, resumable: true, retryAfterMs: Number(error?.retryAfterMs || 0) };
           let savedCheckpoint = null;
           try {
             // Persist complete groups from the not-yet-flushed tail (earlier
@@ -2247,6 +2297,7 @@ export async function onRequestPost(context) {
             });
             }
             savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
+              turnId,
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
               originalGoal: userText,
               reason,
@@ -2265,6 +2316,9 @@ export async function onRequestPost(context) {
 
           if (errCode === 'turn_stopped') {
             send('stopped', {
+              turnId,
+              requestId,
+              build: BUILD_VERSION,
               code: 'turn_stopped',
               reason: 'user_stopped',
               message: errMsg,
@@ -2277,9 +2331,13 @@ export async function onRequestPost(context) {
             });
           } else {
             send('error', {
+              turnId,
+              requestId,
+              build: BUILD_VERSION,
               error: errMsg,
               code: errCode,
               reason,
+              retryAfterMs: Number(error?.retryAfterMs || 0),
               resumable: true,
               partialContent,
               savedFiles: touchedList,
@@ -2290,16 +2348,28 @@ export async function onRequestPost(context) {
             });
           }
         } finally {
+          stopHeartbeat();
           turnReg.release();
-          await clearTurnActive(env, identity.owner, conversation.id);
+          await releaseTurn(env, identity.owner, conversation.id, turnId, terminalState, terminalOutcome);
           close();
         }
       })();
+      runnerStarted = true;
       if (typeof waitUntil === 'function') {
         try { waitUntil(turnRunner); } catch { /* ignore */ }
       }
 
       return new Response(stream, { status: 200, headers });
+      } catch (error) {
+        if (!runnerStarted) {
+          await releaseTurn(env, identity.owner, conversation.id, turnId, 'error', {
+            code: error?.code || 'chat_setup_failed',
+            message: error?.status ? error.message : 'خطا در آماده‌سازی نوبت.',
+            resumable: false
+          });
+        }
+        throw error;
+      }
     },
     // 20 MB of files expands to ~26.7 MB in Base64; leave room for message metadata.
     { write: true, body: 28_000_000, waitUntil: waitUntilFn }

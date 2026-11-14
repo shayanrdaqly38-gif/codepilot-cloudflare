@@ -9,8 +9,8 @@
     "deploy": "wrangler pages deploy .",
     "db:create": "wrangler d1 create codepilot-db",
     "db:schema": "wrangler d1 execute codepilot-db --remote --file=./schema.sql",
-    "test": "node --test tests/state.test.mjs tests/sync.test.mjs tests/tools.test.mjs tests/attachments.test.mjs tests/uploads.test.mjs tests/image-security.test.mjs tests/marathon.test.mjs tests/micro.test.mjs tests/stop.test.mjs tests/stop-signal.test.mjs tests/sandbox-bridge.test.mjs tests/token-optimizer.test.mjs tests/workspace-modes.test.mjs tests/parallel-turns.test.mjs tests/audit-backend.test.mjs",
-    "test:ui": "node tests/ui.test.mjs && node tests/marathon-ui.test.mjs && node tests/audit-ui.test.mjs",
+    "test": "node --test tests/state.test.mjs tests/sync.test.mjs tests/tools.test.mjs tests/attachments.test.mjs tests/uploads.test.mjs tests/image-security.test.mjs tests/marathon.test.mjs tests/micro.test.mjs tests/stop.test.mjs tests/stop-signal.test.mjs tests/sandbox-bridge.test.mjs tests/token-optimizer.test.mjs tests/workspace-modes.test.mjs tests/parallel-turns.test.mjs tests/audit-backend.test.mjs tests/turn-lifecycle.test.mjs",
+    "test:ui": "node tests/ui.test.mjs && node tests/marathon-ui.test.mjs && node tests/audit-ui.test.mjs && node tests/turn-lifecycle-ui.test.mjs",
     "test:all": "npm test && npm run test:ui"
   },
   "devDependencies": {

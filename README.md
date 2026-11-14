@@ -255,6 +255,8 @@ npx wrangler pages secret put MODEL_API_KEY
 | `ACCESS_ALLOWED_EMAILS` | — | فهرست ایمیل‌های مجاز با کاما (اختیاری) |
 | `CHAT_LIMIT_PER_MINUTE` | — | پیش‌فرض `30` |
 | `CHAT_LIMIT_PER_DAY` | — | پیش‌فرض `1200` |
+| `MODEL_CALLS_PER_MINUTE` | — | سقف واقعی درخواست‌های خروجی به مدل به‌ازای هر کلید، پیش‌فرض محافظه‌کارانه `20`؛ همه‌ی retryها، خلاصه‌سازی و probeها شمارش می‌شوند |
+| `PROVIDER_MAX_INFLIGHT` | — | حداکثر درخواست‌های هم‌زمان باز به‌ازای هر کلید، پیش‌فرض `4` |
 
 **همه‌ی این‌ها از داشبورد قابل تنظیم‌اند** — `wrangler.toml` عمداً هیچ `[vars]`ی ندارد.
 مسیر: **Settings → Variables and Secrets → Add**. برای کلید و راز، نوع **Secret** و

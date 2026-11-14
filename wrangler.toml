@@ -36,6 +36,8 @@ binding = "AI"
 #   SESSION_SECRET     Secret     optional (derived from MODEL_API_KEY if omitted)
 #   MODEL_NAME         Secret     optional (default: claude-sonnet-5-5)
 #   CONTEXT_BUDGET_TOKENS Secret  optional (default: 24000)
+#   MODEL_CALLS_PER_MINUTE Text   optional per-key outbound model cap (default: 20)
+#   PROVIDER_MAX_INFLIGHT  Text   optional per-key open model requests (default: 4)
 #   ACCESS_ALLOWED_EMAILS Secret  optional comma-separated allow-list
 #
 # Note: because `pages_build_output_dir` is set, Cloudflare Pages only allows

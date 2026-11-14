@@ -23,10 +23,10 @@ export function reply(body, status, setCookie) {
  * The handler receives ({ identity, env, request, url, data, setCookie, waitUntil }).
  */
 export async function route(request, env, handler, { write = false, body = 0, waitUntil = null } = {}) {
+  let data = null;
   try {
     const url = new URL(request.url);
     const { identity, setCookie } = await session(request, env, { write });
-    let data = null;
     if (body) data = await readJson(request, body);
     const result = await handler({ identity, env, request, url, data, setCookie, waitUntil });
     if (result instanceof Response) {
@@ -39,7 +39,7 @@ export async function route(request, env, handler, { write = false, body = 0, wa
     }
     return reply(result || {}, 200, setCookie);
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, { requestId: typeof data?.requestId === 'string' ? data.requestId : '' });
   }
 }
 

@@ -12,7 +12,7 @@ import {
   conversationView
 } from '../../../_lib/store.js';
 import { loadTurnCheckpoint } from '../../../_lib/checkpoint.js';
-import { isTurnActive } from '../../../_lib/active-turn.js';
+import { getTurnStatus } from '../../../_lib/active-turn.js';
 
 export async function onRequestGet({ request, env, params }) {
   return route(request, env, async ({ identity }) => {
@@ -44,20 +44,22 @@ export async function onRequestGet({ request, env, params }) {
       hasOlderMessages = page.hasOlderMessages;
       oldestSeq = page.oldestSeq;
       const workspace = skipWorkspace ? undefined : await hydrateConversationWorkspace(env, conversation, { byteBudget: 6_000_000 });
-      const turnActive = await isTurnActive(env, identity.owner, conversation.id);
+      const turn = await getTurnStatus(env, identity.owner, conversation.id);
+      const turnActive = Boolean(turn?.active);
       return {
         ok: true,
         conversation: {
           ...conversationView(conversation),
           summary: conversation.summary,
           summaryUpdatedAt: conversation.summary_updated_at,
-          ...(turnActive ? { turnActive, turnStartedAt: null } : {})
+          ...(turnActive ? { turnActive, turnStartedAt: turn.startedAt } : {})
         },
         messages,
         hasOlderMessages,
         oldestSeq,
         ...(workspace !== undefined ? { workspace } : {}),
         checkpoint,
+        turn,
         ...(turnActive ? { turnActive } : {})
       };
     }
@@ -80,7 +82,8 @@ export async function onRequestGet({ request, env, params }) {
         )
       };
     });
-    const turnActive = await isTurnActive(env, identity.owner, conversation.id);
+    const turn = await getTurnStatus(env, identity.owner, conversation.id);
+    const turnActive = Boolean(turn?.active);
     return {
       ok: true,
       conversation: {
@@ -94,6 +97,7 @@ export async function onRequestGet({ request, env, params }) {
       oldestSeq: messages.length ? messages[0].seq : null,
       ...(workspace !== undefined ? { workspace } : {}),
       checkpoint,
+      turn,
       ...(turnActive ? { turnActive } : {})
     };
   });
