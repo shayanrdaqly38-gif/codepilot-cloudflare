@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-build="2026-11-14.2">
+<html lang="fa" dir="rtl" data-build="2026-11-14.3">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -6009,10 +6009,16 @@ function renderCheckpointCardHtml(ckpt) {
         ? '⏹ توسط شما متوقف شد — تمام پیشرفت تا همین لحظه ذخیره است'
         : ckpt.reason === 'step_limit'
           ? '⏸ پایان سقف گام‌های این نوبت — آماده ادامه از گام بعدی'
-          : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
+          : ckpt.reason === 'unverified_completion'
+            ? '⚠️ ادعای «انجام شد» بدون شاهد رد شد — ادامه از هدف اصلی'
+            : ckpt.reason === 'stream_cutoff' || ckpt.reason === 'length_cutoff'
+              ? '⏸ پاسخ مدل قطع شد — پیشرفت واقعی تا همین لحظه ذخیره شد'
+              : ckpt.errorCode === 'context_too_large' || ckpt.reason === 'context_limit'
             ? '⏸ فشرده‌سازی خودکار زمینه آماده است — برای ادامه کلیک کنید'
             : '⏸ توقف موقت — پیشرفت تا همین لحظه ذخیره شد';
-  const detail = ckpt.errorMessage || 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.';
+  const detail = ckpt.errorMessage || (isQuotaOrKey
+    ? 'کافی است توکن جدید جایگزین کنید یا روی «ادامه» بزنید تا بدون برگشت به اول، دقیقاً از همین نقطه ادامه دهد.'
+    : 'روی «ادامه» بزنید تا بدون برگشت به اول، از همین نقطه ادامه دهد؛ فقط تغییرات تأییدشده ذخیره می‌شوند.');
   const metaParts = [];
   if (stepsCount > 0) metaParts.push(`${faNum(stepsCount)} گام انجام‌شده`);
   if (filesCount > 0) metaParts.push(`💾 ${faNum(filesCount)} فایل ذخیره‌شده (${ckpt.touchedFiles.slice(0, 4).join(', ')})`);
@@ -7887,6 +7893,9 @@ async function consumeStream(response, bubble, isTurnCurrent = () => true) {
       if (data.phase === 'auto-repair') {
         setSync('busy', 'کنترل کیفیت و اصلاح خودکار…');
         if (vEl) vEl.textContent = `${stepPrefix()}🔧 کنترل کیفیت خودکار و رفع خطاهای کد…`;
+      } else if (data.phase === 'completion_check') {
+        setSync('busy', 'کنترل پایان کار: ادعای بدون شاهد پذیرفته نیست…');
+        if (vEl) vEl.textContent = `${stepPrefix()}🔎 کنترل پایان کار: درخواست نتیجهٔ مشخص یا ادامهٔ واقعی…`;
       } else if (data.phase === 'provider_failover') {
         const slotNum = Number(data.slot) || 2;
         const hostName = (() => {
