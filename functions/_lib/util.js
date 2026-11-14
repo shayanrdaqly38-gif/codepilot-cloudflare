@@ -184,18 +184,25 @@ const HARD_SECRET_PATTERNS = [
 const ASSIGNMENT_PATTERN =
   /\b(api[_-]?key|api[_-]?secret|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd|ghToken|github[_-]?token|auth[_-]?token|private[_-]?key)(["']?\s*[:=]\s*["']?)([^\s"',;}\]]{6,})/gi;
 
+const SENSITIVE_HEADER_LINE_PATTERN =
+  /\b(set-cookie|cookie|x-api-key|proxy-authorization|authorization)(\s*:\s*)(?:(Bearer|Basic|Token)\s+)?([^\r\n]{4,})/gi;
+
 /** Redact credentials from free text before it is stored or sent to a model. */
 export function redactSecrets(value, extraSecrets = []) {
   let text = typeof value === 'string' ? value : String(value ?? '');
   if (!text) return '';
   for (const secret of extraSecrets) {
-    if (typeof secret === 'string' && secret.length >= 12) {
+    if (typeof secret === 'string' && secret.length >= 8) {
       text = text.split(secret).join('[REDACTED]');
     }
   }
   for (const [pattern, replacement] of HARD_SECRET_PATTERNS) {
     text = text.replace(pattern, replacement);
   }
+  text = text.replace(
+    SENSITIVE_HEADER_LINE_PATTERN,
+    (_, header, sep, scheme) => (scheme ? `${header}${sep}${scheme} [REDACTED]` : `${header}${sep}[REDACTED]`)
+  );
   text = text.replace(ASSIGNMENT_PATTERN, '$1$2[REDACTED]');
   return text;
 }
@@ -215,7 +222,7 @@ export function redactCode(value, extraSecrets = []) {
 }
 
 const PRIVATE_KEY_NAMES =
-  /^(apiKey|api_key|apikey|ghToken|githubToken|github_token|token|accessToken|access_token|refreshToken|refresh_token|authorization|password|passwordHash|clientSecret|client_secret|privateKey|private_key|secret|cookie|session)$/i;
+  /^(apiKey|api_key|apikey|ghToken|githubToken|github_token|token|accessToken|access_token|refreshToken|refresh_token|authorization|password|passwordHash|clientSecret|client_secret|privateKey|private_key|secret|cookie|set-cookie|setCookie|session|x-api-key|proxy-authorization)$/i;
 
 /** Recursively drop credential-looking keys and redact values. */
 export function stripSecrets(value, extraSecrets = [], depth = 0) {
@@ -235,7 +242,15 @@ export function stripSecrets(value, extraSecrets = [], depth = 0) {
 }
 
 export function envSecrets(env) {
-  return [env.MODEL_API_KEY].filter((v) => typeof v === 'string' && v.length >= 12);
+  if (!env || typeof env !== 'object') return [];
+  const candidates = [
+    env.MODEL_API_KEY,
+    env.SANDBOX_TOKEN,
+    env.SESSION_SECRET,
+    env.BROWSER_RENDERING_TOKEN,
+    env.CF_BROWSER_RENDERING_TOKEN
+  ];
+  return [...new Set(candidates.filter((v) => typeof v === 'string' && v.length >= 12))];
 }
 
 /* ------------------------------------------------------------------ *
