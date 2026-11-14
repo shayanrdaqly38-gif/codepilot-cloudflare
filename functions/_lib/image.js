@@ -13,6 +13,7 @@
 // slices) and served via `/api/images/:id` so chat history & LLM context never bloat with Base64!
 
 import { fail } from './util.js';
+import { ensureSchema } from './schema.js';
 import { assertSafeExternalUrl } from './web.js';
 
 export const IMAGE_CHUNK_BYTES = 192_000; // Divisible by 3 -> 256,000 Base64 chars/row (< 300 KB SQL)
@@ -539,13 +540,15 @@ async function tryProviderImagesEndpoint(env, { prompt, width, height, externalS
  * Persist a generated binary image into chunked D1 tables and prune old entries past cap.
  */
 export async function storeGeneratedImage(env, owner, record) {
+  await ensureSchema(env);
+  const database = env.DB;
   const id = crypto.randomUUID();
   const bytes = record.bytes;
   const totalChunks = Math.max(1, Math.ceil(bytes.byteLength / IMAGE_CHUNK_BYTES));
   const now = Date.now();
 
   const statements = [
-    env.DB.prepare(
+    database.prepare(
       `INSERT INTO generated_images(
         id, owner, conversation_id, title, prompt, enhanced_prompt, style,
         aspect_ratio, width, height, engine, model, mime_type, byte_size, chunks, created_at
@@ -574,11 +577,11 @@ export async function storeGeneratedImage(env, owner, record) {
     const slice = bytes.subarray(part * IMAGE_CHUNK_BYTES, (part + 1) * IMAGE_CHUNK_BYTES);
     const b64 = bytesToBase64(slice);
     statements.push(
-      env.DB.prepare('INSERT INTO generated_image_chunks(image_id, part, data) VALUES (?,?,?)').bind(id, part, b64)
+      database.prepare('INSERT INTO generated_image_chunks(image_id, part, data) VALUES (?,?,?)').bind(id, part, b64)
     );
   }
 
-  await env.DB.batch(statements);
+  await database.batch(statements);
 
   // Best-effort rolling retention cleanup so free D1 storage stays feather-light forever.
   pruneOldGeneratedImages(env, owner).catch(() => {});
@@ -684,8 +687,262 @@ export async function listGeneratedImages(env, owner, { limit = 24 } = {}) {
   }));
 }
 
+/* --------------------- SVG text overlay & RTL support --------------------- */
+
+const PERSIAN_FONT_STACK = "'Vazirmatn', 'Vazir', 'IRANSans', 'Noto Sans Arabic', 'Tahoma', 'DejaVu Sans', sans-serif";
+const LATIN_FONT_STACK = "'Inter', 'Segoe UI', 'Roboto', 'DejaVu Sans', sans-serif";
+const TEXT_IN_IMAGE_HINT_RE =
+  /(?:["«»„“”][^"«»„“”]{2,120}["«»„“”])|(?:\b(?:text|lettering|typography|caption|headline|slogan|quote|wording|watermark|sign\s+reading|banner\s+with|poster\s+saying)\b)|(?:متن|نوشته|تایپوگرافی|تیتر|شعار|کپشن|تابلو|بنر\s+با\s+نوشته|لوگو\s+با\s+نام)/i;
+
+const utf8ImgEncoder = new TextEncoder();
+
+export function detectTextRequestInPrompt(prompt) {
+  const s = String(prompt || '');
+  const requestsText = TEXT_IN_IMAGE_HINT_RE.test(s);
+  return {
+    requestsText,
+    hasRtlText: PERSIAN_OR_NON_LATIN_RE.test(s)
+  };
+}
+
+function escapeXml(value) {
+  return String(value ?? '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeSvgColor(value, fallback) {
+  const s = String(value || '').trim();
+  if (/^#[0-9a-fA-F]{3,8}$/.test(s) || /^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/.test(s)) {
+    return s;
+  }
+  return fallback;
+}
+
+function sanitizeSvgFont(value, fallback) {
+  const s = String(value || '').trim();
+  if (!s) return fallback;
+  const clean = s.replace(/[^A-Za-z0-9\s,'"-]/g, '').slice(0, 140).trim();
+  return clean || fallback;
+}
+
+function wrapOverlayText(rawText, maxCharsPerLine, maxLines = 6) {
+  const paragraphs = String(rawText || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const lines = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(Boolean);
+    let current = '';
+    for (const word of words) {
+      if (!current) {
+        if (word.length <= maxCharsPerLine) {
+          current = word;
+        } else {
+          for (let i = 0; i < word.length && lines.length < maxLines; i += maxCharsPerLine) {
+            lines.push(word.slice(i, i + maxCharsPerLine));
+          }
+        }
+      } else if (current.length + 1 + word.length <= maxCharsPerLine) {
+        current = `${current} ${word}`;
+      } else {
+        lines.push(current);
+        current = word.slice(0, maxCharsPerLine);
+      }
+      if (lines.length >= maxLines) break;
+    }
+    if (current && lines.length < maxLines) lines.push(current);
+    if (lines.length >= maxLines) break;
+  }
+  return lines.slice(0, maxLines);
+}
+
 /**
- * End-to-end Studio Image Generation + D1 Persistence.
+ * Post-generation SVG text compositor for exact typography (including Persian/Arabic RTL).
+ *
+ * Wraps the generated raster image (PNG/JPEG/WEBP) losslessly as a base64 `<image>` inside
+ * a sandbox-safe SVG with crisp vector `<text>` + `<tspan>` elements (`direction="rtl"`,
+ * `unicode-bidi="plaintext"`, Persian font stack).
+ *
+ * Architecture note: Cloudflare Workers has no native Canvas/Skia/TTF rasterizer to bake
+ * text directly onto PNG/JPEG pixels, so composition emits `image/svg+xml` and discloses
+ * font-rendering dependencies honestly.
+ */
+export function composeImageWithSvgTextOverlay({ bytes, mimeType, width, height, overlayText }) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < 64) {
+    fail('دادهٔ تصویر پایه برای ترکیب متن نامعتبر است.', 400, 'invalid_base_image');
+  }
+  const safeMime = detectImageMime(bytes) || mimeType;
+  if (!safeMime || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(safeMime)) {
+    fail('فرمت تصویر پایه برای ترکیب SVG پشتیبانی نمی‌شود.', 400, 'unsupported_base_image');
+  }
+
+  const cfg =
+    typeof overlayText === 'string'
+      ? { text: overlayText }
+      : overlayText && typeof overlayText === 'object'
+        ? overlayText
+        : null;
+  const mainText = String(cfg?.text || '').trim();
+  if (!mainText) fail('متن overlayText خالی است.', 400, 'empty_overlay_text');
+  if (mainText.length > 500) fail('متن overlayText بیش از حد طولانی است (حداکثر ۵۰۰ کاراکتر).', 400, 'overlay_too_long');
+
+  const subtitleText = String(cfg?.subtitle || '').trim().slice(0, 260);
+  const w = Math.max(256, Math.min(Number(width) || 1024, 4096));
+  const h = Math.max(256, Math.min(Number(height) || 1024, 4096));
+
+  const isRtl =
+    cfg?.rtl === true
+      ? true
+      : cfg?.rtl === false
+        ? false
+        : PERSIAN_OR_NON_LATIN_RE.test(`${mainText} ${subtitleText}`);
+
+  const position = ['top', 'center', 'bottom'].includes(String(cfg?.position || '').toLowerCase())
+    ? String(cfg.position).toLowerCase()
+    : 'bottom';
+  const alignRaw = String(cfg?.align || 'auto').toLowerCase();
+  const align = ['left', 'center', 'right'].includes(alignRaw)
+    ? alignRaw
+    : isRtl
+      ? 'right'
+      : 'center';
+
+  const defaultFontSize = Math.round(Math.max(26, Math.min(64, w * 0.048)));
+  const fontSize = Math.max(16, Math.min(96, Math.round(Number(cfg?.fontSize) || defaultFontSize)));
+  const subFontSize = Math.max(14, Math.round(fontSize * 0.62));
+  const paddingX = Math.max(24, Math.min(120, Math.round(Number(cfg?.padding) || w * 0.055)));
+  const paddingY = Math.round(fontSize * 0.72);
+  const boxMargin = Math.round(w * 0.04);
+  const boxWidth = w - boxMargin * 2;
+  const usableWidth = Math.max(160, boxWidth - paddingX * 2);
+
+  // Conservative average glyph advance (~0.56em for Persian/Latin bold text)
+  const charsPerLine = Math.max(10, Math.floor(usableWidth / (fontSize * 0.58)));
+  const subCharsPerLine = Math.max(14, Math.floor(usableWidth / (subFontSize * 0.56)));
+  const lines = wrapOverlayText(mainText, charsPerLine, 5);
+  const subtitleLines = subtitleText ? wrapOverlayText(subtitleText, subCharsPerLine, 3) : [];
+
+  const lineHeight = Math.round(fontSize * 1.42);
+  const subLineHeight = Math.round(subFontSize * 1.45);
+  const subGap = subtitleLines.length ? Math.round(fontSize * 0.45) : 0;
+  const contentHeight = lines.length * lineHeight + subGap + subtitleLines.length * subLineHeight;
+  const boxHeight = Math.min(h - boxMargin * 2, contentHeight + paddingY * 2);
+
+  const boxY =
+    position === 'top'
+      ? boxMargin
+      : position === 'center'
+        ? Math.round((h - boxHeight) / 2)
+        : Math.max(boxMargin, h - boxHeight - boxMargin);
+
+  const textColor = sanitizeSvgColor(cfg?.color, '#FFFFFF');
+  const subColor = sanitizeSvgColor(cfg?.subtitleColor, 'rgba(255,255,255,0.88)');
+  const bgColor = sanitizeSvgColor(cfg?.backgroundColor, 'rgba(12,16,28,0.74)');
+  const fontFamily = sanitizeSvgFont(cfg?.fontFamily, isRtl ? PERSIAN_FONT_STACK : LATIN_FONT_STACK);
+
+  const anchor = align === 'right' ? 'end' : align === 'left' ? 'start' : 'middle';
+  const textX =
+    align === 'right'
+      ? boxMargin + boxWidth - paddingX
+      : align === 'left'
+        ? boxMargin + paddingX
+        : Math.round(w / 2);
+
+  const firstBaselineY = boxY + paddingY + fontSize;
+  const direction = isRtl ? 'rtl' : 'ltr';
+  const lang = isRtl ? 'fa' : 'en';
+
+  const mainTspans = lines
+    .map(
+      (line, idx) =>
+        `    <tspan x="${textX}" y="${firstBaselineY + idx * lineHeight}">${escapeXml(line)}</tspan>`
+    )
+    .join('\n');
+
+  const subStartY = firstBaselineY + (lines.length - 1) * lineHeight + Math.round(lineHeight * 0.5) + subGap + subFontSize;
+  const subBlock = subtitleLines.length
+    ? [
+        `  <text direction="${direction}" unicode-bidi="plaintext" xml:lang="${lang}" text-anchor="${anchor}" fill="${subColor}" font-family="${escapeXml(fontFamily)}" font-size="${subFontSize}" font-weight="500">`,
+        ...subtitleLines.map(
+          (line, idx) =>
+            `    <tspan x="${textX}" y="${subStartY + idx * subLineHeight}">${escapeXml(line)}</tspan>`
+        ),
+        '  </text>'
+      ].join('\n')
+    : '';
+
+  const base64Data = bytesToBase64(bytes);
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${escapeXml(mainText)}">`,
+    `  <title>${escapeXml(mainText)}</title>`,
+    `  <image href="data:${safeMime};base64,${base64Data}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice"/>`,
+    `  <rect x="${boxMargin}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" rx="20" fill="${bgColor}" stroke="rgba(255,255,255,0.16)" stroke-width="1.5"/>`,
+    `  <text direction="${direction}" unicode-bidi="plaintext" xml:lang="${lang}" text-anchor="${anchor}" fill="${textColor}" font-family="${escapeXml(fontFamily)}" font-size="${fontSize}" font-weight="700">`,
+    mainTspans,
+    '  </text>',
+    subBlock,
+    '</svg>'
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const svgBytes = utf8ImgEncoder.encode(svg);
+  if (svgBytes.byteLength > MAX_IMAGE_BYTES) {
+    fail('حجم تصویر ترکیبی SVG بیش از حد مجاز است.', 413, 'image_too_large');
+  }
+
+  return {
+    bytes: svgBytes,
+    mimeType: 'image/svg+xml',
+    width: w,
+    height: h,
+    overlay: {
+      applied: true,
+      format: 'image/svg+xml',
+      baseMimeType: safeMime,
+      text: mainText,
+      subtitle: subtitleText,
+      rtl: isRtl,
+      direction,
+      align,
+      position,
+      fontFamily,
+      fontSize,
+      lines,
+      subtitleLines,
+      rasterCompositingAvailable: false,
+      limitationNote:
+        'متن دقیق پس از تولید تصویر به‌صورت لایهٔ برداری SVG با پشتیبانی RTL/فارسی ترکیب شد. محیط Cloudflare Workers فاقد Canvas/Skia سمت سرور برای پختن متن روی پیکسل‌های PNG/JPEG است؛ نمایش نهایی فونت فارسی در مرورگر به فونت‌های نصب‌شده روی دستگاه (مانند Vazirmatn/Noto Sans Arabic/Tahoma) وابسته است.'
+    }
+  };
+}
+
+function formatLabelForMime(mimeType, baseMimeType = '') {
+  const short = (m) =>
+    m === 'image/png'
+      ? 'PNG'
+      : m === 'image/jpeg'
+        ? 'JPEG'
+        : m === 'image/webp'
+          ? 'WEBP'
+          : m === 'image/gif'
+            ? 'GIF'
+            : m === 'image/svg+xml'
+              ? 'SVG'
+              : String(m || 'unknown');
+  if (mimeType === 'image/svg+xml' && baseMimeType) return `SVG+${short(baseMimeType)}`;
+  return short(mimeType);
+}
+
+/**
+ * End-to-end Studio Image Generation + optional SVG/RTL text compositing + D1 Persistence.
  */
 export async function generateAndStoreImage(
   env,
@@ -698,6 +955,7 @@ export async function generateAndStoreImage(
     engine = 'auto',
     enhance = true,
     seed,
+    overlayText = null,
     conversationId = '',
     externalSignal = null
   } = {}
@@ -712,13 +970,25 @@ export async function generateAndStoreImage(
   const resolvedSeed =
     Number.isInteger(seed) && seed >= 0 ? seed : Math.floor(Math.random() * 899_999) + 100_000;
 
-  const enhancedPrompt = await enhanceImagePrompt(env, rawPrompt, normalizedStyle, { enhance });
+  const hasOverlay =
+    (typeof overlayText === 'string' && overlayText.trim().length > 0) ||
+    Boolean(overlayText && typeof overlayText === 'object' && String(overlayText.text || '').trim());
+
+  let enhancedPrompt = await enhanceImagePrompt(env, rawPrompt, normalizedStyle, { enhance });
+  if (hasOverlay && !/\bno text\b/i.test(enhancedPrompt)) {
+    enhancedPrompt = `${enhancedPrompt}. clean uncluttered background with negative space, no embedded text, no letters, no watermark`.slice(
+      0,
+      MAX_PROMPT_CHARS
+    );
+  }
 
   const requestedEngine = String(engine || 'auto').toLowerCase();
   const diagnostics = [];
+  const enginesTried = [];
   let generated = null;
 
   if (requestedEngine === 'provider') {
+    enginesTried.push('provider-api');
     const prov = await tryProviderImagesEndpoint(env, {
       prompt: enhancedPrompt,
       width,
@@ -730,6 +1000,7 @@ export async function generateAndStoreImage(
   }
 
   if (!generated && requestedEngine !== 'free-relay') {
+    enginesTried.push('cloudflare-ai');
     const cf = await tryWorkersAiModels(env, {
       prompt: enhancedPrompt,
       aspectRatio: normalizedRatio,
@@ -742,6 +1013,7 @@ export async function generateAndStoreImage(
   }
 
   if (!generated && requestedEngine !== 'cloudflare-only') {
+    enginesTried.push('free-flux-relay');
     const relay = await tryFreeUnlimitedFluxRelay({
       prompt: enhancedPrompt,
       width,
@@ -754,6 +1026,7 @@ export async function generateAndStoreImage(
   }
 
   if (!generated && requestedEngine === 'auto' && env?.MODEL_API_KEY) {
+    enginesTried.push('provider-api');
     const provFallback = await tryProviderImagesEndpoint(env, {
       prompt: enhancedPrompt,
       width,
@@ -765,13 +1038,45 @@ export async function generateAndStoreImage(
   }
 
   if (!generated) {
+    const summary = diagnostics.slice(0, 6).join(' | ') || 'no_engine_available';
     fail(
-      'ساخت تصویر در این لحظه ناموفق بود. لطفاً چند ثانیه بعد دوباره امتحان کنید یا توضیح را کمی تغییر دهید.',
+      `ساخت تصویر ناموفق بود (${summary}). لطفاً چند ثانیه بعد دوباره امتحان کنید یا تنظیمات موتور تصویر را بررسی کنید.`,
       502,
       'image_generation_failed',
-      { attempts: diagnostics.slice(0, 6) }
+      {
+        attempts: diagnostics.slice(0, 10),
+        enginesTried,
+        aspectRatio: normalizedRatio,
+        width,
+        height,
+        errorSummary: summary
+      }
     );
   }
+
+  let finalBytes = generated.bytes;
+  let finalMime = generated.mimeType;
+  let overlayMeta = null;
+  if (hasOverlay) {
+    const composed = composeImageWithSvgTextOverlay({
+      bytes: generated.bytes,
+      mimeType: generated.mimeType,
+      width: generated.width,
+      height: generated.height,
+      overlayText
+    });
+    finalBytes = composed.bytes;
+    finalMime = composed.mimeType;
+    overlayMeta = composed.overlay;
+  }
+
+  const promptTextCheck = detectTextRequestInPrompt(rawPrompt);
+  const textAccuracyWarning =
+    !hasOverlay && promptTextCheck.requestsText
+      ? promptTextCheck.hasRtlText
+        ? 'هشدار دقت متن: مدل‌های تولید تصویر هوش مصنوعی (مانند FLUX/Phoenix) در نوشتن دقیق متن به‌ویژه فارسی و راست‌به‌چپ خطا و به‌هم‌ریختگی دارند. برای متن دقیق، پارامتر overlayText را ارسال کنید تا متن با لایهٔ SVG و پشتیبانی RTL روی تصویر ترکیب شود.'
+        : 'Text accuracy warning: AI diffusion models frequently misspell or distort in-image text. For exact typography, pass `overlayText` so text is composited cleanly via SVG post-generation.'
+      : null;
 
   const cleanTitle =
     String(title || '').trim() ||
@@ -779,7 +1084,7 @@ export async function generateAndStoreImage(
       .replace(/\s+/g, ' ')
       .slice(0, 72);
 
-  return storeGeneratedImage(env, owner, {
+  const stored = await storeGeneratedImage(env, owner, {
     conversationId,
     title: cleanTitle,
     prompt: rawPrompt,
@@ -791,7 +1096,15 @@ export async function generateAndStoreImage(
     engine: generated.engine,
     model: generated.model,
     modelLabel: generated.modelLabel,
-    mimeType: generated.mimeType,
-    bytes: generated.bytes
+    mimeType: finalMime,
+    bytes: finalBytes
   });
+
+  return {
+    ...stored,
+    format: formatLabelForMime(finalMime, overlayMeta?.baseMimeType || ''),
+    overlayApplied: Boolean(overlayMeta),
+    overlay: overlayMeta,
+    textAccuracyWarning
+  };
 }

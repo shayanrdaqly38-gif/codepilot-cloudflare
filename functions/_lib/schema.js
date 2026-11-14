@@ -4,7 +4,7 @@ import { fail } from './util.js';
 // Cloudflare Pages D1 runs SQLite, so `CREATE TABLE IF NOT EXISTS` plus
 // versioned ALTERs let old databases (from the first prototype) upgrade in place.
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 const CREATE = [
   `CREATE TABLE IF NOT EXISTS generated_images (
@@ -180,7 +180,9 @@ const INDEXES = [
      ON conversations(owner, archived, updated_at DESC)`,
   `CREATE INDEX IF NOT EXISTS messages_conv_seq ON messages(conversation_id, seq)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS memories_owner_scope_key
-     ON memories(owner, scope, project, key)`
+     ON memories(owner, scope, project, key)`,
+  `CREATE INDEX IF NOT EXISTS file_versions_batch
+     ON file_versions(owner, batch_id, created_at DESC)`
 ];
 
 // Columns added after v1. Each entry is applied only when missing.
@@ -210,7 +212,13 @@ const COLUMNS = {
     ['reasoning_tokens', 'INTEGER NOT NULL DEFAULT 0']
   ],
   rate_limits: [],
-  file_versions: [],
+  file_versions: [
+    ['batch_id', "TEXT NOT NULL DEFAULT ''"],
+    ['content_hash', "TEXT NOT NULL DEFAULT ''"],
+    ['after_hash', "TEXT NOT NULL DEFAULT ''"],
+    ['existed', 'INTEGER NOT NULL DEFAULT 1'],
+    ['meta', "TEXT NOT NULL DEFAULT '{}'"]
+  ],
   meta: [],
   active_turns: [
     ['turn_id', "TEXT NOT NULL DEFAULT ''"],

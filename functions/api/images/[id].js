@@ -9,6 +9,7 @@ function extForMime(mime) {
   if (mime === 'image/png') return 'png';
   if (mime === 'image/webp') return 'webp';
   if (mime === 'image/gif') return 'gif';
+  if (mime === 'image/svg+xml') return 'svg';
   return 'jpg';
 }
 
@@ -34,12 +35,16 @@ export async function onRequestGet({ request, env, params }) {
     const { meta, bytes } = await loadGeneratedImage(env, identity.owner, imageId);
     const ext = extForMime(meta.mime_type);
     const shortId = String(meta.id).slice(0, 8);
+    const isSvg = meta.mime_type === 'image/svg+xml';
     const headers = {
       'Content-Type': meta.mime_type || 'image/jpeg',
       'Content-Length': String(bytes.byteLength),
       ETag: etag,
       'Cache-Control': 'private, max-age=604800, immutable',
       'X-Content-Type-Options': 'nosniff',
+      ...(isSvg
+        ? { 'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox" }
+        : {}),
       ...(isDownload
         ? { 'Content-Disposition': `attachment; filename="codepilot-image-${shortId}.${ext}"` }
         : {}),

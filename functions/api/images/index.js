@@ -47,6 +47,7 @@ export async function onRequestPost({ request, env }) {
         engine: data?.engine || 'auto',
         enhance: data?.enhance !== false,
         seed: Number.isInteger(data?.seed) ? data.seed : undefined,
+        overlayText: data?.overlayText ?? null,
         conversationId
       });
 

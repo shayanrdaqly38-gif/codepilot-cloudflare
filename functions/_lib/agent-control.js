@@ -9,21 +9,21 @@ const EXTERNAL_TOOLS = new Set(['web_search', 'fetch_url', 'run_command', 'gener
 const MAX_RANGED_LINES = 360;
 
 const STAMINA_READ_BUDGET = {
-  low: 4,
-  medium: 6,
-  hard: 8,
-  'very-hard': 10,
-  max: 12,
-  'ultra-code': 16
+  low: 12,
+  medium: 20,
+  hard: 28,
+  'very-hard': 36,
+  max: 48,
+  'ultra-code': 64
 };
 
 const STAMINA_THINK_BUDGET = {
-  low: 1,
-  medium: 2,
-  hard: 2,
-  'very-hard': 3,
-  max: 3,
-  'ultra-code': 4
+  low: 2,
+  medium: 4,
+  hard: 5,
+  'very-hard': 6,
+  max: 8,
+  'ultra-code': 10
 };
 
 function stableStringify(value) {
@@ -49,21 +49,21 @@ function toolSignature(name, args = {}) {
   const a = args && typeof args === 'object' ? args : {};
   switch (name) {
     case 'read_file':
-      return `read:${a.path || ''}:${a.startLine || ''}:${a.endLine || ''}:${String(a.query || '').trim()}`;
+      return `read:${a.path || ''}:${a.startLine || ''}:${a.endLine || ''}:${a.cursor || ''}:${a.limit || ''}:${a.charOffset || ''}:${a.maxChars || ''}:${Boolean(a.withLineNumbers)}:${String(a.query || '').trim()}`;
     case 'search_code':
-      return `search:${String(a.query || '').trim()}:${Boolean(a.regex)}:${Boolean(a.caseSensitive)}:${a.pathFilter || ''}`;
+      return `search:${String(a.query || '').trim()}:${Boolean(a.regex)}:${Boolean(a.caseSensitive)}:${a.pathFilter || ''}:${a.glob || ''}:${a.exclude || ''}:${a.contextLines || ''}:${a.offset || 0}:${a.limit || ''}:${Boolean(a.includeIgnored)}`;
     case 'list_symbols':
-      return `symbols:${String(a.query || '').trim()}`;
+      return `symbols:${String(a.query || '').trim()}:${a.path || ''}:${a.pathPrefix || ''}:${a.offset || 0}:${a.limit || ''}`;
     case 'list_files':
-      return 'list_files';
+      return `list_files:${a.pathPrefix || ''}:${a.glob || ''}:${a.exclude || ''}:${a.maxDepth ?? ''}:${a.offset || 0}:${a.limit || ''}:${Boolean(a.includeIgnored)}`;
     case 'file_history':
-      return `history:${a.path || ''}:${a.limit || ''}`;
+      return `history:${a.path || ''}:${a.batchId || ''}:${Boolean(a.batches)}:${a.limit || ''}`;
     case 'web_search':
       return `web:${String(a.query || '').trim()}:${a.limit || ''}`;
     case 'fetch_url':
-      return `fetch:${String(a.method || 'GET').toUpperCase()}:${a.url || ''}:${fingerprintContent(stableStringify(a.headers || {}))}:${fingerprintContent(String(a.body || ''))}`;
+      return `fetch:${String(a.method || 'GET').toUpperCase()}:${a.url || ''}:${Boolean(a.renderJs)}:${a.followRedirects !== false}:${fingerprintContent(stableStringify(a.headers || {}))}:${fingerprintContent(String(a.body || ''))}`;
     case 'run_command':
-      return `cmd:${String(a.command || '').trim()}`;
+      return `cmd:${String(a.action || 'run').toLowerCase()}:${a.jobId || ''}:${a.cwd || ''}:${a.stream || ''}:${a.offset || 0}:${a.limit || ''}:${String(a.command || '').trim()}`;
     case 'think':
       return `think:${fingerprintContent(String(a.thought || ''))}:${fingerprintContent(String(a.plan || ''))}`;
     default:
@@ -186,7 +186,7 @@ export function createAgentControl({ powerProfile = {}, maxSteps = 20, originalG
         if (reads >= maxReadsPerFile) {
           return suppress('read_budget', `[Read budget reached for ${path}: ${reads} reads this turn without an intervening edit. Stop re-scanning; use search_code/list_symbols for a new question, make the targeted edit, or report the exact blocker.]`);
         }
-        if ((args.startLine || args.endLine) && !args.query) {
+        if ((args.startLine || args.endLine) && !args.query && !args.charOffset && !args.cursor) {
           const coverage = state.coverageByFile.get(path);
           const current = workspace?.files?.[path];
           const currentHash = typeof current === 'string' ? fingerprintContent(current) : null;
@@ -244,14 +244,24 @@ export function createAgentControl({ powerProfile = {}, maxSteps = 20, originalG
     if (ok && !outcome.controlled) {
       state.executedCalls += 1;
       if (MUTATING_TOOLS.has(name)) {
-        invalidateWorkspace();
-        progress = true;
-        reason = 'mutation';
+        const previewOnly = Boolean(args.dryRun || args.preview || outcome.mutated === false);
+        if (!previewOnly) {
+          invalidateWorkspace();
+          progress = true;
+          reason = 'mutation';
+        } else {
+          progress = true;
+          reason = 'preview';
+        }
       } else if (name === 'run_command') {
+        const action = String(args.action || 'run').toLowerCase();
         if (workspaceChanged || outcome.workspaceChanged) {
           invalidateWorkspace();
           progress = true;
           reason = 'shell_mutation';
+        } else if (action === 'status' || action === 'poll' || action === 'cancel' || action === 'start') {
+          progress = true;
+          reason = 'job_control';
         } else if (!state.seen.has(key)) {
           progress = true;
           reason = 'verification';

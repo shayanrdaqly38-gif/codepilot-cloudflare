@@ -84,8 +84,15 @@ import {
 } from '../_lib/agent-control.js';
 import { envSecrets, fail, json, redactSecrets, sha256Hex, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
-import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
-import { formatSearchHits, formatSymbols, listSymbols, searchWorkspace } from '../_lib/search.js';
+import { applyEdits, applyPatchTransaction, diffSummary, hashContent, unifiedDiff } from '../_lib/patch.js';
+import {
+  formatFileList,
+  formatSearchHits,
+  formatSymbols,
+  listSymbols,
+  listWorkspaceFiles,
+  searchWorkspace
+} from '../_lib/search.js';
 import { validateFile } from '../_lib/validate.js';
 import {
   applyRunnerFileChanges,
@@ -93,9 +100,19 @@ import {
   formatRealResult,
   linuxRunnerEnabled,
   runCommand,
-  sandboxEnabled
+  sandboxEnabled,
+  validateCommandCwd
 } from '../_lib/sandbox.js';
-import { getVersion, listVersions, recordVersion } from '../_lib/versions.js';
+import {
+  analyzeUndoConflict,
+  DELETED_SENTINEL_HASH,
+  deleteBatchVersions,
+  getVersion,
+  listBatchVersions,
+  listRecentBatches,
+  listVersions,
+  recordVersion
+} from '../_lib/versions.js';
 import { fetchExternalUrl, searchWeb } from '../_lib/web.js';
 import { generateAndStoreImage } from '../_lib/image.js';
 import {
@@ -128,15 +145,11 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'think',
-      description: 'Scratchpad before complex architecture (skip if native reasoning active).',
+      description: 'Plan.',
       parameters: {
         type: 'object',
-        properties: {
-          thought: { type: 'string' },
-          plan: { type: 'string' }
-        },
-        required: ['thought'],
-        additionalProperties: false
+        properties: { thought: { type: 'string' }, plan: { type: 'string' } },
+        required: ['thought']
       }
     }
   },
@@ -144,25 +157,35 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'list_files',
-      description: 'List workspace paths & sizes.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false }
+      description: 'List files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pathPrefix: { type: 'string' },
+          glob: { type: 'string' },
+          maxDepth: { type: 'number' },
+          offset: { type: 'number' },
+          limit: { type: 'number' }
+        }
+      }
     }
   },
   {
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read file (`startLine`/`endLine` or `query` jump for large files).',
+      description: 'Read file.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
           startLine: { type: 'number' },
           endLine: { type: 'number' },
-          query: { type: 'string' }
+          query: { type: 'string' },
+          cursor: { type: 'string' },
+          limit: { type: 'number' }
         },
-        required: ['path'],
-        additionalProperties: false
+        required: ['path']
       }
     }
   },
@@ -170,17 +193,20 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'search_code',
-      description: 'Search files (`regex: true` optional).',
+      description: 'Search files.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string' },
           regex: { type: 'boolean' },
           caseSensitive: { type: 'boolean' },
-          pathFilter: { type: 'string' }
+          pathFilter: { type: 'string' },
+          glob: { type: 'string' },
+          contextLines: { type: 'number' },
+          offset: { type: 'number' },
+          limit: { type: 'number' }
         },
-        required: ['query'],
-        additionalProperties: false
+        required: ['query']
       }
     }
   },
@@ -188,11 +214,15 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'list_symbols',
-      description: 'List functions, classes, CSS/HTML symbols.',
+      description: 'List symbols.',
       parameters: {
         type: 'object',
-        properties: { query: { type: 'string' } },
-        additionalProperties: false
+        properties: {
+          query: { type: 'string' },
+          path: { type: 'string' },
+          offset: { type: 'number' },
+          limit: { type: 'number' }
+        }
       }
     }
   },
@@ -200,7 +230,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'apply_patch',
-      description: 'Patch existing file with unique `search`/`replace` blocks.',
+      description: 'Atomic patch (edits/diff/files/dryRun).',
       parameters: {
         type: 'object',
         properties: {
@@ -214,13 +244,14 @@ export const TOOLS = [
                 replace: { type: 'string' },
                 replaceAll: { type: 'boolean' }
               },
-              required: ['search', 'replace'],
-              additionalProperties: false
+              required: ['search', 'replace']
             }
-          }
-        },
-        required: ['path', 'edits'],
-        additionalProperties: false
+          },
+          unifiedDiff: { type: 'string' },
+          expectedHash: { type: 'string' },
+          dryRun: { type: 'boolean' },
+          files: { type: 'array', items: { type: 'object' } }
+        }
       }
     }
   },
@@ -228,12 +259,11 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Create new file or full rewrite.',
+      description: 'Write file.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
-        required: ['path', 'content'],
-        additionalProperties: false
+        required: ['path', 'content']
       }
     }
   },
@@ -241,12 +271,11 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'delete_file',
-      description: 'Delete file (versioned).',
+      description: 'Delete file.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' } },
-        required: ['path'],
-        additionalProperties: false
+        required: ['path']
       }
     }
   },
@@ -254,15 +283,16 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'undo_edit',
-      description: 'Restore previous file version.',
+      description: 'Restore file/batch.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
-          versionId: { type: 'string' }
-        },
-        required: ['path'],
-        additionalProperties: false
+          versionId: { type: 'string' },
+          batchId: { type: 'string' },
+          preview: { type: 'boolean' },
+          force: { type: 'boolean' }
+        }
       }
     }
   },
@@ -270,15 +300,14 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'file_history',
-      description: 'List file versions.',
+      description: 'List versions.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string' },
+          batchId: { type: 'string' },
           limit: { type: 'number' }
-        },
-        required: ['path'],
-        additionalProperties: false
+        }
       }
     }
   },
@@ -286,12 +315,17 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'run_command',
-      description: 'Run shell command in workspace.',
+      description: 'Run shell/job (run|start|status|cancel|list).',
       parameters: {
         type: 'object',
-        properties: { command: { type: 'string' } },
-        required: ['command'],
-        additionalProperties: false
+        properties: {
+          command: { type: 'string' },
+          action: { type: 'string' },
+          jobId: { type: 'string' },
+          cwd: { type: 'string' },
+          offset: { type: 'number' },
+          limit: { type: 'number' }
+        }
       }
     }
   },
@@ -299,15 +333,14 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'web_search',
-      description: 'Search live web.',
+      description: 'Web search.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string' },
           limit: { type: 'number' }
         },
-        required: ['query'],
-        additionalProperties: false
+        required: ['query']
       }
     }
   },
@@ -315,7 +348,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_url',
-      description: 'Fetch public URL or REST API.',
+      description: 'Fetch URL/API.',
       parameters: {
         type: 'object',
         properties: {
@@ -323,10 +356,10 @@ export const TOOLS = [
           method: { type: 'string' },
           headers: { type: 'object' },
           body: { type: 'string' },
-          maxChars: { type: 'number' }
+          maxChars: { type: 'number' },
+          renderJs: { type: 'boolean' }
         },
-        required: ['url'],
-        additionalProperties: false
+        required: ['url']
       }
     }
   },
@@ -334,7 +367,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'generate_image',
-      description: 'Generate image (50–90w English `prompt` + Persian `title`).',
+      description: 'Generate image (EN prompt, FA title, overlayText).',
       parameters: {
         type: 'object',
         properties: {
@@ -358,10 +391,10 @@ export const TOOLS = [
               'pixel-art'
             ]
           },
-          seed: { type: 'number' }
+          seed: { type: 'number' },
+          overlayText: { type: 'object' }
         },
-        required: ['prompt'],
-        additionalProperties: false
+        required: ['prompt']
       }
     }
   }
@@ -498,7 +531,7 @@ function estimateMessagesTextChars(messages) {
 /* --------------------------------- tools ---------------------------------- */
 
 function editBudgetError(turn) {
-  const cap = turn?.maxFileEdits || MAX_TOOL_LOOPS_PER_FILE * 6;
+  const cap = turn?.maxFileEdits || 200;
   if ((turn?.editCount || 0) >= cap) {
     return `Too many edits in one turn (${cap}). Stop and summarize what you changed.`;
   }
@@ -533,27 +566,44 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
     }
 
     case 'list_files': {
-      const files = workspace.files || {};
-      const lazy = workspace.lazy || {};
-      const lines = Object.entries(files)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([path, content]) =>
-          lazy[path]
-            ? `${path} (${Math.round(lazy[path] / 1000)}KB on disk — use read_file to load)`
-            : `${path} (${String(content).length} chars)`
-        );
+      const listing = listWorkspaceFiles(workspace, {
+        pathPrefix: String(args.pathPrefix || ''),
+        glob: String(args.glob || ''),
+        exclude: args.exclude || '',
+        maxDepth: args.maxDepth,
+        includeIgnored: Boolean(args.includeIgnored),
+        offset: args.offset,
+        limit: args.limit
+      });
       return {
         ok: true,
-        text: lines.length ? lines.join('\n') : '(empty workspace)'
+        text: formatFileList(listing)
       };
     }
 
     case 'read_file': {
       const path = String(args.path || '');
       if (workspace.files?.[path] === undefined) {
+        const wasDeleted = turn?.deleted?.has(path);
         const available = fileIndex(workspace).slice(0, 50).join(', ');
-        return { ok: false, text: `Error: file not found: ${path}. Available: ${available || '(none)'}` };
+        return {
+          ok: false,
+          text: wasDeleted
+            ? `Error: file was deleted in this turn: ${path}. Use undo_edit to restore it or write_file to recreate it.`
+            : `Error: file not found: ${path}. Available: ${available || '(none)'}`
+        };
       }
+      const readOpts = {
+        startLine: args.startLine,
+        endLine: args.endLine,
+        query: args.query,
+        cursor: args.cursor,
+        limit: args.limit,
+        charOffset: args.charOffset,
+        maxChars: args.maxChars,
+        withLineNumbers: Boolean(args.withLineNumbers),
+        tokenSaver: turn.tokenSaver || 'max'
+      };
       if (workspace.files[path] === null) {
         // Lazy large file: pull a bounded slice from D1 instead of the whole thing.
         const loaded = await ensureFileLoaded(env, conversation, workspace, path, { slice: NORMAL_READ_SLICE_BYTES });
@@ -566,12 +616,10 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
             text: `Error: ${path} is ${Math.round(loaded.bytes / 1_000_000)}MB — too large to read at once. Read it in parts with run_command (head/tail/grep) or recreate it in smaller pieces.`
           };
         }
-        const smart = buildSmartFileRead(path, String(loaded.content || ''), {
-          startLine: args.startLine,
-          endLine: args.endLine,
-          query: args.query,
-          tokenSaver: turn.tokenSaver || 'max'
-        });
+        const smart = buildSmartFileRead(path, String(loaded.content || ''), readOpts);
+        if (smart.ok === false) {
+          return { ok: false, meta: smart.meta, text: smart.text };
+        }
         if (smart.savedChars > 0) {
           turn.savedChars = (turn.savedChars || 0) + smart.savedChars;
         }
@@ -585,12 +633,10 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
             : smart.text
         };
       }
-      const smart = buildSmartFileRead(path, String(workspace.files[path]), {
-        startLine: args.startLine,
-        endLine: args.endLine,
-        query: args.query,
-        tokenSaver: turn.tokenSaver || 'max'
-      });
+      const smart = buildSmartFileRead(path, String(workspace.files[path]), readOpts);
+      if (smart.ok === false) {
+        return { ok: false, meta: smart.meta, text: smart.text };
+      }
       if (smart.savedChars > 0) {
         turn.savedChars = (turn.savedChars || 0) + smart.savedChars;
       }
@@ -601,7 +647,13 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const result = searchWorkspace(loadedFilesMap(workspace), args.query, {
         regex: Boolean(args.regex),
         caseSensitive: Boolean(args.caseSensitive),
-        pathFilter: String(args.pathFilter || '')
+        pathFilter: String(args.pathFilter || ''),
+        glob: String(args.glob || ''),
+        exclude: args.exclude || '',
+        contextLines: args.contextLines,
+        includeIgnored: Boolean(args.includeIgnored),
+        offset: args.offset,
+        limit: args.limit
       });
       const lazyCount = Object.keys(workspace.lazy || {}).length;
       const lazyNote = lazyCount
@@ -615,69 +667,170 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
     }
 
     case 'list_symbols': {
-      const symbols = listSymbols(loadedFilesMap(workspace), { query: String(args.query || '') });
+      const symbols = listSymbols(loadedFilesMap(workspace), {
+        query: String(args.query || ''),
+        path: String(args.path || ''),
+        pathPrefix: String(args.pathPrefix || ''),
+        offset: args.offset,
+        limit: args.limit
+      });
       return { ok: true, text: formatSymbols(symbols) };
     }
 
     case 'apply_patch': {
-      const path = assertSafePath(args.path);
-      if (workspace.files[path] === undefined) {
-        return { ok: false, text: `Error: file not found: ${path}. Use write_file to create it.` };
-      }
-      if (workspace.files[path] === null) {
-        const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
-        if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };
-        if (loaded.tooLargeToEdit) {
-          return {
-            ok: false,
-            text: `Error: ${path} is ${Math.round(loaded.bytes / 1_000_000)}MB — too large to patch in place. Recreate it via write_file in smaller pieces or edit it with run_command.`
-          };
+      const dryRun = Boolean(args.dryRun);
+      const operations = [];
+
+      if (Array.isArray(args.files) && args.files.length > 0) {
+        if (args.files.length > 150) {
+          return { ok: false, text: 'Error: multi-file apply_patch supports at most 150 files per transaction.' };
         }
+        for (const item of args.files) {
+          if (!item || typeof item !== 'object') {
+            return { ok: false, text: 'Error: each entry in apply_patch.files must be an object with path and edits or unifiedDiff.' };
+          }
+          const p = assertSafePath(item.path);
+          operations.push({
+            path: p,
+            edits: item.edits,
+            unifiedDiff: item.unifiedDiff,
+            expectedHash: item.expectedHash,
+            strict: Boolean(item.strict ?? args.strict)
+          });
+        }
+      } else {
+        if (!args.path) {
+          return { ok: false, text: 'Error: apply_patch requires `path` (with `edits` or `unifiedDiff`) or a `files` array.' };
+        }
+        const p = assertSafePath(args.path);
+        operations.push({
+          path: p,
+          edits: args.edits,
+          unifiedDiff: args.unifiedDiff,
+          expectedHash: args.expectedHash,
+          strict: Boolean(args.strict)
+        });
       }
-      const before = String(workspace.files[path]);
-      let applied;
+
+      // Hydrate any lazy target files before entering the atomic transaction.
+      const beforeSnapshot = {};
+      for (const op of operations) {
+        if (workspace.files[op.path] === undefined) {
+          return { ok: false, text: `Error: file not found: ${op.path}. Use write_file to create it.` };
+        }
+        if (workspace.files[op.path] === null) {
+          const loaded = await ensureFileLoaded(env, conversation, workspace, op.path, { forEdit: true });
+          if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${op.path} from storage.` };
+          if (loaded.tooLargeToEdit) {
+            return {
+              ok: false,
+              text: `Error: ${op.path} is ${Math.round(loaded.bytes / 1_000_000)}MB — too large to patch in place. Recreate it via write_file in smaller pieces or edit it with run_command.`
+            };
+          }
+        }
+        beforeSnapshot[op.path] = String(workspace.files[op.path]);
+      }
+
+      let tx;
       try {
-        applied = applyEdits(before, args.edits);
+        tx = applyPatchTransaction(workspace.files, operations, { dryRun });
       } catch (error) {
-        if ((turn.tokenSaver || 'max') !== 'off') {
+        if (operations.length === 1 && !operations[0].unifiedDiff && (turn.tokenSaver || 'max') !== 'off' && Array.isArray(operations[0].edits)) {
           turn.savedChars = (turn.savedChars || 0) + 3200;
           return {
             ok: false,
-            text: buildPatchFailureContext(path, before, args.edits, error.message)
+            mutated: false,
+            text: buildPatchFailureContext(operations[0].path, beforeSnapshot[operations[0].path], operations[0].edits, error.message)
           };
         }
-        return { ok: false, text: `Patch rejected: ${error.message}` };
+        return { ok: false, mutated: false, text: `Patch rejected (atomic rollback — no files modified): ${error.message}` };
       }
-      if (applied.content === before) {
-        return { ok: false, text: 'Patch rejected: the replacement text is identical to the original.' };
+
+      const changedReports = tx.reports.filter((r) => r.changed);
+      if (!changedReports.length) {
+        return { ok: false, mutated: false, text: 'Patch rejected: the replacement text is identical to the original.' };
       }
+
+      if (dryRun) {
+        const lines = changedReports.map((r) => {
+          const previewDiff = r.diff.slice(0, 2400);
+          return (
+            `[DRY-RUN] ${r.path}: +${r.stats.added} −${r.stats.removed} lines ` +
+            `(blocks: ${r.blocks}, match: ${r.strategies.join(',')}, eol: ${r.eol}, bom: ${r.hadBom}, hash: ${r.beforeHash} → ${r.afterHash})\n` +
+            previewDiff
+          );
+        });
+        return {
+          ok: true,
+          mutated: false,
+          text: `Dry-run preview succeeded (${changedReports.length} file(s), no files modified):\n${lines.join('\n\n')}`
+        };
+      }
+
       const budgetError = editBudgetError(turn);
-      if (budgetError) return { ok: false, text: budgetError };
-      const previousVersionId = await recordVersion(env, owner, conversation, {
-        path,
-        content: before,
-        reason: 'before-patch'
-      });
-      workspace.files[path] = applied.content;
-      workspace.active = path;
-      turn.deleted.delete(path);
+      if (budgetError) {
+        // Restore workspace in case dryRun was false and applyPatchTransaction mutated in place.
+        for (const [p, content] of Object.entries(beforeSnapshot)) workspace.files[p] = content;
+        return { ok: false, mutated: false, text: budgetError };
+      }
 
-      const { diff, stats } = computeTurnDiff(before, applied.content, path);
-      const validation = validateFile(path, applied.content);
-      turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
-      turn.validation.push({ path, ...validation });
-      turn.touched.add(path);
-      turn.editCount += 1;
+      const batchId = changedReports.length > 1 ? `batch_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}` : null;
+      const recordedIds = {};
+      try {
+        for (const r of changedReports) {
+          recordedIds[r.path] = await recordVersion(env, owner, conversation, {
+            path: r.path,
+            content: beforeSnapshot[r.path],
+            afterHash: r.afterHash,
+            existed: true,
+            batchId,
+            reason: batchId ? 'before-batch-patch' : 'before-patch',
+            meta: {
+              blocks: r.blocks,
+              strategies: r.strategies,
+              added: r.stats.added,
+              removed: r.stats.removed,
+              eol: r.eol,
+              hadBom: r.hadBom
+            }
+          });
+        }
+      } catch (err) {
+        for (const [p, content] of Object.entries(beforeSnapshot)) workspace.files[p] = content;
+        if (batchId) await deleteBatchVersions(env, owner, batchId).catch(() => {});
+        return { ok: false, mutated: false, text: `Patch rolled back (version snapshot failed): ${err?.message || 'storage error'}` };
+      }
 
-      const strategy = applied.results.map((r) => r.strategy).join(',');
+      const changedPaths = [];
+      const summaryLines = [];
+      for (const r of changedReports) {
+        const after = String(workspace.files[r.path]);
+        workspace.active = r.path;
+        turn.deleted.delete(r.path);
+        const validation = validateFile(r.path, after);
+        turn.diffs.push({ path: r.path, diff: r.diff, added: r.stats.added, removed: r.stats.removed });
+        turn.validation.push({ path: r.path, ...validation });
+        turn.touched.add(r.path);
+        turn.editCount += 1;
+        changedPaths.push(r.path);
+        summaryLines.push(
+          [
+            `Patched ${r.path} (${r.blocks} block(s), match: ${r.strategies.join(',')}, eol: ${r.eol}${r.hadBom ? ', BOM preserved' : ''}).`,
+            `+${r.stats.added} −${r.stats.removed} lines.`,
+            `hash: ${r.afterHash}.`,
+            validation.ok ? 'Validation: OK.' : `Validation: ${validation.errors.join(' | ')}`,
+            `Previous version saved as ${recordedIds[r.path]} (undo_edit can restore it).`
+          ].join(' ')
+        );
+      }
+
       return {
         ok: true,
-        text: [
-          `Patched ${path} (${applied.results.length} block(s), match: ${strategy}).`,
-          `+${stats.added} −${stats.removed} lines.`,
-          validation.ok ? 'Validation: OK.' : `Validation: ${validation.errors.join(' | ')}`,
-          `Previous version saved as ${previousVersionId} (undo_edit can restore it).`
-        ].join(' ')
+        mutated: true,
+        changedPaths,
+        text: batchId
+          ? `Transactional patch committed (${changedPaths.length} files, batchId: ${batchId} — undo_edit({ batchId: "${batchId}" }) rolls back all files):\n${summaryLines.join('\n')}`
+          : summaryLines[0]
       };
     }
 
@@ -723,9 +876,12 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         }
         workspace.totalBytes = projected;
       }
-      await recordVersion(env, owner, conversation, {
+      const afterHash = hashContent(content);
+      const versionId = await recordVersion(env, owner, conversation, {
         path,
         content: before,
+        afterHash,
+        existed,
         reason: existed ? 'before-write' : 'created'
       });
       workspace.files[path] = content;
@@ -741,8 +897,10 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
 
       return {
         ok: true,
+        mutated: true,
+        changedPaths: [path],
         text: [
-          `${existed ? 'Rewrote' : 'Created'} ${path} (${content.length} chars, +${stats.added} −${stats.removed}).`,
+          `${existed ? 'Rewrote' : 'Created'} ${path} (${content.length} chars, +${stats.added} −${stats.removed}, hash: ${afterHash}, prevVersion: ${versionId}).`,
           validation.ok ? 'Validation: OK.' : `Validation: ${validation.errors.join(' | ')}`
         ].join(' ')
       };
@@ -759,8 +917,6 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
         if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };
         if (loaded.tooLargeToEdit) {
-          // Huge file: freeing it is the whole point — but a >900KB snapshot
-          // cannot be versioned in one D1 row, so undo is simply unavailable.
           delete workspace.files[path];
           if (workspace.lazy) delete workspace.lazy[path];
           if (workspace.active === path) {
@@ -773,6 +929,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
           turn.editCount += 1;
           return {
             ok: true,
+            mutated: true,
+            changedPaths: [path],
             text: `Deleted ${path} (large file, ~${Math.round(loaded.bytes / 1_000_000)}MB freed). Note: undo is not available for files this large.`
           };
         }
@@ -781,6 +939,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const versionId = await recordVersion(env, owner, conversation, {
         path,
         content: before,
+        afterHash: DELETED_SENTINEL_HASH,
+        existed: true,
         reason: 'before-delete'
       });
       delete workspace.files[path];
@@ -798,49 +958,202 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       turn.editCount += 1;
       return {
         ok: true,
+        mutated: true,
+        changedPaths: [path],
         text: `Deleted ${path} (−${stats.removed} lines). Snapshot saved as ${versionId} (undo_edit can restore it).`
       };
     }
 
     case 'undo_edit': {
-      const path = assertSafePath(args.path);
-      let target = null;
-      if (args.versionId) {
-        const version = await getVersion(env, owner, String(args.versionId));
-        if (version.path !== path) return { ok: false, text: 'Error: that version belongs to another file.' };
-        target = version;
+      const previewOnly = Boolean(args.preview);
+      const force = Boolean(args.force);
+      const batchId = typeof args.batchId === 'string' && args.batchId.trim() ? args.batchId.trim() : '';
+
+      let targets = [];
+      if (batchId) {
+        targets = await listBatchVersions(env, owner, batchId);
+        if (!targets.length) {
+          return { ok: false, mutated: false, text: `Error: no saved batch found for batchId: ${batchId}.` };
+        }
       } else {
-        const versions = await listVersions(env, owner, path, { project: null, limit: 1 });
-        target = versions[0] ? await getVersion(env, owner, versions[0].id) : null;
+        if (!args.path && !args.versionId) {
+          return { ok: false, mutated: false, text: 'Error: undo_edit requires `path`, `versionId`, or `batchId`.' };
+        }
+        let target = null;
+        if (args.versionId) {
+          const version = await getVersion(env, owner, String(args.versionId));
+          if (args.path && version.path !== assertSafePath(args.path)) {
+            return { ok: false, mutated: false, text: 'Error: that version belongs to another file.' };
+          }
+          target = version;
+        } else {
+          const path = assertSafePath(args.path);
+          const versions = await listVersions(env, owner, path, { project: null, limit: 1 });
+          target = versions[0] ? await getVersion(env, owner, versions[0].id) : null;
+        }
+        if (!target) {
+          return { ok: false, mutated: false, text: `No saved version for ${args.path || args.versionId}.` };
+        }
+        targets = [target];
       }
-      if (!target) return { ok: false, text: `No saved version for ${path}.` };
 
-      const lazyCurrent = workspace.files[path] === null;
-      const current = lazyCurrent ? '' : String(workspace.files[path] ?? '');
-      if (workspace.files[path] !== undefined && !lazyCurrent && target.content === current) {
-        return { ok: false, text: 'Already at that version.' };
+      // Inspect every target file for post-edit drift and prepare diffs BEFORE mutating anything.
+      const plan = [];
+      const conflicts = [];
+      for (const target of targets) {
+        const p = assertSafePath(target.path);
+        const existsNow = workspace.files[p] !== undefined;
+        let currentContent = existsNow ? workspace.files[p] : null;
+        if (currentContent === null && existsNow) {
+          const loaded = await ensureFileLoaded(env, conversation, workspace, p, { forEdit: true });
+          if (loaded.loadFailed || loaded.tooLargeToEdit) {
+            return { ok: false, mutated: false, text: `Error: could not load current contents of ${p} to verify conflict safety.` };
+          }
+          currentContent = String(workspace.files[p] ?? '');
+        }
+        const conflictCheck = analyzeUndoConflict(target, existsNow ? String(currentContent) : '', existsNow);
+        const restoringToDeleted = target.existed === 0;
+        const alreadyMatches = restoringToDeleted ? !existsNow : existsNow && String(currentContent) === target.content;
+        const diffBefore = existsNow ? String(currentContent) : '';
+        const diffAfter = restoringToDeleted ? '' : target.content;
+        const { diff, stats } = computeTurnDiff(diffBefore, diffAfter, p);
+        if (conflictCheck.hasConflict) {
+          conflicts.push({ path: p, versionId: target.id, ...conflictCheck });
+        }
+        plan.push({
+          target,
+          path: p,
+          existsNow,
+          currentContent: existsNow ? String(currentContent) : null,
+          restoringToDeleted,
+          alreadyMatches,
+          conflict: conflictCheck,
+          diff,
+          stats
+        });
       }
-      if (!lazyCurrent) {
-        await recordVersion(env, owner, conversation, { path, content: current, reason: 'before-undo' });
-      }
-      workspace.files[path] = target.content;
-      workspace.active = path;
-      turn.deleted.delete(path);
 
-      const { diff, stats } = computeTurnDiff(current, target.content, path);
-      const validation = validateFile(path, target.content);
-      turn.diffs.push({ path, diff, added: stats.added, removed: stats.removed });
-      turn.validation.push({ path, ...validation });
-      turn.touched.add(path);
+      if (previewOnly) {
+        const blocks = plan.map((item) => {
+          const status = item.alreadyMatches
+            ? 'already matches target'
+            : item.conflict.hasConflict
+              ? `CONFLICT (${item.conflict.conflictReason})`
+              : 'safe to restore';
+          return (
+            `[PREVIEW] ${item.path} ← version ${item.target.id} (${new Date(item.target.created_at).toISOString()}, reason: ${item.target.reason}) · ${status} · +${item.stats.added} −${item.stats.removed}\n` +
+            (item.diff ? item.diff.slice(0, 2200) : '(no diff)')
+          );
+        });
+        return {
+          ok: true,
+          mutated: false,
+          text: `Undo preview (${plan.length} file(s), no files modified${conflicts.length ? `, ${conflicts.length} conflict(s) detected` : ''}):\n${blocks.join('\n\n')}`
+        };
+      }
+
+      if (conflicts.length && !force) {
+        const details = conflicts
+          .map((c) => `- ${c.path} (version ${c.versionId}): ${c.conflictReason} [expected current hash ${c.expectedAfterHash}, actual ${c.currentHash}]`)
+          .join('\n');
+        return {
+          ok: false,
+          mutated: false,
+          conflict: true,
+          text:
+            `Undo aborted to prevent blindly overwriting subsequent edits (${conflicts.length} conflict(s)):\n${details}\n` +
+            `Run undo_edit with preview: true to inspect the diff, or pass force: true after confirming you want to overwrite the newer changes.`
+        };
+      }
+
+      if (plan.every((item) => item.alreadyMatches)) {
+        return { ok: false, mutated: false, text: 'Already at that version.' };
+      }
+
+      // Commit atomic restore across single or batch targets.
+      const undoBatchId = plan.length > 1 ? `undo_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}` : null;
+      const changedPaths = [];
+      const summaryLines = [];
+      for (const item of plan) {
+        if (item.alreadyMatches) continue;
+        const nextHash = item.restoringToDeleted ? DELETED_SENTINEL_HASH : hashContent(item.target.content);
+        await recordVersion(env, owner, conversation, {
+          path: item.path,
+          content: item.existsNow ? item.currentContent : '',
+          afterHash: nextHash,
+          existed: item.existsNow,
+          batchId: undoBatchId,
+          reason: 'before-undo',
+          meta: { restoredFromVersion: item.target.id, forced: force }
+        });
+
+        if (item.restoringToDeleted) {
+          delete workspace.files[item.path];
+          if (workspace.active === item.path) {
+            workspace.active = Object.keys(workspace.files)[0] || '';
+          }
+          turn.deleted.add(item.path);
+          turn.touched.delete(item.path);
+        } else {
+          workspace.files[item.path] = item.target.content;
+          workspace.active = item.path;
+          turn.deleted.delete(item.path);
+          turn.touched.add(item.path);
+          const validation = validateFile(item.path, item.target.content);
+          turn.validation.push({ path: item.path, ...validation });
+        }
+
+        turn.diffs.push({ path: item.path, diff: item.diff, added: item.stats.added, removed: item.stats.removed });
+        changedPaths.push(item.path);
+        summaryLines.push(
+          item.restoringToDeleted
+            ? `Removed ${item.path} (reverted creation ${item.target.id}).`
+            : `Restored ${item.path} to version ${item.target.id} (${new Date(item.target.created_at).toISOString()}). +${item.stats.added} −${item.stats.removed}.`
+        );
+      }
+
       return {
         ok: true,
-        text: `Restored ${path} to version ${target.id} (${new Date(target.created_at).toISOString()}). +${stats.added} −${stats.removed}.`
+        mutated: true,
+        changedPaths,
+        text: batchId
+          ? `Batch rollback ${batchId} completed (${changedPaths.length} file(s)):\n${summaryLines.join('\n')}`
+          : summaryLines[0]
       };
     }
 
     case 'file_history': {
-      const path = assertSafePath(args.path);
       const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+      if (args.batchId) {
+        const batchRows = await listBatchVersions(env, owner, String(args.batchId));
+        if (!batchRows.length) {
+          return { ok: false, text: `No batch found for batchId: ${args.batchId}.` };
+        }
+        const lines = batchRows.map(
+          (row, idx) =>
+            `${idx + 1}. ${row.path} · version ${row.id} · ${new Date(row.created_at).toISOString()} · ${row.reason} · hash ${row.content_hash || '?'} → ${row.after_hash || '?'}`
+        );
+        return {
+          ok: true,
+          text: `Batch ${args.batchId} (${batchRows.length} file(s)):\n${lines.join('\n')}\nUse undo_edit({ batchId: "${args.batchId}", preview: true }) to preview group rollback.`
+        };
+      }
+      if (args.batches || !args.path) {
+        const batches = await listRecentBatches(env, owner, { project: null, limit });
+        if (!batches.length) {
+          return { ok: false, text: 'No multi-file edit batches recorded yet. Provide `path` for single-file history.' };
+        }
+        const lines = batches.map(
+          (b, idx) =>
+            `${idx + 1}. ${b.batch_id} · ${new Date(b.created_at).toISOString().replace('T', ' ').slice(0, 19)}Z · ${b.file_count} file(s): ${b.paths.join(', ')}`
+        );
+        return {
+          ok: true,
+          text: `Recent edit batches:\n${lines.join('\n')}\nUse undo_edit({ batchId: "...", preview: true }) to inspect a group rollback.`
+        };
+      }
+
+      const path = assertSafePath(args.path);
       const rows = await listVersions(env, owner, path, { project: null, limit });
       if (!rows.length) {
         return {
@@ -853,22 +1166,37 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       const lines = rows.map((row, index) => {
         const when = new Date(row.created_at).toISOString().replace('T', ' ').slice(0, 19);
         const size = row.size === undefined ? '?' : `${row.size} chars`;
-        return `${index + 1}. ${row.id} · ${when}Z · ${row.reason} · ${row.created_by} · ${size}`;
+        const batchTag = row.batch_id ? ` · batch:${row.batch_id}` : '';
+        const hashTag = row.content_hash ? ` · hash:${row.content_hash}` : '';
+        return `${index + 1}. ${row.id} · ${when}Z · ${row.reason} · ${row.created_by} · ${size}${hashTag}${batchTag}`;
       });
       return {
         ok: true,
-        text: `History for ${path} (newest first):\n${lines.join('\n')}\nUse undo_edit with a versionId to restore one.`
+        text: `History for ${path} (newest first):\n${lines.join('\n')}\nUse undo_edit with versionId (and preview: true) to inspect or restore one.`
       };
     }
 
     case 'run_command': {
       const result = await runCommand(effectiveEnv || env, {
         command: String(args.command || ''),
+        action: args.action || 'run',
+        jobId: args.jobId || '',
+        cwd: args.cwd || '',
+        timeoutMs: args.timeoutMs,
+        waitMs: args.waitMs,
+        async: Boolean(args.async),
+        stream: args.stream || 'combined',
+        offset: args.offset,
+        limit: args.limit,
         workspace,
         externalSignal: signal,
         conversationId: conversation.id
       });
-      turn.commands.push({ command: String(args.command || ''), mode: result.mode, ok: result.ok });
+      turn.commands.push({
+        command: String(args.command || `${args.action || 'run'}:${args.jobId || ''}`),
+        mode: result.mode,
+        ok: result.ok
+      });
       if (result.mode === 'virtual' && result.ok) turn.touched.add('(shell)');
       if (Array.isArray(result.touchedFiles)) {
         for (const p of result.touchedFiles) {
@@ -908,6 +1236,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         headers: args.headers,
         body: args.body,
         maxChars: args.maxChars,
+        followRedirects: args.followRedirects !== false,
+        renderJs: Boolean(args.renderJs),
         externalSignal: signal
       });
     }
@@ -919,6 +1249,7 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         aspectRatio: String(args.aspectRatio || '1:1'),
         style: String(args.style || 'auto'),
         seed: Number.isInteger(args.seed) ? args.seed : undefined,
+        overlayText: args.overlayText || undefined,
         conversationId: conversation?.id || '',
         externalSignal: signal
       });
@@ -929,16 +1260,24 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         send('generated_image', image);
       }
       const cleanAlt = (image.title || 'Generated Image').replace(/[\[\]\r\n]/g, ' ').trim();
-      return {
-        ok: true,
-        text:
-          `Image generated successfully!\n` +
-          `- URL: ${image.url}\n` +
-          `- Download URL: ${image.downloadUrl}\n` +
-          `- Resolution: ${image.width}x${image.height} (${image.aspectRatio})\n` +
-          `- Engine: ${image.modelLabel || image.engine}\n` +
-          `- Markdown to include in your reply: ![${cleanAlt}](${image.url})`
-      };
+      const lines = [
+        'Image generated successfully!',
+        `- URL: ${image.url}`,
+        `- Download URL: ${image.downloadUrl}`,
+        `- Format: ${image.mimeType || image.mime || 'image/jpeg'} (${image.bytes || image.size || 0} bytes)`,
+        `- Resolution: ${image.width}x${image.height} (${image.aspectRatio})`,
+        `- Engine: ${image.modelLabel || image.engine}`,
+        `- Markdown to include in your reply: ![${cleanAlt}](${image.url})`
+      ];
+      if (image.textAccuracyWarning) {
+        lines.push(`- Text accuracy limitation: ${image.textAccuracyWarning}`);
+      }
+      if (image.overlay?.applied) {
+        lines.push(
+          `- Post-generation text overlay: ${image.overlay.format} (dir=${image.overlay.direction}, lines=${image.overlay.lines?.length || 0}). ${image.overlay.limitationNote || ''}`
+        );
+      }
+      return { ok: true, text: lines.join('\n') };
     }
 
     default:
@@ -1819,6 +2158,13 @@ export async function onRequestPost(context) {
                   if (call?.function?.name !== 'run_command') continue;
                   let parsedArgs = {};
                   try { parsedArgs = JSON.parse(call.function.arguments || '{}'); } catch { parsedArgs = {}; }
+                  const action = String(parsedArgs.action || 'run').trim().toLowerCase();
+                  const cwdCheck = validateCommandCwd(parsedArgs.cwd);
+                  if (!cwdCheck.ok) continue;
+                  if (action === 'status' || action === 'poll' || action === 'cancel' || action === 'list') {
+                    localEligibleIds.add(call.id);
+                    continue;
+                  }
                   const cmdStr = String(parsedArgs.command || '').trim();
                   const verdict = classifyCommand(cmdStr);
                   const leaksSecret = secretsForStep.some((s) => s && cmdStr.includes(s));
@@ -1836,14 +2182,23 @@ export async function onRequestPost(context) {
                   if (!localEligibleIds.has(call.id)) continue;
                   let args = {};
                   try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
-                  pendingCommands.push({ callId: call.id, command: String(args.command || '').trim() });
+                  pendingCommands.push({
+                    callId: call.id,
+                    command: String(args.command || '').trim(),
+                    action: String(args.action || 'run').trim().toLowerCase(),
+                    jobId: String(args.jobId || ''),
+                    cwd: String(args.cwd || ''),
+                    offset: Number(args.offset) || 0,
+                    limit: Number(args.limit) || undefined,
+                    stream: String(args.stream || 'combined')
+                  });
                 }
                 const guarded = await executeGuardedCalls(assistant.tool_calls, {
                   step: steps, secretsForStep, skipIds: localEligibleIds
                 });
                 for (const { call, args, outcome, toolResult } of guarded) {
                   if (outcome.ok && !outcome.controlled) {
-                    const argHint = args?.path || args?.title?.slice(0, 40) || args?.prompt?.slice(0, 40) || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
+                    const argHint = args?.path || args?.batchId || args?.title?.slice(0, 40) || args?.prompt?.slice(0, 40) || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
                     completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
                   }
                   stepCompletedToolResults.push(toolResult);
@@ -1851,14 +2206,26 @@ export async function onRequestPost(context) {
                     id: call.id, name: call.function.name, ok: outcome.ok, step: steps,
                     result: toolResult.content.slice(0, 4000)
                   });
-                  if (outcome.ok && !outcome.controlled && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
+                  const livePaths = Array.isArray(outcome.changedPaths)
+                    ? outcome.changedPaths
+                    : args?.path
+                      ? [String(args.path)]
+                      : [];
+                  if (
+                    outcome.ok &&
+                    !outcome.controlled &&
+                    outcome.mutated !== false &&
+                    MUTATING_LIVE_SET.has(call.function.name) &&
+                    livePaths.length > 0
+                  ) {
                     stepMutatedWorkspace = true;
-                    const p = String(args.path);
-                    const deleted = workspace.files[p] === undefined;
-                    send('live_file', {
-                      path: p, deleted, content: deleted ? '' : String(workspace.files[p] || ''),
-                      step: steps, editCount: turn.editCount
-                    });
+                    for (const p of livePaths) {
+                      const deleted = workspace.files[p] === undefined;
+                      send('live_file', {
+                        path: p, deleted, content: deleted ? '' : String(workspace.files[p] || ''),
+                        step: steps, editCount: turn.editCount
+                      });
+                    }
                   }
                 }
 
@@ -1897,7 +2264,7 @@ export async function onRequestPost(context) {
                 if (!outcome.ok) {
                   stepHadError = true;
                 } else if (!outcome.controlled) {
-                  const argHint = args?.path || args?.title?.slice(0, 40) || args?.prompt?.slice(0, 40) || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
+                  const argHint = args?.path || args?.batchId || args?.title?.slice(0, 40) || args?.prompt?.slice(0, 40) || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
                   completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
                 }
                 newMessages.push(toolResult);
@@ -1906,18 +2273,35 @@ export async function onRequestPost(context) {
                   id: call.id, name: call.function.name, ok: outcome.ok, step: steps,
                   result: toolResult.content.slice(0, 4000)
                 });
-                if (outcome.ok && !outcome.controlled && (MUTATING_LIVE_SET.has(call.function.name) || call.function.name === 'run_command')) {
+                if (
+                  outcome.ok &&
+                  !outcome.controlled &&
+                  ((MUTATING_LIVE_SET.has(call.function.name) && outcome.mutated !== false) ||
+                    call.function.name === 'run_command')
+                ) {
                   stepDidMutateOrTest = true;
                 }
                 // Stream live file updates to the UI & mark for immediate D1 flush!
-                if (outcome.ok && !outcome.controlled && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
+                const livePaths = Array.isArray(outcome.changedPaths)
+                  ? outcome.changedPaths
+                  : args?.path
+                    ? [String(args.path)]
+                    : [];
+                if (
+                  outcome.ok &&
+                  !outcome.controlled &&
+                  outcome.mutated !== false &&
+                  MUTATING_LIVE_SET.has(call.function.name) &&
+                  livePaths.length > 0
+                ) {
                   stepMutatedWorkspace = true;
-                  const p = String(args.path);
-                  const deleted = workspace.files[p] === undefined;
-                  send('live_file', {
-                    path: p, deleted, content: deleted ? '' : String(workspace.files[p] || ''),
-                    step: steps, editCount: turn.editCount
-                  });
+                  for (const p of livePaths) {
+                    const deleted = workspace.files[p] === undefined;
+                    send('live_file', {
+                      path: p, deleted, content: deleted ? '' : String(workspace.files[p] || ''),
+                      step: steps, editCount: turn.editCount
+                    });
+                  }
                 }
               }
 

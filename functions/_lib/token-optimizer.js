@@ -8,13 +8,16 @@
 //   5. Smart Conversational & Step-Level Reasoning Effort Governor (100% full power on Step 1 coding & all errors; eliminates wasted thinking spin on routine steps & greetings)
 
 import { fingerprintContent } from './agent-control.js';
+import { hashContent } from './patch.js';
 
 export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max', 'rpd'];
 
 const FULL_READ_CHAR_LIMIT = 15_000;
 const MAX_READ_TEXT_CHARS = 15_500;
+const MAX_EXPLICIT_READ_CHARS = 100_000;
 const HUGE_HEAD_CHAR_BUDGET = 10_500;
 const MAX_RANGED_LINES = 360;
+const MAX_EXPLICIT_RANGED_LINES = 2_000;
 const LANDMARK_CAP = 56;
 
 const TRIVIAL_CHAT_RE =
@@ -72,21 +75,174 @@ function extractStructuralOutline(lines, fromLineIdx = 0, maxItems = LANDMARK_CA
   return sampled;
 }
 
+function parseReadCursor(cursor) {
+  if (cursor === undefined || cursor === null || cursor === '') return null;
+  const raw = String(cursor).trim();
+  const match = /^L(\d+)(?::C(\d+))?$/i.exec(raw);
+  if (!match) return { invalid: true, raw };
+  return {
+    startLine: Number(match[1]),
+    charOffset: match[2] !== undefined ? Number(match[2]) : undefined
+  };
+}
+
+function formatLineSlice(lines, fromIdx, toIdx, { withLineNumbers = false } = {}) {
+  if (!withLineNumbers) return lines.slice(fromIdx, toIdx).join('\n');
+  const width = String(Math.max(1, toIdx)).length;
+  const out = [];
+  for (let i = fromIdx; i < toIdx; i += 1) {
+    out.push(`${String(i + 1).padStart(width, ' ')} | ${lines[i]}`);
+  }
+  return out.join('\n');
+}
+
 /**
- * High-Precision, Low-Token File Reader:
- * - Optional `query`: jumps straight to ±55 clean raw lines around the first match in 1 call (saves a whole `search_code` round-trip!).
- * - Explicit `startLine`/`endLine`: returns clean raw lines (NO `lineNum\t` prefix!) so `apply_patch` matches verbatim on try #1.
- * - Files <= 15,000 chars (~90% of modules): returned 100% verbatim in 1 shot.
- * - Giant files (> 15,000 chars, e.g. 445KB `index.html`) without range: returns ~10.5KB clean raw head + full-file Structural Landmark Map.
+ * High-Precision, Low-Token, Paginated File Reader:
+ * - Strict validation of line ranges, cursor, limit, charOffset, and maxChars.
+ * - Optional `query`: jumps to non-overlapping merged windows around matches (zero repeated lines!).
+ * - Explicit `startLine`/`endLine`/`limit`/`cursor`: paginated reading with reliable line numbers,
+ *   output ceiling enforcement, single-long-line char continuation, and non-overlapping `nextRange`/`nextCursor`.
+ * - Optional `withLineNumbers`: renders `N | code` without `\t` corruption.
+ * - Files <= 15,000 chars (~90% of modules) without explicit pagination: returned 100% verbatim in 1 shot.
+ * - Giant files (> 15,000 chars) without range: returns clean raw head + Structural Landmark Map + continuation cursor.
  */
-export function buildSmartFileRead(path, rawContent, { startLine, endLine, query, tokenSaver = 'max' } = {}) {
+export function buildSmartFileRead(
+  path,
+  rawContent,
+  {
+    startLine,
+    endLine,
+    limit,
+    cursor,
+    maxChars,
+    charOffset,
+    withLineNumbers = false,
+    query,
+    tokenSaver = 'max'
+  } = {}
+) {
   const content = String(rawContent ?? '');
   const lines = content.split('\n');
   const totalLines = lines.length;
   const hash = fingerprintContent(content);
-  const hasRange = Number.isFinite(Number(startLine)) || Number.isFinite(Number(endLine));
+  const contentHash = hashContent(content);
   const cleanQuery = typeof query === 'string' ? query.trim() : '';
-  const baseMeta = { kind: 'read', path, totalLines, totalChars: content.length, hash };
+  const baseMeta = { kind: 'read', path, totalLines, totalChars: content.length, hash, contentHash };
+
+  const failRead = (errorCode, text, extraMeta = {}) => ({
+    ok: false,
+    errorCode,
+    text,
+    savedChars: 0,
+    mode: 'error',
+    meta: { ...baseMeta, errorCode, truncated: false, complete: false, ranges: [], ...extraMeta }
+  });
+
+  // Parse and validate optional cursor (`L121` or `L5:C14000`).
+  let resolvedStartLine = startLine;
+  let resolvedEndLine = endLine;
+  let resolvedCharOffset = charOffset;
+  if (cursor !== undefined && cursor !== null && cursor !== '') {
+    const parsedCursor = parseReadCursor(cursor);
+    if (!parsedCursor || parsedCursor.invalid) {
+      return failRead(
+        'invalid_cursor',
+        `Error: invalid read cursor "${String(cursor)}". Expected format "L<line>" or "L<line>:C<charOffset>".`
+      );
+    }
+    if (resolvedStartLine === undefined || resolvedStartLine === null) {
+      resolvedStartLine = parsedCursor.startLine;
+    }
+    if (parsedCursor.charOffset !== undefined && (resolvedCharOffset === undefined || resolvedCharOffset === null)) {
+      resolvedCharOffset = parsedCursor.charOffset;
+      if (resolvedEndLine === undefined || resolvedEndLine === null) {
+        resolvedEndLine = parsedCursor.startLine;
+      }
+    }
+  }
+
+  // Validate explicit numeric parameters strictly (never silently return wrong lines).
+  const hasStart = resolvedStartLine !== undefined && resolvedStartLine !== null && resolvedStartLine !== '';
+  const hasEnd = resolvedEndLine !== undefined && resolvedEndLine !== null && resolvedEndLine !== '';
+  const hasLimit = limit !== undefined && limit !== null && limit !== '';
+  const hasCharOffset = resolvedCharOffset !== undefined && resolvedCharOffset !== null && resolvedCharOffset !== '';
+  const hasMaxChars = maxChars !== undefined && maxChars !== null && maxChars !== '';
+
+  let parsedStart = null;
+  if (hasStart) {
+    const n = Number(resolvedStartLine);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      return failRead(
+        'invalid_range',
+        `Error: invalid startLine (${resolvedStartLine}) for ${path}. startLine must be an integer >= 1 (file has ${totalLines} line(s)).`
+      );
+    }
+    if (n > totalLines) {
+      return failRead(
+        'range_out_of_bounds',
+        `Error: startLine ${n} is out of bounds for ${path} (file has ${totalLines} line(s); valid range: 1-${totalLines}).`
+      );
+    }
+    parsedStart = n;
+  }
+
+  let parsedEnd = null;
+  if (hasEnd) {
+    const n = Number(resolvedEndLine);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      return failRead(
+        'invalid_range',
+        `Error: invalid endLine (${resolvedEndLine}) for ${path}. endLine must be an integer >= 1 (file has ${totalLines} line(s)).`
+      );
+    }
+    parsedEnd = n;
+  }
+
+  let parsedLimit = null;
+  if (hasLimit) {
+    const n = Number(limit);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      return failRead(
+        'invalid_range',
+        `Error: invalid limit (${limit}) for ${path}. limit must be an integer >= 1.`
+      );
+    }
+    parsedLimit = Math.min(n, MAX_EXPLICIT_RANGED_LINES);
+  }
+
+  let parsedCharOffset = 0;
+  if (hasCharOffset) {
+    const n = Number(resolvedCharOffset);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+      return failRead(
+        'invalid_range',
+        `Error: invalid charOffset (${resolvedCharOffset}) for ${path}. charOffset must be an integer >= 0.`
+      );
+    }
+    parsedCharOffset = n;
+  }
+
+  let charCap = tokenSaver === 'off' ? MAX_EXPLICIT_READ_CHARS : MAX_READ_TEXT_CHARS;
+  if (hasMaxChars) {
+    const n = Number(maxChars);
+    if (!Number.isFinite(n) || n < 200) {
+      return failRead(
+        'invalid_range',
+        `Error: invalid maxChars (${maxChars}) for ${path}. maxChars must be a number >= 200.`
+      );
+    }
+    charCap = Math.min(Math.floor(n), MAX_EXPLICIT_READ_CHARS);
+  }
+
+  const effectiveStartForValidation = parsedStart ?? 1;
+  if (parsedEnd !== null && parsedEnd < effectiveStartForValidation) {
+    return failRead(
+      'invalid_range',
+      `Error: invalid line range ${effectiveStartForValidation}-${parsedEnd} for ${path} (endLine must be >= startLine).`
+    );
+  }
+
+  const hasRange = hasStart || hasEnd || hasLimit || hasCharOffset;
 
   function finish(text, ranges, extra = {}) {
     const merged = [];
@@ -95,10 +251,33 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, query
       if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b);
       else merged.push([a, b]);
     }
-    const complete = merged.length === 1 && merged[0][0] === 1 && merged[0][1] >= totalLines;
-    const meta = { ...baseMeta, ranges: merged, complete, truncated: false, ...extra };
+    const complete =
+      !extra.lineTruncated &&
+      !extra.truncated &&
+      merged.length === 1 &&
+      merged[0][0] === 1 &&
+      merged[0][1] >= totalLines;
+    const startL = merged.length ? merged[0][0] : 1;
+    const endL = merged.length ? merged[merged.length - 1][1] : 0;
+    const meta = {
+      ...baseMeta,
+      startLine: startL,
+      endLine: endL,
+      ranges: merged,
+      complete,
+      truncated: false,
+      hasMore: Boolean(extra.nextRange || extra.nextCursor),
+      ...extra
+    };
     if (meta.nextRange == null) delete meta.nextRange;
-    return { text, savedChars: Math.max(0, content.length - text.length), mode: extra.mode || 'ranged', meta };
+    if (meta.nextCursor == null) delete meta.nextCursor;
+    return {
+      ok: true,
+      text,
+      savedChars: Math.max(0, content.length - text.length),
+      mode: extra.mode || 'ranged',
+      meta
+    };
   }
 
   if (cleanQuery && !hasRange) {
@@ -107,86 +286,196 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, query
     for (let i = 0; i < lines.length; i += 1) {
       if (lines[i].toLowerCase().includes(needle)) {
         hitIndices.push(i);
-        if (hitIndices.length >= 3) break;
+        if (hitIndices.length >= 6) break;
       }
     }
     if (hitIndices.length > 0) {
-      const shown = hitIndices.slice(0, 2);
+      // Merge overlapping/adjacent context windows FIRST so lines are NEVER repeated across blocks.
+      const rawWindows = hitIndices.slice(0, 3).map((center) => [
+        Math.max(0, center - 45),
+        Math.min(totalLines, center + 65)
+      ]);
+      const mergedWindows = [];
+      for (const [from, to] of rawWindows) {
+        const last = mergedWindows[mergedWindows.length - 1];
+        if (last && from <= last[1]) {
+          last[1] = Math.max(last[1], to);
+        } else {
+          mergedWindows.push([from, to]);
+        }
+      }
+
       const blocks = [];
       const ranges = [];
       let used = 0;
-      for (const center of shown) {
-        let from = Math.max(0, center - 45);
-        let to = Math.min(totalLines, center + 65);
-        let block = `Lines ${from + 1}-${to} of ${totalLines} in ${path} (around "${cleanQuery}"):\n${lines.slice(from, to).join('\n')}`;
-        while (block.length + used > MAX_READ_TEXT_CHARS && to > from + 1) {
+      let truncatedByCap = false;
+      for (const [from, origTo] of mergedWindows) {
+        let to = origTo;
+        let block = `Lines ${from + 1}-${to} of ${totalLines} in ${path} (around "${cleanQuery}"):\n${formatLineSlice(lines, from, to, { withLineNumbers })}`;
+        while (block.length + used > charCap && to > from + 1) {
           to -= 1;
-          block = `Lines ${from + 1}-${to} of ${totalLines} in ${path} (around "${cleanQuery}"):\n${lines.slice(from, to).join('\n')}`;
+          truncatedByCap = true;
+          block = `Lines ${from + 1}-${to} of ${totalLines} in ${path} (around "${cleanQuery}"):\n${formatLineSlice(lines, from, to, { withLineNumbers })}`;
         }
-        if (block.length + used > MAX_READ_TEXT_CHARS) break;
+        if (block.length + used > charCap) {
+          truncatedByCap = true;
+          break;
+        }
         blocks.push(block);
         ranges.push([from + 1, to]);
         used += block.length + 5;
       }
       if (blocks.length) {
-        const moreHits = hitIndices.length > 2 || ranges.length < shown.length;
+        const moreHits = hitIndices.length > 3 || ranges.length < mergedWindows.length || truncatedByCap;
         const lastEnd = ranges[ranges.length - 1][1];
-        const text = blocks.join('\n\n---\n\n');
+        const nextRange =
+          moreHits && lastEnd < totalLines
+            ? { startLine: lastEnd + 1, endLine: Math.min(totalLines, lastEnd + MAX_RANGED_LINES) }
+            : null;
+        const nextCursor = nextRange ? `L${nextRange.startLine}` : null;
+        const notice = nextRange
+          ? `\n\n[Truncated query view: more matches exist past line ${lastEnd}. Continue with startLine: ${nextRange.startLine}, endLine: ${nextRange.endLine} (cursor: "${nextCursor}").]`
+          : '';
+        const text = blocks.join('\n\n---\n\n') + notice;
         return finish(text, ranges, {
           mode: 'query',
           query: cleanQuery,
           truncated: moreHits,
-          ...(moreHits && lastEnd < totalLines ? { nextRange: { startLine: lastEnd + 1, endLine: Math.min(totalLines, lastEnd + MAX_RANGED_LINES) } } : {})
+          nextRange,
+          nextCursor
         });
       }
     }
   }
 
-  if (hasRange) {
-    const from = Math.max(0, Math.min(totalLines - 1, (Number.isFinite(Number(startLine)) ? Math.floor(Number(startLine)) : 1) - 1));
-    const hasEnd = Number.isFinite(Number(endLine));
-    const requestedTo = hasEnd ? Math.floor(Number(endLine)) : from + MAX_RANGED_LINES;
-    const requestedEnd = Math.max(from + 1, Math.min(totalLines, requestedTo));
-    let to = Math.min(totalLines, Math.max(from + 1, Math.min(requestedTo, from + MAX_RANGED_LINES)));
-    let slice = lines.slice(from, to).join('\n');
+  if (hasRange || hasMaxChars || withLineNumbers) {
+    const start1 = parsedStart ?? 1;
+    const from = start1 - 1;
+    const pageSpan = parsedLimit ?? MAX_RANGED_LINES;
+    const requestedEndRaw =
+      parsedEnd !== null ? parsedEnd : Math.min(totalLines, start1 + pageSpan - 1);
+    const clampedEndLine = parsedEnd !== null && parsedEnd > totalLines;
+    const requestedEnd = Math.max(start1, Math.min(totalLines, requestedEndRaw));
+    let to = Math.min(totalLines, Math.max(start1, Math.min(requestedEnd, from + pageSpan)));
+    let slice = formatLineSlice(lines, from, to, { withLineNumbers });
     let moreHint = '';
+    let clampNote = clampedEndLine
+      ? `\n[Note: requested endLine ${parsedEnd} exceeded EOF (${totalLines}); clamped to line ${totalLines}.]`
+      : '';
     let text = '';
     let lineTruncated = false;
+    let nextCharOffset = null;
+
+    if (parsedCharOffset > 0) {
+      // Continuing inside a single ultra-long line.
+      to = start1;
+      const fullLine = lines[from] || '';
+      if (parsedCharOffset >= fullLine.length) {
+        return failRead(
+          'range_out_of_bounds',
+          `Error: charOffset ${parsedCharOffset} exceeds line ${start1} length (${fullLine.length}) in ${path}.`
+        );
+      }
+      const header = `Lines ${start1}-${start1} of ${totalLines} in ${path} (charOffset ${parsedCharOffset}/${fullLine.length}):\n`;
+      const keep = Math.max(120, charCap - header.length - 200);
+      const piece = fullLine.slice(parsedCharOffset, parsedCharOffset + keep);
+      const endOffset = parsedCharOffset + piece.length;
+      const lineHasMore = endOffset < fullLine.length;
+      lineTruncated = lineHasMore;
+      nextCharOffset = lineHasMore ? endOffset : null;
+      const nextCursor = lineHasMore
+        ? `L${start1}:C${endOffset}`
+        : start1 < totalLines
+          ? `L${start1 + 1}`
+          : null;
+      const nextRange = !lineHasMore && start1 < totalLines
+        ? { startLine: start1 + 1, endLine: Math.min(totalLines, start1 + pageSpan) }
+        : null;
+      moreHint = lineHasMore
+        ? `\n[Truncated long line ${start1}: chars ${parsedCharOffset}-${endOffset} of ${fullLine.length}. Continue with startLine: ${start1}, charOffset: ${endOffset} (cursor: "${nextCursor}").]`
+        : start1 < totalLines
+          ? `\n[End of line ${start1}. Next page: startLine: ${start1 + 1}, endLine: ${nextRange.endLine} (cursor: "${nextCursor}").]`
+          : '';
+      const renderedPiece = withLineNumbers ? `${start1} | ${piece}` : piece;
+      text = `${header}${renderedPiece}${moreHint}`;
+      return finish(text, [[start1, start1]], {
+        mode: 'ranged',
+        requestedRanges: [[start1, requestedEnd]],
+        truncated: lineHasMore || start1 < totalLines,
+        lineTruncated,
+        charOffset: parsedCharOffset,
+        nextCharOffset,
+        nextRange,
+        nextCursor
+      });
+    }
+
     for (;;) {
       const nextStart = to + 1;
       const needsMore = to < requestedEnd || (!hasEnd && to < totalLines);
+      const nextEnd = Math.min(hasEnd ? requestedEnd : totalLines, nextStart + pageSpan - 1);
       moreHint = needsMore
-        ? `\n[Showing lines ${from + 1}-${to} of ${totalLines}. Pass startLine: ${nextStart}, endLine: ${Math.min(hasEnd ? requestedEnd : totalLines, nextStart + MAX_RANGED_LINES - 1)} if needed.]`
+        ? `\n[Showing lines ${start1}-${to} of ${totalLines} (truncated). Continue with startLine: ${nextStart}, endLine: ${nextEnd} (cursor: "L${nextStart}").]`
         : '';
-      text = `Lines ${from + 1}-${to} of ${totalLines} in ${path}:\n${slice}${moreHint}`;
-      if (text.length <= MAX_READ_TEXT_CHARS || to <= from + 1) break;
+      text = `Lines ${start1}-${to} of ${totalLines} in ${path}:\n${slice}${clampNote}${moreHint}`;
+      if (text.length <= charCap || to <= start1) break;
       to -= 1;
-      slice = lines.slice(from, to).join('\n');
+      slice = formatLineSlice(lines, from, to, { withLineNumbers });
     }
-    if (text.length > MAX_READ_TEXT_CHARS) {
-      const header = `Lines ${from + 1}-${to} of ${totalLines} in ${path}:\n`;
-      const keep = Math.max(0, MAX_READ_TEXT_CHARS - header.length - 180);
-      slice = slice.slice(0, keep);
+
+    if (text.length > charCap) {
+      const fullLine = lines[from] || '';
+      const header = `Lines ${start1}-${start1} of ${totalLines} in ${path}:\n`;
+      const keep = Math.max(80, charCap - header.length - 220);
+      const linePrefix = withLineNumbers ? `${start1} | ` : '';
+      const bodyKeep = Math.max(40, keep - linePrefix.length);
+      slice = linePrefix + fullLine.slice(0, bodyKeep);
       lineTruncated = true;
-      moreHint = '\n[Single very long line was cut; use run_command/grep or a narrower query for the exact bytes.]';
+      nextCharOffset = bodyKeep;
+      moreHint = `\n[Truncated: single very long line ${start1} cut at ${bodyKeep}/${fullLine.length} chars. Continue with startLine: ${start1}, charOffset: ${bodyKeep} (cursor: "L${start1}:C${bodyKeep}").]`;
       text = `${header}${slice}${moreHint}`;
     }
+
     const truncated = to < requestedEnd || lineTruncated || (!hasEnd && to < totalLines);
-    const nextRange = truncated && to < totalLines
-      ? { startLine: to + 1, endLine: Math.min(hasEnd ? requestedEnd : totalLines, to + MAX_RANGED_LINES) }
-      : null;
-    return finish(text, [[from + 1, to]], {
+    const nextCursor = lineTruncated
+      ? `L${start1}:C${nextCharOffset}`
+      : truncated && to < totalLines
+        ? `L${to + 1}`
+        : null;
+    const nextRange =
+      !lineTruncated && truncated && to < totalLines
+        ? { startLine: to + 1, endLine: Math.min(hasEnd ? requestedEnd : totalLines, to + pageSpan) }
+        : null;
+
+    return finish(text, [[start1, to]], {
       mode: 'ranged',
-      requestedRanges: [[from + 1, requestedEnd]],
+      requestedRanges: [[start1, requestedEnd]],
       truncated,
       lineTruncated,
-      nextRange
+      clampedEndLine,
+      ...(nextCharOffset !== null ? { charOffset: 0, nextCharOffset } : {}),
+      nextRange,
+      nextCursor
     });
   }
 
-  const limit = tokenSaver === 'balanced' ? 22_000 : FULL_READ_CHAR_LIMIT;
-  if (tokenSaver === 'off' || content.length <= limit) {
-    return { text: content, savedChars: 0, mode: 'full', meta: { ...baseMeta, ranges: [[1, totalLines]], complete: true, truncated: false } };
+  const fullLimit = tokenSaver === 'balanced' ? 22_000 : FULL_READ_CHAR_LIMIT;
+  if (tokenSaver === 'off' || content.length <= fullLimit) {
+    return {
+      ok: true,
+      text: content,
+      savedChars: 0,
+      mode: 'full',
+      meta: {
+        ...baseMeta,
+        startLine: 1,
+        endLine: totalLines,
+        ranges: [[1, totalLines]],
+        complete: true,
+        truncated: false,
+        hasMore: false
+      }
+    };
   }
 
   let headEndIdx = 0;
@@ -199,8 +488,9 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, query
 
   let outline = extractStructuralOutline(lines, 0, LANDMARK_CAP);
   const buildOutlineText = (headEnd, landmarks) => {
+    const nextLine = Math.min(totalLines, headEnd + 1);
     const sections = [
-      `[Smart Structural Map of ${path} — ${totalLines} lines (${content.length} chars). Lines 1-${headEnd} shown verbatim; pass startLine/endLine or query to read_file for deeper sections.]`,
+      `[Smart Structural Map of ${path} — ${totalLines} lines (${content.length} chars, truncated). Lines 1-${headEnd} shown verbatim; continue with startLine: ${nextLine}, cursor: "L${nextLine}" or query to read_file.]`,
       `Lines 1-${headEnd} of ${totalLines} in ${path}:`,
       lines.slice(0, headEnd).join('\n')
     ];
@@ -214,18 +504,39 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, query
     return sections.join('\n');
   };
   let text = buildOutlineText(headEndIdx, outline);
-  while (text.length > MAX_READ_TEXT_CHARS && outline.length > 8) {
+  while (text.length > charCap && outline.length > 8) {
     outline = outline.slice(0, Math.max(8, Math.floor(outline.length * 0.8)));
     text = buildOutlineText(headEndIdx, outline);
   }
-  while (text.length > MAX_READ_TEXT_CHARS && headEndIdx > 1) {
+  while (text.length > charCap && headEndIdx > 1) {
     headEndIdx -= 1;
     text = buildOutlineText(headEndIdx, outline);
   }
+  // If line 1 itself is longer than charCap (e.g. giant single-line minified file), cut line 1 cleanly.
+  if (text.length > charCap && headEndIdx === 1) {
+    const fullLine = lines[0] || '';
+    const header = `Lines 1-1 of ${totalLines} in ${path}:\n`;
+    const keep = Math.max(80, charCap - header.length - 220);
+    const piece = fullLine.slice(0, keep);
+    text = `${header}${piece}\n[Truncated: single very long line 1 cut at ${keep}/${fullLine.length} chars. Continue with startLine: 1, charOffset: ${keep} (cursor: "L1:C${keep}").]`;
+    return finish(text, [[1, 1]], {
+      mode: 'outline',
+      truncated: true,
+      lineTruncated: true,
+      charOffset: 0,
+      nextCharOffset: keep,
+      nextCursor: `L1:C${keep}`
+    });
+  }
+  const nextRange =
+    headEndIdx < totalLines
+      ? { startLine: headEndIdx + 1, endLine: Math.min(totalLines, headEndIdx + MAX_RANGED_LINES) }
+      : null;
   return finish(text, [[1, headEndIdx]], {
     mode: 'outline',
-    truncated: true,
-    nextRange: { startLine: headEndIdx + 1, endLine: Math.min(totalLines, headEndIdx + MAX_RANGED_LINES) }
+    truncated: headEndIdx < totalLines,
+    nextRange,
+    nextCursor: nextRange ? `L${nextRange.startLine}` : null
   });
 }
 

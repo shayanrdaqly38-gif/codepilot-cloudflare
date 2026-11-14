@@ -1,11 +1,11 @@
--- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 11).
+-- CodePilot D1 schema — mirrors functions/_lib/schema.js (SCHEMA_VERSION 12).
 --
 -- OPTIONAL: the app bootstraps and migrates this schema automatically on the
 -- first request (ensureSchema), so running this file is not required. It exists
 -- for transparency and for review: `npm run db:schema` executes it explicitly.
 --
 -- The CREATE statements are idempotent (IF NOT EXISTS), and the columns that
--- older deployments gained through migrations (v1 → v11) are already inlined
+-- older deployments gained through migrations (v1 → v12) are already inlined
 -- here, so a fresh database ends up identical to a fully-migrated one.
 
 -- ---------------------------------------------------------------- users -----
@@ -90,10 +90,17 @@ CREATE TABLE IF NOT EXISTS file_versions (
    content TEXT NOT NULL,
    reason TEXT NOT NULL DEFAULT 'edit',
    created_by TEXT NOT NULL DEFAULT 'agent',
-   created_at INTEGER NOT NULL
+   created_at INTEGER NOT NULL,
+   batch_id TEXT NOT NULL DEFAULT '',
+   content_hash TEXT NOT NULL DEFAULT '',
+   after_hash TEXT NOT NULL DEFAULT '',
+   existed INTEGER NOT NULL DEFAULT 1,
+   meta TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS file_versions_lookup
    ON file_versions(owner, project, path, created_at DESC);
+CREATE INDEX IF NOT EXISTS file_versions_batch
+   ON file_versions(owner, batch_id, created_at DESC);
 
 -- -------------------------------------------------------- rate_limits -----
 CREATE TABLE IF NOT EXISTS rate_limits (
@@ -228,5 +235,5 @@ CREATE TABLE IF NOT EXISTS meta (
    key TEXT PRIMARY KEY,
    value TEXT NOT NULL
 );
-INSERT INTO meta(key, value) VALUES ('schema_version', '11')
+INSERT INTO meta(key, value) VALUES ('schema_version', '12')
    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
