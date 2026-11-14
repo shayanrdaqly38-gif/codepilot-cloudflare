@@ -73,6 +73,7 @@ import {
 } from '../_lib/active-turn.js';
 import { clearTurnCheckpointForTurn } from '../_lib/checkpoint.js';
 import { BUILD_VERSION } from '../_lib/build.js';
+import { buildControlStopMessage, createAgentControl } from '../_lib/agent-control.js';
 import { envSecrets, fail, json, redactSecrets, sha256Hex, stripSecrets } from '../_lib/util.js';
 import { enforceChatLimits } from '../_lib/limits.js';
 import { applyEdits, diffSummary, unifiedDiff } from '../_lib/patch.js';
@@ -488,6 +489,14 @@ function estimateMessagesTextChars(messages) {
 
 /* --------------------------------- tools ---------------------------------- */
 
+function editBudgetError(turn) {
+  const cap = turn?.maxFileEdits || MAX_TOOL_LOOPS_PER_FILE * 6;
+  if ((turn?.editCount || 0) >= cap) {
+    return `Too many edits in one turn (${cap}). Stop and summarize what you changed.`;
+  }
+  return '';
+}
+
 /**
  * Execute one tool call. Mutates `workspace` and fills `turn` with everything the
  * UI needs (edits, deletions, validation, diffs, thinking).
@@ -558,8 +567,11 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
         if (smart.savedChars > 0) {
           turn.savedChars = (turn.savedChars || 0) + smart.savedChars;
         }
+        const meta = { ...smart.meta, storageTruncated: Boolean(loaded.truncated), storageBytes: loaded.bytes };
+        if (loaded.truncated) meta.truncated = true;
         return {
           ok: true,
+          meta,
           text: loaded.truncated
             ? `${smart.text}\n\n[TRUNCATED: showing the first ${Math.round(NORMAL_READ_SLICE_BYTES / 1000)}KB of a ${Math.round(loaded.bytes / 1000)}KB file — ask for specific sections with run_command/grep.]`
             : smart.text
@@ -574,7 +586,7 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       if (smart.savedChars > 0) {
         turn.savedChars = (turn.savedChars || 0) + smart.savedChars;
       }
-      return { ok: true, text: smart.text };
+      return { ok: true, text: smart.text, meta: smart.meta };
     }
 
     case 'search_code': {
@@ -627,6 +639,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       if (applied.content === before) {
         return { ok: false, text: 'Patch rejected: the replacement text is identical to the original.' };
       }
+      const budgetError = editBudgetError(turn);
+      if (budgetError) return { ok: false, text: budgetError };
       const previousVersionId = await recordVersion(env, owner, conversation, {
         path,
         content: before,
@@ -642,9 +656,6 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       turn.validation.push({ path, ...validation });
       turn.touched.add(path);
       turn.editCount += 1;
-      if (turn.editCount > (turn.maxFileEdits || MAX_TOOL_LOOPS_PER_FILE * 6)) {
-        return { ok: false, text: 'Too many edits in one turn. Stop and summarize what you changed.' };
-      }
 
       const strategy = applied.results.map((r) => r.strategy).join(',');
       return {
@@ -685,6 +696,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       }
       const before = existed ? String(workspace.files[path]) : '';
       if (existed && before === content) return { ok: false, text: 'No change: content is identical.' };
+      const budgetError = editBudgetError(turn);
+      if (budgetError) return { ok: false, text: budgetError };
       if (convMode === 'normal') {
         // Real 1GB workspace ceiling, checked BEFORE the write lands.
         const limits = workspaceLimits(env).normal;
@@ -728,6 +741,8 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
       if (workspace.files[path] === undefined) {
         return { ok: false, text: `Error: file not found: ${path}.` };
       }
+      const budgetError = editBudgetError(turn);
+      if (budgetError) return { ok: false, text: budgetError };
       if (workspace.files[path] === null) {
         const loaded = await ensureFileLoaded(env, conversation, workspace, path, { forEdit: true });
         if (loaded.loadFailed) return { ok: false, text: `Error: could not load ${path} from storage.` };
@@ -863,7 +878,11 @@ async function executeTool({ env, effectiveEnv, owner, conversation, name, args,
           send('live_file', { path: p, deleted: true, content: '', step: 0, editCount: turn.editCount });
         }
       }
-      return { ok: result.ok, text: result.text };
+      return {
+        ok: result.ok,
+        text: result.text,
+        workspaceChanged: Boolean(result.touchedFiles?.length || result.deletedFiles?.length)
+      };
     }
 
     case 'web_search': {
@@ -1138,8 +1157,16 @@ export async function onRequestPost(context) {
         savedChars: 0,
         tokenSaver,
         maxFileEdits: powerPlan.maxFileEdits,
-        thinkToolLimit: powerPlan.thinkToolLimit
+        thinkToolLimit: powerPlan.thinkToolLimit,
+        savedToolCalls: 0
       };
+      const control = createAgentControl({
+        powerProfile: powerPlan.axes,
+        maxSteps,
+        originalGoal: userText,
+        marathonActive: Boolean(agentConfig.marathon?.active && !agentConfig.marathon?.paused)
+      });
+      turn.control = control;
 
       const useLocalTermuxBridge = Boolean(
         data?.localRunner !== false &&
@@ -1316,6 +1343,7 @@ export async function onRequestPost(context) {
               touched: [...turn.touched],
               deleted: [...turn.deleted]
             }).catch(() => {});
+              control.invalidateWorkspace();
             }
             existingCheckpoint = {
               ...existingCheckpoint,
@@ -1453,6 +1481,85 @@ export async function onRequestPost(context) {
           let lastStepInfo = null;
           const MUTATING_LIVE_SET = new Set(['write_file', 'apply_patch', 'delete_file', 'undo_edit']);
           const EXTERNAL_FETCH_TOOLS = new Set(['run_command', 'web_search', 'fetch_url', 'generate_image']);
+          const READ_ONLY_BATCH_TOOLS = new Set(['read_file', 'list_files', 'search_code', 'list_symbols', 'file_history']);
+          // Execute one assistant tool group through the governor. Independent
+          // read-only calls run concurrently (bounded), while mutations and all
+          // result ordering stay strictly sequential. Duplicate/covered calls
+          // never reach executeTool or the network.
+          const executeGuardedCalls = async (calls, { step, secretsForStep, skipIds = new Set() }) => {
+            const results = [];
+            const parseArgs = (call) => {
+              try { return JSON.parse(call?.function?.arguments || '{}'); } catch { return {}; }
+            };
+            const prepare = (call, index) => {
+              const originalArgs = parseArgs(call);
+              const decision = control.beforeTool(call?.function?.name || '', originalArgs, { step, workspace });
+              return { call, index, originalArgs, args: decision.args || originalArgs, decision };
+            };
+            const run = async (prepared) => {
+              const name = prepared.call?.function?.name || '';
+              if (prepared.decision.suppress) {
+                return { ...prepared, outcome: { ok: true, controlled: true, text: prepared.decision.text, meta: { control: prepared.decision.reason } } };
+              }
+              if (EXTERNAL_FETCH_TOOLS.has(name)) subreqTracker.count += 1;
+              let outcome;
+              try {
+                outcome = await executeTool({
+                  env, effectiveEnv, owner: identity.owner, conversation,
+                  name, args: prepared.args, workspace, turn, send, signal: turnReg.signal
+                });
+              } catch (error) {
+                outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
+              }
+              if (prepared.decision.adjusted && outcome?.meta) {
+                outcome.meta = { ...outcome.meta, adjusted: true };
+              }
+              return { ...prepared, outcome };
+            };
+            const finalize = (prepared) => {
+              const outcome = prepared.outcome;
+              control.afterTool(prepared.call?.function?.name || '', prepared.args, outcome, step, {
+                workspaceChanged: Boolean(outcome?.workspaceChanged)
+              });
+              if (outcome?.controlled) turn.savedToolCalls = (turn.savedToolCalls || 0) + 1;
+              const toolResult = {
+                role: 'tool',
+                tool_call_id: prepared.call.id,
+                content: compactToolResult({ text: stripSecrets(outcome.text, secretsForStep), meta: outcome.meta }),
+                created_at: Date.now()
+              };
+              return { ...prepared, toolResult };
+            };
+            let i = 0;
+            while (i < calls.length) {
+              if (skipIds.has(calls[i]?.id)) { i += 1; continue; }
+              const batch = [];
+              const batchPaths = new Set();
+              while (
+                i < calls.length && batch.length < 4 && !skipIds.has(calls[i]?.id) &&
+                READ_ONLY_BATCH_TOOLS.has(calls[i]?.function?.name)
+              ) {
+                const candidate = calls[i];
+                if (candidate.function.name === 'read_file') {
+                  const path = String(parseArgs(candidate).path || '');
+                  if (path && batchPaths.has(path)) break;
+                  if (path) batchPaths.add(path);
+                }
+                batch.push({ call: candidate, index: i });
+                i += 1;
+              }
+              if (batch.length) {
+                const prepared = batch.map(({ call, index }) => prepare(call, index));
+                const ran = prepared.length > 1 ? await Promise.all(prepared.map(run)) : [await run(prepared[0])];
+                for (const item of ran) results[item.index] = finalize(item);
+                continue;
+              }
+              const prepared = prepare(calls[i], i);
+              results[i] = finalize(await run(prepared));
+              i += 1;
+            }
+            return results.filter(Boolean).sort((a, b) => a.index - b.index);
+          };
           const safeWaveSteps = Math.max(2, Math.min(Number(effectiveEnv.WAVE_STEP_BUDGET) || 24, 34));
           const safeSubreqCap = Math.max(4, Math.min(Number(effectiveEnv.WAVE_SUBREQ_BUDGET) || 34, 42));
           const priorCompletedSteps = resumingFromCheckpoint ? Number(existingCheckpoint?.completedSteps) || 0 : 0;
@@ -1490,6 +1597,7 @@ export async function onRequestPost(context) {
               break;
             }
             steps += 1;
+            control.beginStep(steps);
             stepStreamedContent = '';
             stepStreamedReasoning = '';
             // Provider-Aware Dual Strategy:
@@ -1708,71 +1816,32 @@ export async function onRequestPost(context) {
                 let stepMutatedWorkspace = false;
                 const stepCompletedToolResults = [];
                 const pendingCommands = [];
-
                 for (const call of assistant.tool_calls) {
+                  if (!localEligibleIds.has(call.id)) continue;
                   let args = {};
                   try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
-                  if (localEligibleIds.has(call.id)) {
-                    pendingCommands.push({
-                      callId: call.id,
-                      command: String(args.command || '').trim()
-                    });
-                    continue;
-                  }
-                  let outcome;
-                  if (EXTERNAL_FETCH_TOOLS.has(call.function.name)) {
-                    subreqTracker.count += 1;
-                  }
-                  try {
-                    outcome = await executeTool({
-                      env,
-                      effectiveEnv,
-                      owner: identity.owner,
-                      conversation,
-                      name: call.function.name,
-                      args,
-                      workspace,
-                      turn,
-                      send,
-                      signal: turnReg.signal
-                    });
-                  } catch (error) {
-                    outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
-                  }
-                  if (outcome.ok) {
-                    const argHint =
-                      args?.path ||
-                      args?.title?.slice(0, 40) ||
-                      args?.prompt?.slice(0, 40) ||
-                      args?.command?.slice(0, 40) ||
-                      args?.query?.slice(0, 40) ||
-                      '';
+                  pendingCommands.push({ callId: call.id, command: String(args.command || '').trim() });
+                }
+                const guarded = await executeGuardedCalls(assistant.tool_calls, {
+                  step: steps, secretsForStep, skipIds: localEligibleIds
+                });
+                for (const { call, args, outcome, toolResult } of guarded) {
+                  if (outcome.ok && !outcome.controlled) {
+                    const argHint = args?.path || args?.title?.slice(0, 40) || args?.prompt?.slice(0, 40) || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
                     completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
                   }
-                  const toolResult = {
-                    role: 'tool',
-                    tool_call_id: call.id,
-                    content: compactToolResult(stripSecrets(outcome.text, secretsForStep)),
-                    created_at: Date.now()
-                  };
                   stepCompletedToolResults.push(toolResult);
                   send('tool_result', {
-                    id: call.id,
-                    name: call.function.name,
-                    ok: outcome.ok,
-                    step: steps,
+                    id: call.id, name: call.function.name, ok: outcome.ok, step: steps,
                     result: toolResult.content.slice(0, 4000)
                   });
-                  if (outcome.ok && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
+                  if (outcome.ok && !outcome.controlled && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
                     stepMutatedWorkspace = true;
                     const p = String(args.path);
                     const deleted = workspace.files[p] === undefined;
                     send('live_file', {
-                      path: p,
-                      deleted,
-                      content: deleted ? '' : String(workspace.files[p] || ''),
-                      step: steps,
-                      editCount: turn.editCount
+                      path: p, deleted, content: deleted ? '' : String(workspace.files[p] || ''),
+                      step: steps, editCount: turn.editCount
                     });
                   }
                 }
@@ -1803,78 +1872,35 @@ export async function onRequestPost(context) {
 
               let stepMutatedWorkspace = false;
               let stepHadError = false;
+              let stepDidMutateOrTest = false;
               const stepOnlyListing = assistant.tool_calls.every(
                 (c) => c?.function?.name === 'list_files' || c?.function?.name === 'list_symbols'
               );
-              const stepDidMutateOrTest = assistant.tool_calls.some(
-                (c) => MUTATING_LIVE_SET.has(c?.function?.name) || c?.function?.name === 'run_command'
-              );
-              for (const call of assistant.tool_calls) {
-                let args = {};
-                try {
-                  args = JSON.parse(call.function.arguments || '{}');
-                } catch {
-                  args = {};
-                }
-                let outcome;
-                if (EXTERNAL_FETCH_TOOLS.has(call.function.name)) {
-                  subreqTracker.count += 1;
-                }
-                try {
-                  outcome = await executeTool({
-                    env,
-                    effectiveEnv,
-                    owner: identity.owner,
-                    conversation,
-                    name: call.function.name,
-                    args,
-                    workspace,
-                    turn,
-                    send,
-                    signal: turnReg.signal
-                  });
-                } catch (error) {
-                  outcome = { ok: false, text: `Error: ${error?.message || 'tool failed'}` };
-                }
+              const guarded = await executeGuardedCalls(assistant.tool_calls, { step: steps, secretsForStep });
+              for (const { call, args, outcome, toolResult } of guarded) {
                 if (!outcome.ok) {
                   stepHadError = true;
-                } else {
-                  const argHint =
-                    args?.path ||
-                    args?.title?.slice(0, 40) ||
-                    args?.prompt?.slice(0, 40) ||
-                    args?.command?.slice(0, 40) ||
-                    args?.query?.slice(0, 40) ||
-                    '';
+                } else if (!outcome.controlled) {
+                  const argHint = args?.path || args?.title?.slice(0, 40) || args?.prompt?.slice(0, 40) || args?.command?.slice(0, 40) || args?.query?.slice(0, 40) || '';
                   completedToolsLog.push(argHint ? `${call.function.name}(${argHint})` : call.function.name);
                 }
-                const toolResult = {
-                  role: 'tool',
-                  tool_call_id: call.id,
-                  content: compactToolResult(stripSecrets(outcome.text, envSecrets(env))),
-                  created_at: Date.now()
-                };
                 newMessages.push(toolResult);
                 messages.push(toWire(toolResult));
                 send('tool_result', {
-                  id: call.id,
-                  name: call.function.name,
-                  ok: outcome.ok,
-                  step: steps,
+                  id: call.id, name: call.function.name, ok: outcome.ok, step: steps,
                   result: toolResult.content.slice(0, 4000)
                 });
-
+                if (outcome.ok && !outcome.controlled && (MUTATING_LIVE_SET.has(call.function.name) || call.function.name === 'run_command')) {
+                  stepDidMutateOrTest = true;
+                }
                 // Stream live file updates to the UI & mark for immediate D1 flush!
-                if (outcome.ok && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
+                if (outcome.ok && !outcome.controlled && MUTATING_LIVE_SET.has(call.function.name) && args?.path) {
                   stepMutatedWorkspace = true;
                   const p = String(args.path);
                   const deleted = workspace.files[p] === undefined;
                   send('live_file', {
-                    path: p,
-                    deleted,
-                    content: deleted ? '' : String(workspace.files[p] || ''),
-                    step: steps,
-                    editCount: turn.editCount
+                    path: p, deleted, content: deleted ? '' : String(workspace.files[p] || ''),
+                    step: steps, editCount: turn.editCount
                   });
                 }
               }
@@ -1901,6 +1927,31 @@ export async function onRequestPost(context) {
                 onlyListing: !stepHadError && stepOnlyListing,
                 justVerifiedClean: !stepHadError && !hasAnyValidationError && stepDidMutateOrTest
               };
+
+              const progressInfo = control.endStep(steps);
+              if (progressInfo.controlStop) {
+                healedTextCarry = '';
+                stepStreamedContent = '';
+                turnInterruptedReason = 'no_progress';
+                finalText = buildControlStopMessage(progressInfo.controlStop, {
+                  touchedFiles: [...turn.touched],
+                  deletedFiles: [...turn.deleted]
+                });
+                const stopGw = effectiveEnv._activeGateway || {
+                  slot: 1,
+                  baseUrl: effectiveEnv.MODEL_BASE_URL || 'https://tooken.club/v1'
+                };
+                newMessages.push({ role: 'assistant', content: finalText, created_at: Date.now() });
+                messages.push({ role: 'assistant', content: finalText });
+                send('assistant', {
+                  content: finalText,
+                  interrupted: true,
+                  actualModel: usedModel,
+                  requestedModel: requestedModelUsed,
+                  activeGateway: stopGw
+                });
+                break;
+              }
 
               // 50-Req/Day 1-Shot Fast-Finish: when RPD Request-Saver is active and all tool calls in this step
               // were clean file mutations (`Validation: OK.`, zero errors, no pending read/search/shell calls),
@@ -2076,7 +2127,7 @@ export async function onRequestPost(context) {
 
           let savedCheckpoint = null;
           const touchedList = [...turn.touched].filter((p) => !p.startsWith('('));
-          if (turnInterruptedReason) {
+          if (turnInterruptedReason && turnInterruptedReason !== 'no_progress') {
             savedCheckpoint = await saveTurnCheckpoint(env, identity.owner, conversation.id, {
               turnId,
               prevCheckpoint: resumingFromCheckpoint ? existingCheckpoint : null,
@@ -2087,6 +2138,7 @@ export async function onRequestPost(context) {
               touchedFiles: touchedList,
               deletedFiles: [...turn.deleted],
               completedTools: completedToolsLog,
+              toolLedger: control.snapshot(),
               pendingLocalExec: isLocalExecHandoff ? pendingLocalExecPayload : null,
               partialContent:
                 isWaveHandoff || isLocalExecHandoff || turnInterruptedReason === 'step_limit' ? '' : finalText
@@ -2217,6 +2269,8 @@ export async function onRequestPost(context) {
             localExecContinue: isLocalExecHandoff,
             pendingLocalCommands: isLocalExecHandoff ? pendingLocalExecPayload.pendingCommands : undefined,
             powerProfile: powerPlan.axes,
+            agentControl: control.snapshot(),
+            savedToolCalls: turn.savedToolCalls || 0,
             interrupted: Boolean(turnInterruptedReason && !isWaveHandoff && !isLocalExecHandoff),
             interruptedReason: isWaveHandoff || isLocalExecHandoff ? null : turnInterruptedReason || null,
             resumable: Boolean(savedCheckpoint),
@@ -2307,6 +2361,7 @@ export async function onRequestPost(context) {
               touchedFiles: touchedList,
               deletedFiles: [...turn.deleted],
               completedTools: completedToolsLog,
+              toolLedger: control.snapshot(),
               interruptedToolCall,
               partialContent
             });
