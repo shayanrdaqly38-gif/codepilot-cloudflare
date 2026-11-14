@@ -118,6 +118,30 @@ export async function loadTurnCheckpoint(env, owner, conversationId) {
   }
 }
 
+function compactToolLedger(ledger) {
+  if (!ledger || typeof ledger !== 'object') return null;
+  const out = {};
+  for (const key of ['revision', 'toolCalls', 'executedCalls', 'duplicatesSuppressed', 'coveredReadsSuppressed', 'adjustedReads', 'thinkCalls', 'thinkSuppressed', 'progressEvents', 'consecutiveNoProgress']) {
+    if (Number.isFinite(Number(ledger[key]))) out[key] = Number(ledger[key]);
+  }
+  if (ledger.readsByFile && typeof ledger.readsByFile === 'object') {
+    out.readsByFile = Object.fromEntries(Object.entries(ledger.readsByFile).slice(0, 60));
+  }
+  if (ledger.coverageByFile && typeof ledger.coverageByFile === 'object') {
+    out.coverageByFile = Object.fromEntries(
+      Object.entries(ledger.coverageByFile).slice(0, 40).map(([p, c]) => [
+        p,
+        {
+          totalLines: Number(c?.totalLines) || 0,
+          ranges: Array.isArray(c?.ranges) ? c.ranges.slice(0, 20) : [],
+          hash: typeof c?.hash === 'string' ? c.hash.slice(0, 40) : ''
+        }
+      ])
+    );
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export async function saveTurnCheckpoint(env, owner, conversationId, data = {}) {
   if (!env?.DB || !owner || !conversationId) return null;
   await ensureSchema(env);
@@ -166,6 +190,7 @@ export async function saveTurnCheckpoint(env, owner, conversationId, data = {}) 
     touchedFiles: mergedTouched,
     deletedFiles: mergedDeleted,
     completedTools: mergedTools,
+    toolLedger: compactToolLedger(data.toolLedger || prev?.toolLedger),
     interruptedToolCall: data.interruptedToolCall || null,
     pendingLocalExec: data.pendingLocalExec || null,
     partialTextTail: partialRaw ? partialRaw.slice(-1_400) : '',

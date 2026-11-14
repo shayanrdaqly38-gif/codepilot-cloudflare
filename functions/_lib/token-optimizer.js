@@ -7,9 +7,12 @@
 //   4. Zero-Roundtrip `@filepath` / `@filepath:start-end` Pre-Pinning
 //   5. Smart Conversational & Step-Level Reasoning Effort Governor (100% full power on Step 1 coding & all errors; eliminates wasted thinking spin on routine steps & greetings)
 
+import { fingerprintContent } from './agent-control.js';
+
 export const VALID_TOKEN_SAVER_MODES = ['off', 'balanced', 'max', 'rpd'];
 
 const FULL_READ_CHAR_LIMIT = 15_000;
+const MAX_READ_TEXT_CHARS = 15_500;
 const HUGE_HEAD_CHAR_BUDGET = 10_500;
 const MAX_RANGED_LINES = 360;
 const LANDMARK_CAP = 56;
@@ -78,51 +81,114 @@ function extractStructuralOutline(lines, fromLineIdx = 0, maxItems = LANDMARK_CA
  */
 export function buildSmartFileRead(path, rawContent, { startLine, endLine, query, tokenSaver = 'max' } = {}) {
   const content = String(rawContent ?? '');
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+  const hash = fingerprintContent(content);
   const hasRange = Number.isFinite(Number(startLine)) || Number.isFinite(Number(endLine));
   const cleanQuery = typeof query === 'string' ? query.trim() : '';
+  const baseMeta = { kind: 'read', path, totalLines, totalChars: content.length, hash };
+
+  function finish(text, ranges, extra = {}) {
+    const merged = [];
+    for (const [a, b] of (ranges || []).slice().sort((x, y) => x[0] - y[0])) {
+      const last = merged[merged.length - 1];
+      if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b);
+      else merged.push([a, b]);
+    }
+    const complete = merged.length === 1 && merged[0][0] === 1 && merged[0][1] >= totalLines;
+    const meta = { ...baseMeta, ranges: merged, complete, truncated: false, ...extra };
+    if (meta.nextRange == null) delete meta.nextRange;
+    return { text, savedChars: Math.max(0, content.length - text.length), mode: extra.mode || 'ranged', meta };
+  }
 
   if (cleanQuery && !hasRange) {
-    const lines = content.split('\n');
     const needle = cleanQuery.toLowerCase();
     const hitIndices = [];
     for (let i = 0; i < lines.length; i += 1) {
       if (lines[i].toLowerCase().includes(needle)) {
         hitIndices.push(i);
-        if (hitIndices.length >= 2) break;
+        if (hitIndices.length >= 3) break;
       }
     }
     if (hitIndices.length > 0) {
-      const blocks = hitIndices.map((center) => {
-        const from = Math.max(0, center - 45);
-        const to = Math.min(lines.length, center + 65);
-        return `Lines ${from + 1}-${to} of ${lines.length} in ${path} (around "${cleanQuery}"):\n${lines.slice(from, to).join('\n')}`;
-      });
-      const text = blocks.join('\n\n---\n\n');
-      return { text, savedChars: Math.max(0, content.length - text.length), mode: 'query' };
+      const shown = hitIndices.slice(0, 2);
+      const blocks = [];
+      const ranges = [];
+      let used = 0;
+      for (const center of shown) {
+        let from = Math.max(0, center - 45);
+        let to = Math.min(totalLines, center + 65);
+        let block = `Lines ${from + 1}-${to} of ${totalLines} in ${path} (around "${cleanQuery}"):\n${lines.slice(from, to).join('\n')}`;
+        while (block.length + used > MAX_READ_TEXT_CHARS && to > from + 1) {
+          to -= 1;
+          block = `Lines ${from + 1}-${to} of ${totalLines} in ${path} (around "${cleanQuery}"):\n${lines.slice(from, to).join('\n')}`;
+        }
+        if (block.length + used > MAX_READ_TEXT_CHARS) break;
+        blocks.push(block);
+        ranges.push([from + 1, to]);
+        used += block.length + 5;
+      }
+      if (blocks.length) {
+        const moreHits = hitIndices.length > 2 || ranges.length < shown.length;
+        const lastEnd = ranges[ranges.length - 1][1];
+        const text = blocks.join('\n\n---\n\n');
+        return finish(text, ranges, {
+          mode: 'query',
+          query: cleanQuery,
+          truncated: moreHits,
+          ...(moreHits && lastEnd < totalLines ? { nextRange: { startLine: lastEnd + 1, endLine: Math.min(totalLines, lastEnd + MAX_RANGED_LINES) } } : {})
+        });
+      }
     }
   }
 
   if (hasRange) {
-    const lines = content.split('\n');
-    const from = Math.max(0, (Number.isFinite(Number(startLine)) ? Math.floor(Number(startLine)) : 1) - 1);
-    const requestedTo = Number.isFinite(Number(endLine)) ? Math.floor(Number(endLine)) : from + MAX_RANGED_LINES;
-    const cappedTo = Math.min(lines.length, Math.max(from + 1, Math.min(requestedTo, from + MAX_RANGED_LINES)));
-    const slice = lines.slice(from, cappedTo).join('\n');
-    const moreHint =
-      cappedTo < Math.min(lines.length, requestedTo) || (!Number.isFinite(Number(endLine)) && cappedTo < lines.length)
-        ? `\n[Showing lines ${from + 1}-${cappedTo} of ${lines.length}. Pass startLine: ${cappedTo + 1}, endLine: ${Math.min(lines.length, cappedTo + MAX_RANGED_LINES)} if needed.]`
+    const from = Math.max(0, Math.min(totalLines - 1, (Number.isFinite(Number(startLine)) ? Math.floor(Number(startLine)) : 1) - 1));
+    const hasEnd = Number.isFinite(Number(endLine));
+    const requestedTo = hasEnd ? Math.floor(Number(endLine)) : from + MAX_RANGED_LINES;
+    const requestedEnd = Math.max(from + 1, Math.min(totalLines, requestedTo));
+    let to = Math.min(totalLines, Math.max(from + 1, Math.min(requestedTo, from + MAX_RANGED_LINES)));
+    let slice = lines.slice(from, to).join('\n');
+    let moreHint = '';
+    let text = '';
+    let lineTruncated = false;
+    for (;;) {
+      const nextStart = to + 1;
+      const needsMore = to < requestedEnd || (!hasEnd && to < totalLines);
+      moreHint = needsMore
+        ? `\n[Showing lines ${from + 1}-${to} of ${totalLines}. Pass startLine: ${nextStart}, endLine: ${Math.min(hasEnd ? requestedEnd : totalLines, nextStart + MAX_RANGED_LINES - 1)} if needed.]`
         : '';
-    const text = `Lines ${from + 1}-${cappedTo} of ${lines.length} in ${path}:\n${slice}${moreHint}`;
-    const savedChars = Math.max(0, content.length - text.length);
-    return { text, savedChars, mode: 'ranged' };
+      text = `Lines ${from + 1}-${to} of ${totalLines} in ${path}:\n${slice}${moreHint}`;
+      if (text.length <= MAX_READ_TEXT_CHARS || to <= from + 1) break;
+      to -= 1;
+      slice = lines.slice(from, to).join('\n');
+    }
+    if (text.length > MAX_READ_TEXT_CHARS) {
+      const header = `Lines ${from + 1}-${to} of ${totalLines} in ${path}:\n`;
+      const keep = Math.max(0, MAX_READ_TEXT_CHARS - header.length - 180);
+      slice = slice.slice(0, keep);
+      lineTruncated = true;
+      moreHint = '\n[Single very long line was cut; use run_command/grep or a narrower query for the exact bytes.]';
+      text = `${header}${slice}${moreHint}`;
+    }
+    const truncated = to < requestedEnd || lineTruncated || (!hasEnd && to < totalLines);
+    const nextRange = truncated && to < totalLines
+      ? { startLine: to + 1, endLine: Math.min(hasEnd ? requestedEnd : totalLines, to + MAX_RANGED_LINES) }
+      : null;
+    return finish(text, [[from + 1, to]], {
+      mode: 'ranged',
+      requestedRanges: [[from + 1, requestedEnd]],
+      truncated,
+      lineTruncated,
+      nextRange
+    });
   }
 
   const limit = tokenSaver === 'balanced' ? 22_000 : FULL_READ_CHAR_LIMIT;
   if (tokenSaver === 'off' || content.length <= limit) {
-    return { text: content, savedChars: 0, mode: 'full' };
+    return { text: content, savedChars: 0, mode: 'full', meta: { ...baseMeta, ranges: [[1, totalLines]], complete: true, truncated: false } };
   }
 
-  const lines = content.split('\n');
   let headEndIdx = 0;
   let usedHeadChars = 0;
   while (headEndIdx < lines.length && usedHeadChars + lines[headEndIdx].length + 1 <= HUGE_HEAD_CHAR_BUDGET) {
@@ -131,24 +197,36 @@ export function buildSmartFileRead(path, rawContent, { startLine, endLine, query
   }
   if (headEndIdx === 0) headEndIdx = 1;
 
-  const outline = extractStructuralOutline(lines, 0, LANDMARK_CAP);
-  const sections = [
-    `[Smart Structural Map of ${path} — ${lines.length} lines (${content.length} chars). Lines 1-${headEndIdx} shown verbatim; pass startLine/endLine or query to read_file for deeper sections.]`,
-    `Lines 1-${headEndIdx} of ${lines.length} in ${path}:`,
-    lines.slice(0, headEndIdx).join('\n')
-  ];
-
-  if (outline.length) {
-    sections.push(
-      '',
-      `--- Structural Landmarks Across Entire File (${outline.length} anchors) ---`,
-      outline.map((h) => `L${h.line}: ${h.text}`).join('\n')
-    );
+  let outline = extractStructuralOutline(lines, 0, LANDMARK_CAP);
+  const buildOutlineText = (headEnd, landmarks) => {
+    const sections = [
+      `[Smart Structural Map of ${path} — ${totalLines} lines (${content.length} chars). Lines 1-${headEnd} shown verbatim; pass startLine/endLine or query to read_file for deeper sections.]`,
+      `Lines 1-${headEnd} of ${totalLines} in ${path}:`,
+      lines.slice(0, headEnd).join('\n')
+    ];
+    if (landmarks.length) {
+      sections.push(
+        '',
+        `--- Structural Landmarks Across Entire File (${landmarks.length} anchors) ---`,
+        landmarks.map((h) => `L${h.line}: ${h.text}`).join('\n')
+      );
+    }
+    return sections.join('\n');
+  };
+  let text = buildOutlineText(headEndIdx, outline);
+  while (text.length > MAX_READ_TEXT_CHARS && outline.length > 8) {
+    outline = outline.slice(0, Math.max(8, Math.floor(outline.length * 0.8)));
+    text = buildOutlineText(headEndIdx, outline);
   }
-
-  const text = sections.join('\n');
-  const savedChars = Math.max(0, content.length - text.length);
-  return { text, savedChars, mode: 'outline' };
+  while (text.length > MAX_READ_TEXT_CHARS && headEndIdx > 1) {
+    headEndIdx -= 1;
+    text = buildOutlineText(headEndIdx, outline);
+  }
+  return finish(text, [[1, headEndIdx]], {
+    mode: 'outline',
+    truncated: true,
+    nextRange: { startLine: headEndIdx + 1, endLine: Math.min(totalLines, headEndIdx + MAX_RANGED_LINES) }
+  });
 }
 
 /**
@@ -287,6 +365,7 @@ export function pruneInTurnWireMessages(
   let savedChars = 0;
   const mutatedLater = new Set();
   const seenSignaturesLater = new Set();
+  const keptReadPaths = new Set();
 
   for (let gIdx = groups.length - 1; gIdx >= 0; gIdx -= 1) {
     const grp = groups[gIdx];
@@ -313,6 +392,7 @@ export function pruneInTurnWireMessages(
       const tEntry = toolByCallId.get(call.id);
       const tContent = String(tEntry?.msg?.content || '');
       const failed = /^(Error:|Patch rejected:|Validation:.*error)/i.test(tContent);
+      const guardNotice = /^\[(?:Duplicate |Covered |Read budget|Think budget|Repeated identical |Earlier read_file)/.test(tContent);
 
       // 1. Once a mutating tool (`write_file` / `apply_patch`) succeeded, its giant file content is ALREADY saved in `workspace.files`.
       // Even on OpenRouter, post-anchor tool calls sit AFTER `cache_control` #3 and would be re-billed 100% uncached on every remaining step!
@@ -353,6 +433,24 @@ export function pruneInTurnWireMessages(
             const replacement = `[Duplicate ${name} output identical to a newer step (${tContent.length} chars deduplicated).]`;
             savedChars += Math.max(0, tContent.length - replacement.length);
             out[tEntry.idx] = { ...tEntry.msg, content: replacement };
+          } else if (name === 'read_file' && args.path) {
+            // Keep the newest excerpt for each file verbatim so the execution
+            // governor can safely suppress duplicate reads without the model
+            // losing the evidence it is told to reuse. Older excerpts for the
+            // same file collapse to a pointer instead of disappearing silently.
+            const filePath = String(args.path);
+            if (keptReadPaths.has(filePath)) {
+              const replacement = `[Earlier read_file(${filePath}) compacted; a newer excerpt for this file is kept below. Request a different range only if needed.]`;
+              savedChars += Math.max(0, tContent.length - replacement.length);
+              out[tEntry.idx] = { ...tEntry.msg, content: replacement };
+            } else {
+              keptReadPaths.add(filePath);
+              if (isEmergency && tokenSaver === 'max' && stepsFromTip >= 2 && tContent.length > 1400) {
+                const slimmed = `${tContent.slice(0, 440)}\n…[فشرده شد (${tContent.length} کاراکتر)]…\n${tContent.slice(-180)}`;
+                savedChars += Math.max(0, tContent.length - slimmed.length);
+                out[tEntry.idx] = { ...tEntry.msg, content: slimmed };
+              }
+            }
           } else if ((!cacheDiscounted || isEmergency) && tokenSaver === 'max' && stepsFromTip >= 2 && tContent.length > 1400) {
             const slimmed = `${tContent.slice(0, 440)}\n…[فشرده شد (${tContent.length} کاراکتر)]…\n${tContent.slice(-180)}`;
             savedChars += Math.max(0, tContent.length - slimmed.length);
@@ -368,7 +466,7 @@ export function pruneInTurnWireMessages(
       if (MUTATING_TOOL_NAMES.has(name) && args.path && !failed) {
         mutatedLater.add(String(args.path));
       }
-      if (!failed && (name === 'read_file' || name === 'list_files' || name === 'list_symbols')) {
+      if (!failed && !guardNotice && (name === 'read_file' || name === 'list_files' || name === 'list_symbols')) {
         const sig =
           name === 'read_file'
             ? `read:${args.path || ''}:${args.startLine || ''}:${args.endLine || ''}:${args.query || ''}`
